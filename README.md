@@ -1,0 +1,2 @@
+# AI_EXE_WRITE
+AI小说仓库
