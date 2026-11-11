@@ -45,7 +45,7 @@ def transaction(engine):
         if code in {1048, 1264, 1366, 1406, 3140, 3141}:
             raise HTTPException(422, "字段值超出数据库允许的范围") from None
         logger.error("小说数据操作失败 code=%s", code if isinstance(code, int) else "unknown")
-        if exc.connection_invalidated or code in {1044, 1045, 1049, 1146, 1205, 1213, 2002, 2003, 2006, 2013}:
+        if exc.connection_invalidated or code in {1044, 1045, 1049, 1146, 1205, 1213, 2002, 2003, 2006, 2013, 2026}:
             raise HTTPException(503, "数据库暂时不可用") from None
         raise HTTPException(500, "数据库操作失败") from None
 

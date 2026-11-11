@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     DB_USER: str = ""
     DB_PASSWORD: SecretStr | None = None
     DB_NAME: str = ""
+    DB_TLS_REQUIRED: bool = False
+    DB_TLS_CA: str = ""
 
     # OpenAI API key
     API_KEY: str = ""

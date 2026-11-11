@@ -52,6 +52,8 @@ Primary keys, foreign keys, ordering/version fields, status values, timestamps, 
 
 启动 `python main.py` 后可在 `http://localhost:8000/docs` 查看和调用接口。连接读取项目 `.env` 中的 `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`，使用已经创建的表。
 
+如果远程 MySQL 账户设置了 `REQUIRE SSL`，在项目 `.env` 中添加 `DB_TLS_REQUIRED=true`，然后重启应用。可设置 `DB_TLS_CA` 为可信 MySQL CA 的 PEM 文件路径以验证服务端证书；填写 CA 也会启用 TLS。未填写 CA 时，连接会加密，但不会验证服务端证书。后端与 MySQL 同机、使用本地账户时，可以保留默认设置。
+
 这些接口也可通过 [小说数据 MCP 服务](../agents/mcp/README.md) 调用。
 
 描述字段的 API 类型是文本。对于旧版数据库中仍为 `JSON` 的描述列，接口会把文本写成 JSON 字符串；已有数组或对象会以 JSON 文本返回，更新其他字段时保留其原始结构。`collected_data` 仍直接接收和返回 JSON 对象。数据库字段类型变更后应重启应用以刷新识别结果。
