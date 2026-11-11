@@ -12,7 +12,6 @@ from pydantic import BaseModel
 
 from api.novel_contracts import CRUD_PREFIX, CRUD_RESOURCES, CrudResource
 from api.novel_schemas import RowId, SessionId
-from core.config import get_settings
 from api.writing_schemas import (
     ChapterPlanReceipt, ChapterPlanRequest, DraftReceipt, DraftRequest, OutlineReceipt, OutlineRequest,
     ReviewReport, WritingInput,
@@ -146,7 +145,6 @@ def create_server(api_base_url: str, *, transport: httpx.AsyncBaseTransport | No
     async def lifespan(_server):
         async with httpx.AsyncClient(
             base_url=base_url, timeout=httpx.Timeout(30, connect=5), trust_env=False, transport=transport,
-            headers={"X-AITXT-Access-Key": get_settings().APP_ACCESS_KEY.get_secret_value()},
         ) as client:
             yield client
 

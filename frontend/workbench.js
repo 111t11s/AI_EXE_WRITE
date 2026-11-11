@@ -1,8 +1,6 @@
 import {resolveApiBaseUrl} from './api-client.js';
 
 const API_BASE_URL = resolveApiBaseUrl(window.AITXT_CONFIG?.apiBaseUrl);
-let accessKey = '';
-try { accessKey = sessionStorage.getItem('mojian-access-key') || ''; } catch { /* optional */ }
 const $ = (id) => document.getElementById(id);
 const statusNames = {planning: '规划中', writing: '写作中', completed: '已完成', paused: '暂停',
   planned: '待写作', draft: '草稿', reviewed: '已审读', published: '已发布',
@@ -43,11 +41,10 @@ async function api(path, {method = 'GET', data, filters} = {}) {
   const query = new URLSearchParams(filters ?? {}).toString();
   const response = await fetch(`${API_BASE_URL}${path}${query ? `?${query}` : ''}`, {
     method, cache: 'no-store',
-    headers: {
-      ...(accessKey ? {'X-AITXT-Access-Key': accessKey} : {}),
-      ...(data !== undefined ? {'Content-Type': 'application/json'} : {}),
-    },
-    ...(data !== undefined ? {body: JSON.stringify(data)} : {}),
+    ...(data !== undefined ? {
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+    } : {}),
   });
   const body = await response.json().catch(() => null);
   if (!response.ok) {
@@ -55,7 +52,6 @@ async function api(path, {method = 'GET', data, filters} = {}) {
     const message = Array.isArray(detail) ? detail.map((item) => item.msg).join('；') : detail;
     const error = new Error(typeof message === 'string' ? message : `请求失败（${response.status}）`);
     error.status = response.status;
-    if (response.status === 401) showAccessDialog();
     throw error;
   }
   return body;
@@ -564,42 +560,4 @@ $('chat-form').addEventListener('submit', (event) => {
   void sendMessage(text);
 });
 
-function showAccessDialog() {
-  connection('等待进入', 'waiting');
-  if (!$('access-dialog').open) $('access-dialog').showModal();
-}
-
-$('access-dialog').addEventListener('cancel', (event) => event.preventDefault());
-$('access-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  accessKey = $('access-key').value;
-  $('access-submit').disabled = true;
-  $('access-error').hidden = true;
-  try {
-    await api('/access');
-    try { sessionStorage.setItem('mojian-access-key', accessKey); } catch { /* optional */ }
-    $('access-key').value = '';
-    $('access-dialog').close();
-    notify();
-    await loadLibrary();
-  } catch (error) {
-    $('access-error').textContent = error.status === 401 ? '口令不正确，请重新输入。' : error.message;
-    $('access-error').hidden = false;
-  } finally {
-    $('access-submit').disabled = false;
-  }
-});
-
-async function startWorkbench() {
-  try {
-    await api('/access');
-    await loadLibrary();
-  } catch (error) {
-    if (error.status !== 401) {
-      connection('暂未连接', 'error');
-      notify('暂时无法连接创作空间，请确认服务器已启动后刷新。', 'error');
-    }
-  }
-}
-
-void startWorkbench();
+void loadLibrary();

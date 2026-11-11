@@ -12,16 +12,12 @@ load_dotenv(PROJECT_ROOT / ".env")
 from core.logging import get_logger
 from core.config import get_settings
 from core.middleware import RequestLoggingMiddleware
-from core.access import AccessKeyMiddleware
 
 logger = get_logger("app")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
-    if settings.ACCESS_KEY_REQUIRED and not settings.APP_ACCESS_KEY.get_secret_value():
-        raise RuntimeError("请在服务器配置 APP_ACCESS_KEY 后启动服务")
     logger.info("服务启动 name=%s version=%s", app.title, app.version)
     try:
         yield
@@ -43,9 +39,6 @@ app = FastAPI(
     openapi_url="/openapi.json" if get_settings().ENABLE_API_DOCS else None,
 )
 
-app.add_middleware(AccessKeyMiddleware)
-
-# CORS must wrap access checks so Android also receives CORS headers on a 401.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in get_settings().CORS_ORIGINS.split(",") if origin.strip()],
@@ -61,6 +54,7 @@ def health():
     return {"status": "ok"}
 
 
+# Older Android builds check this endpoint before opening the library.
 @app.get("/api/v1/access", include_in_schema=False)
 def access():
     return {"authorized": True}

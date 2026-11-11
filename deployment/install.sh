@@ -68,12 +68,6 @@ main() {
   install -d -o aitxt -g aitxt -m 0750 /var/log/aitxt /var/lib/aitxt
   if [[ ! -f .env ]]; then
     install -o root -g aitxt -m 0640 deployment/.env.example .env
-    "$python_bin" - <<'PY'
-from pathlib import Path
-import secrets
-p = Path(".env")
-p.write_text(p.read_text().replace("APP_ACCESS_KEY=\n", "APP_ACCESS_KEY=" + secrets.token_urlsafe(24) + "\n"))
-PY
   fi
   if [[ ! -x .venv/bin/python ]]; then
     "$python_bin" -m venv .venv

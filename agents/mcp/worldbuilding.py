@@ -11,7 +11,6 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from agents.mcp.server import DEFAULT_API_BASE_URL
-from core.config import get_settings
 
 
 WORLD_QUERY_TOOLS = ("list_novel_world", "read_novel_world")
@@ -25,7 +24,6 @@ def server_parameters() -> StdioServerParameters:
         env={
             "PYTHONPATH": str(PROJECT_ROOT),
             "AITXT_API_BASE_URL": os.getenv("AITXT_API_BASE_URL", DEFAULT_API_BASE_URL),
-            "APP_ACCESS_KEY": get_settings().APP_ACCESS_KEY.get_secret_value(),
         },
     )
 

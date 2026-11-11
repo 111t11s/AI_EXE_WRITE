@@ -30,8 +30,6 @@ class Settings(BaseSettings):
     PORT: int = 8000
     API_PREFIX: str = "/v1"
     CORS_ORIGINS: str = "https://localhost,capacitor://localhost"
-    APP_ACCESS_KEY: SecretStr = SecretStr("")
-    ACCESS_KEY_REQUIRED: bool = False
     ENABLE_API_DOCS: bool = True
 
     # MySQL 配置；未配置时仅数据库接口不可用。

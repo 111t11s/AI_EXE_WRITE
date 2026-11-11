@@ -24,7 +24,7 @@ await mkdir(targetRoot, {recursive: true});
 for (const file of ['index.html', 'workbench.css', 'workbench.js', 'api-client.js']) {
   await cp(path.join(frontendRoot, file), path.join(targetRoot, file));
 }
-// Only the public URL goes into the APK, never the server's .env or access key.
+// Only the public URL goes into the APK, never the server's .env.
 await writeFile(path.join(targetRoot, 'runtime-config.js'),
   'window.AITXT_CONFIG = ' + JSON.stringify({apiBaseUrl: url.href.replace(/\/+$/, '')}) + ';\n');
 let html = await readFile(path.join(targetRoot, 'index.html'), 'utf8');
