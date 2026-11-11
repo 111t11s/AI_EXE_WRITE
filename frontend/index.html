@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#212b25">
+  <title>墨间 · 小说工作台</title>
+  <link rel="stylesheet" href="/workbench.css">
+  <script src="/runtime-config.js"></script>
+  <script type="module" src="/workbench.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail" aria-label="项目书架">
+      <header class="brand"><span class="brand-mark" aria-hidden="true">墨</span><div><strong>墨间</strong><small>小说工作台</small></div></header>
+      <button class="button primary new-project" type="button" id="new-project"><span aria-hidden="true">＋</span> 新建小说</button>
+      <div class="rail-heading"><span>项目书架</span><button class="icon-button" type="button" id="refresh" aria-label="刷新项目" title="刷新项目">↻</button></div>
+      <nav id="projects" class="projects" aria-label="选择小说"><p class="rail-note">正在读取项目…</p></nav>
+      <div class="rail-footer"><span class="connection" id="connection" role="status">连接中</span><a href="/docs" target="_blank" rel="noopener">接口文档 ↗</a></div>
+    </aside>
+    <main class="workspace" id="workspace">
+      <header class="topline"><span>创作空间</span><span class="topline-note">从设定到正文</span></header>
+      <div class="notice" id="notice" role="status" hidden></div>
+      <div class="activity" id="activity" role="status" hidden><span class="spinner" aria-hidden="true"></span><span id="activity-text"></span></div>
+      <div id="view" aria-busy="true"><section class="panel empty"><h1>正在打开书架</h1><p>正在加载可用的小说项目。</p></section></div>
+    </main>
+  </div>
+
+  <dialog class="dialog action-dialog" id="action-dialog" aria-labelledby="action-title">
+    <form id="action-form">
+      <header class="dialog-head"><div><p class="eyebrow">写作工作台</p><h2 id="action-title"></h2></div><button class="icon-button" type="button" id="close-action" aria-label="关闭">×</button></header>
+      <p class="muted" id="action-description"></p>
+      <div class="fields" id="action-fields"></div>
+      <p class="form-error" id="action-error" role="alert" hidden></p>
+      <footer class="dialog-foot"><button class="button secondary" type="button" id="cancel-action">取消</button><button class="button primary" type="submit" id="action-submit">继续</button></footer>
+    </form>
+  </dialog>
+
+  <dialog class="dialog wizard" id="wizard" aria-labelledby="wizard-title">
+    <header class="dialog-head"><div><p class="eyebrow">新建小说</p><h2 id="wizard-title">和世界观助手聊聊</h2></div><button class="icon-button" type="button" id="close-wizard" aria-label="关闭">×</button></header>
+    <div class="wizard-grid">
+      <div class="wizard-conversation">
+        <div class="chat" id="chat" role="log" aria-label="设定问答"></div>
+        <form class="composer" id="chat-form"><label class="sr-only" for="chat-input">你的设定</label><input id="chat-input" required maxlength="4000" autocomplete="off" placeholder="输入你的设定…"><button class="button primary" type="submit" id="chat-send">发送</button></form>
+      </div>
+      <aside class="wizard-settings"><h3>已收集设定 <span id="slot-count" class="muted"></span></h3><dl class="slots" id="slots"></dl><button class="button primary" type="button" id="confirm-world" disabled>确认并生成</button></aside>
+    </div>
+    <section class="wizard-preview" id="wizard-preview" hidden aria-label="生成结果"></section>
+    <footer class="dialog-foot"><button class="button secondary" type="button" id="restart-wizard">开始新对话</button><button class="button primary" type="button" id="open-created" hidden>进入项目 →</button></footer>
+  </dialog>
+  <dialog class="dialog" id="access-dialog" aria-labelledby="access-title">
+    <form id="access-form">
+      <header class="dialog-head"><h2 id="access-title">进入创作空间</h2></header>
+      <p class="muted">请输入朋友分享给你的访问口令。</p>
+      <div class="fields"><label class="control">访问口令<input id="access-key" type="password" required maxlength="256" autocomplete="current-password"></label></div>
+      <p class="form-error" id="access-error" role="alert" hidden></p>
+      <footer class="dialog-foot"><button class="button primary" type="submit" id="access-submit">进入工作台</button></footer>
+    </form>
+  </dialog>
+</body>
+</html>

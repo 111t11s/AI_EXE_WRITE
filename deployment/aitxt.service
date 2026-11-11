@@ -1,0 +1,29 @@
+[Unit]
+Description=Mojian novel workbench
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aitxt
+Group=aitxt
+WorkingDirectory=/opt/aitxt
+EnvironmentFile=/opt/aitxt/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/var/lib/aitxt
+Environment=XDG_DATA_HOME=/var/lib/aitxt
+ExecStart=/opt/aitxt/.venv/bin/python /opt/aitxt/main.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+StateDirectory=aitxt
+LogsDirectory=aitxt
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/aitxt /var/log/aitxt
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
