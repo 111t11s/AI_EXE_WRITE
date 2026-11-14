@@ -21,7 +21,7 @@ if (url.pathname.replace(/\/+$/, '') !== '/api/v1') {
 }
 
 await mkdir(targetRoot, {recursive: true});
-for (const file of ['index.html', 'workbench.css', 'workbench.js', 'api-client.js']) {
+for (const file of ['index.html', 'bootstrap.js', 'workbench.css', 'workbench.js', 'api-client.js', 'generation-stream.js']) {
   await cp(path.join(frontendRoot, file), path.join(targetRoot, file));
 }
 // Only the public URL goes into the APK, never the server's .env.

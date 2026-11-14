@@ -1,4 +1,4 @@
-# Novel data model v1.0
+# Novel data model v1.1
 
 This is the new canonical structure for the novel-design workflow. The legacy XML mapper and `DataBaseManager` have been removed from the project.
 
@@ -6,6 +6,11 @@ This is the new canonical structure for the novel-design workflow. The legacy XM
 
 - `models.py`: Pydantic contract used by generation, API responses, and persistence code.
 - `schema.sql`: fresh MySQL 8 schema. Apply it to an empty database; it does not migrate or alter an existing database.
+- `accounts.py`: account/session tables and salted password hashing.
+- `migrate_accounts.py`: idempotent ownership migration for existing databases.
+- `reset_password.py`: interactive administrator password reset that revokes all sessions.
+
+小说和问答会话使用 `account_id` 绑定账号，所有子资源沿外键链继承小说归属。API 自动填写账号 ID，不接受客户端指定或修改归属。已有小说统一绑定 `admin` 的命令见 [部署说明](../deployment/README.md#账号与旧小说迁移)。
 
 ## Entity flow
 

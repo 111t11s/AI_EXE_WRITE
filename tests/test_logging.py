@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import json
 import logging
 import tempfile
 import unittest
@@ -9,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.logging import REQUEST_ID, setup_logging
+from core.logging import REQUEST_ID, SafeFormatter, setup_logging
 from core.middleware import RequestLoggingMiddleware
 
 
@@ -76,6 +77,46 @@ class LoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(Path(str(self.log_path) + ".1").exists())
         self.assertLessEqual(len(list(Path(self.directory.name).glob("application.log*"))), 3)
 
+    def test_json_format_keeps_progress_messages_and_redacts_exceptions(self):
+        for handler in self.parent.handlers[:]:
+            self.parent.removeHandler(handler)
+            handler.close()
+        self.config.LOG_FORMAT = "json"
+        logger = setup_logging("llm_streaming")
+        token = REQUEST_ID.set("generation-1")
+        try:
+            logger.info("模型正文接收中 chunks=%s", 12)
+            try:
+                raise RuntimeError("private-model-response")
+            except RuntimeError:
+                logger.exception("模型请求失败")
+        finally:
+            REQUEST_ID.reset(token)
+        records = [json.loads(line) for line in self.output.getvalue().splitlines()]
+        self.assertEqual(records[0]["message"], "模型正文接收中 chunks=12")
+        self.assertEqual(records[0]["request_id"], "generation-1")
+        self.assertEqual(records[1]["level"], "错误")
+        self.assertIn("RuntimeError", records[1]["exception"])
+        self.assertNotIn("private-model-response", self.output.getvalue())
+
+    def test_mcp_and_model_gateway_logs_are_chinese_without_payloads(self):
+        formatter = SafeFormatter("%(levelname)s %(message)s")
+        record = logging.LogRecord("mcp.server.lowlevel.server", logging.INFO, __file__, 1,
+                                   "Processing request of type %s", ("CallToolRequest",), None)
+        self.assertEqual(formatter.format(record), "信息 MCP 收到请求：调用工具")
+        self.assertEqual(record.levelname, "INFO")
+        record = logging.LogRecord("root", logging.ERROR, __file__, 1,
+                                   "OpenAI API call failed: Error code: 500 - private-response", (), None)
+        self.assertEqual(formatter.format(record), "错误 模型接口调用失败：状态码=500")
+        record = logging.LogRecord("uvicorn.error", logging.INFO, __file__, 1,
+                                   "Started server process [%d]", (123,), None)
+        self.assertEqual(formatter.format(record), "信息 服务进程已启动：进程号=123")
+        record = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1,
+                                   '%s - "%s %s HTTP/%s" %d',
+                                   ("127.0.0.1", "GET", "/books?key=private-key", "1.1", 200), None)
+        self.assertIn("状态码=200", formatter.format(record))
+        self.assertNotIn("private-key", formatter.format(record))
+
     async def test_concurrent_requests_and_streaming_keep_context_isolated(self):
         logger = setup_logging("test")
 
@@ -91,8 +132,8 @@ class LoggingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn((b"x-request-id", expected_id), messages[0]["headers"])
             self.assertEqual([message["body"] for message in messages[1:]], [b"one", b"two"])
         text = self.output.getvalue()
-        self.assertIn("业务日志 request_id=request-a", text)
-        self.assertIn("业务日志 request_id=request-b", text)
+        self.assertIn("业务日志 请求标识=request-a", text)
+        self.assertIn("业务日志 请求标识=request-b", text)
         self.assertNotIn("do-not-log-query", text)
         self.assertEqual(REQUEST_ID.get(), "-")
 
@@ -103,9 +144,9 @@ class LoggingTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.request(fail)
         text = self.output.getvalue()
-        self.assertIn("Traceback", text)
+        self.assertIn("异常调用堆栈", text)
         self.assertIn("ValueError", text)
-        self.assertIn("outcome=failed", text)
+        self.assertIn("结果=失败", text)
         self.assertNotIn("private-chapter-content", text)
         self.assertEqual(REQUEST_ID.get(), "-")
 
@@ -117,7 +158,7 @@ class LoggingTests(unittest.IsolatedAsyncioTestCase):
         messages = await self.request(app, "bad\nrequest-id")
         request_id = dict(messages[0]["headers"])[b"x-request-id"]
         self.assertRegex(request_id.decode(), r"^[a-f0-9]{32}$")
-        self.assertIn("WARNING", self.output.getvalue())
+        self.assertIn("警告", self.output.getvalue())
 
     async def test_cancelled_request_restores_context(self):
         async def app(scope, receive, send):
@@ -125,7 +166,7 @@ class LoggingTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(asyncio.CancelledError):
             await self.request(app)
-        self.assertIn("outcome=cancelled", self.output.getvalue())
+        self.assertIn("结果=已中断", self.output.getvalue())
         self.assertEqual(REQUEST_ID.get(), "-")
 
     async def test_agent_success_and_failure_do_not_log_contents(self):

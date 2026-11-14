@@ -23,7 +23,7 @@ class RequestLoggingMiddleware:
         token = REQUEST_ID.set(request_id)
         started = time.perf_counter()
         status = 500
-        outcome = "completed"
+        outcome = "已完成"
         method = scope["method"]
         # 不读取请求体、查询参数、Cookie 或认证头。
         path = scope.get("path", "").replace("\r", "").replace("\n", "")
@@ -39,20 +39,20 @@ class RequestLoggingMiddleware:
                 ] + [(b"x-request-id", request_id.encode("ascii"))]
             await send(message)
 
-        self.logger.info("请求开始 method=%s path=%s", method, path)
+        self.logger.info("请求开始：方法=%s，路径=%s", method, path)
         try:
             await self.app(scope, receive, send_with_id)
         except asyncio.CancelledError:
-            outcome = "cancelled"
+            outcome = "已中断"
             raise
         except Exception:
-            outcome = "failed"
-            self.logger.exception("请求异常 method=%s path=%s", method, path)
+            outcome = "失败"
+            self.logger.exception("请求异常：方法=%s，路径=%s", method, path)
             raise
         finally:
-            level = 40 if outcome == "failed" or status >= 500 else 30 if status >= 400 or outcome == "cancelled" else 20
+            level = 40 if outcome == "失败" or status >= 500 else 30 if status >= 400 or outcome == "已中断" else 20
             self.logger.log(
-                level, "请求结束 method=%s path=%s status=%s outcome=%s duration_ms=%.2f",
+                level, "请求结束：方法=%s，路径=%s，状态码=%s，结果=%s，耗时=%.2f毫秒",
                 method, path, status, outcome, (time.perf_counter() - started) * 1000,
             )
             REQUEST_ID.reset(token)

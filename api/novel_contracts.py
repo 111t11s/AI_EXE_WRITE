@@ -23,6 +23,7 @@ class CrudResource:
     order: tuple[str, ...] = ()
     timestamps: tuple[str, ...] = ()
     session_ids: bool = False
+    account_owned: bool = False
 
     @property
     def id_type(self):
@@ -45,6 +46,7 @@ class CrudResource:
     def read_schema(self):
         return create_model(
             f"{self.schema_prefix}Read", id=(str if self.session_ids else int, ...),
+            **({"account_id": (schemas.RowId | None, None)} if self.account_owned else {}),
             **{key: (field.annotation, ...) for key, field in self.create_schema.model_fields.items()},
             **{key: (datetime, ...) for key in self.timestamps},
         )
@@ -72,9 +74,9 @@ AUDIT = (*CREATED, "updated_at")
 
 CRUD_RESOURCES = (
     CrudResource("/projects", "novel_project", "小说项目", schemas.ProjectCreate,
-                 filters=("status",), timestamps=AUDIT),
+                 filters=("status",), timestamps=AUDIT, account_owned=True),
     CrudResource("/design-sessions", "novel_design_session", "设定问答会话", schemas.DesignSessionCreate,
-                 filters=("project_id", "status"), timestamps=AUDIT, session_ids=True),
+                 filters=("project_id", "status"), timestamps=AUDIT, session_ids=True, account_owned=True),
     CrudResource("/design-messages", "novel_design_message", "设定问答消息", schemas.DesignMessageCreate,
                  owner="session_id", order=("session_id", "sequence_no"), timestamps=CREATED),
     CrudResource("/worlds", "novel_world", "世界观版本", schemas.WorldCreate,

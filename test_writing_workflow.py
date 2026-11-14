@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from agents import writing_agents as a
 from agents.mcp.server import create_server
 from api.novel_crud_api import get_database
@@ -37,6 +38,8 @@ def create_test_db():
                     line = "id INTEGER PRIMARY KEY AUTOINCREMENT"
                 if name == "novel_design_session" and line.startswith("id "):
                     line += " PRIMARY KEY"
+                if name == "app_auth_session" and line.startswith("token_hash "):
+                    line += " PRIMARY KEY"
                 line = re.sub(r"ENUM\([^)]*\)", "TEXT", line)
                 line = re.sub(r"UNIQUE KEY \w+", "UNIQUE", line)
                 lines.append(line.replace(" UNSIGNED", "").replace(" ON UPDATE CURRENT_TIMESTAMP", ""))
@@ -58,8 +61,8 @@ def fake(role,ctx):
         return ChapterDraft(content='The apprentice walked toward the lighthouse. '*10)
     return ReviewReport(verdict='ready',summary='Matches the world rules.',issues=[])
 
-async def run(engine):
-    server = create_server("http://aitxt.test/api/v1", transport=httpx.ASGITransport(app=app))
+async def run(engine, token):
+    server = create_server("http://aitxt.test/api/v1", transport=httpx.ASGITransport(app=app), auth_token=token)
 
     @asynccontextmanager
     async def session():
@@ -114,13 +117,19 @@ def test_writing_workflow():
     engine = create_test_db()
     try:
         with patch.dict(app.dependency_overrides, {get_database: lambda: engine}):
-            asyncio.run(run(engine))
+            with TestClient(app) as client:
+                response = client.post('/api/v1/auth/register', json={'username': 'writer', 'password': 'test-password'})
+                assert response.status_code == 201
+                token = response.json()['access_token']
+            asyncio.run(run(engine, token))
     finally:
         engine.dispose()
 
 
 @pytest.mark.parametrize("status", [500, 401])
 def test_gateway_tool_failure(status, monkeypatch):
+    from core.config import Settings
+    monkeypatch.setattr(a, "get_settings", lambda: Settings(_env_file=None, MODEL_NATIVE_TOOLS=True, API_KEY="test-key"))
     upstream = httpx.Response(status, request=httpx.Request("POST", "https://gateway.test"))
     requests = []
 

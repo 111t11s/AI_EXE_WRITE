@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/v1"
     CORS_ORIGINS: str = "https://localhost,capacitor://localhost"
     ENABLE_API_DOCS: bool = True
+    AUTH_REGISTRATION_ENABLED: bool = True
+    AUTH_SESSION_HOURS: int = Field(default=168, ge=1, le=8760)
 
     # MySQL 配置；未配置时仅数据库接口不可用。
     DB_HOST: str = ""
@@ -44,6 +46,9 @@ class Settings(BaseSettings):
     # OpenAI API key
     API_KEY: str = ""
     PROXY_URL: str = "https://api.meai.cloud/v1"
+    # Application code handles MCP reads/writes. Enable model-side tools only
+    # after verifying the gateway supports the full CrewAI request format.
+    MODEL_NATIVE_TOOLS: bool = False
 
     # 模型名称
     DEEPSEEK_MODEL_NAME: str = "deepseek-v4-pro"

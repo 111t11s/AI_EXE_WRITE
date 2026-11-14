@@ -5,14 +5,29 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#212b25">
   <title>墨间 · 小说工作台</title>
-  <link rel="stylesheet" href="/workbench.css">
-  <script src="/runtime-config.js"></script>
-  <script type="module" src="/workbench.js"></script>
+  <link rel="stylesheet" href="/workbench.css?v=password-reset-20261114">
+  <script src="/runtime-config.js?v=password-reset-20261114"></script>
+  <script type="importmap">
+    {"imports": {
+      "/workbench.js": "/workbench.js?v=password-reset-20261114",
+      "/api-client.js": "/api-client.js?v=password-reset-20261114",
+      "/generation-stream.js": "/generation-stream.js?v=password-reset-20261114"
+    }}
+  </script>
+  <script defer src="/bootstrap.js?v=password-reset-20261114"></script>
 </head>
 <body>
-  <div class="shell">
+  <section class="panel empty startup-status" id="startup-status" role="status">
+    <h1 id="startup-title">正在打开墨间</h1>
+    <p id="startup-message">正在加载登录界面…</p>
+    <p class="prose" id="startup-detail" hidden></p>
+    <button class="button primary" id="startup-retry" type="button" hidden>重新加载</button>
+    <noscript><p>请在浏览器中启用 JavaScript 后刷新页面。</p></noscript>
+  </section>
+  <div class="shell" id="app-shell" hidden>
     <aside class="rail" aria-label="项目书架">
       <header class="brand"><span class="brand-mark" aria-hidden="true">墨</span><div><strong>墨间</strong><small>小说工作台</small></div></header>
+      <div class="account-bar"><span id="account-name"></span><span class="account-actions"><button type="button" class="account-logout" id="account-password-change">修改密码</button><button type="button" class="account-logout" id="account-logout">退出账号</button></span></div>
       <button class="button primary new-project" type="button" id="new-project"><span aria-hidden="true">＋</span> 新建小说</button>
       <div class="rail-heading"><span>项目书架</span><button class="icon-button" type="button" id="refresh" aria-label="刷新项目" title="刷新项目">↻</button></div>
       <nav id="projects" class="projects" aria-label="选择小说"><p class="rail-note">正在读取项目…</p></nav>
@@ -26,25 +41,65 @@
     </main>
   </div>
 
+  <dialog class="dialog account-dialog" id="account-dialog" aria-labelledby="account-title">
+    <form id="account-form">
+      <p class="eyebrow">墨间 · 个人书架</p><h1 id="account-title">登录账号</h1>
+      <p class="muted account-intro">登录后继续创作，小说会保存在你的账号下。</p>
+      <p class="muted account-intro">忘记密码请联系管理员重置。</p>
+      <div class="fields">
+        <label class="control">用户名<input id="account-username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_][A-Za-z0-9_.-]*" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="3—32 位字母、数字、下划线"></label>
+        <label class="control" id="account-display-field" hidden>昵称（可选）<input id="account-display-name" name="display_name" maxlength="80" autocomplete="nickname"></label>
+        <label class="control">密码<input type="password" id="account-password" name="password" required minlength="8" maxlength="128" autocomplete="current-password" placeholder="8—128 位密码"></label>
+      </div>
+      <p class="form-error" id="account-error" role="alert" hidden></p>
+      <footer class="dialog-foot"><button class="button secondary" type="button" id="account-toggle">注册新账号</button><button class="button primary" type="submit" id="account-submit">登录</button></footer>
+    </form>
+  </dialog>
+
+  <dialog class="dialog account-dialog" id="password-dialog" aria-labelledby="password-title">
+    <form id="password-form">
+      <p class="eyebrow">墨间 · 账号安全</p><h1 id="password-title">修改密码</h1>
+      <p class="muted account-intro">修改后当前账号的所有登录设备都会退出。</p>
+      <div class="fields">
+        <label class="control">当前密码<input type="password" id="current-password" required minlength="1" maxlength="128" autocomplete="current-password"></label>
+        <label class="control">新密码<input type="password" id="new-password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="8—128 位密码"></label>
+        <label class="control">确认新密码<input type="password" id="confirm-password" required minlength="8" maxlength="128" autocomplete="new-password"></label>
+      </div>
+      <p class="form-error" id="password-error" role="alert" hidden></p>
+      <footer class="dialog-foot"><button class="button secondary" type="button" id="cancel-password">取消</button><button class="button primary" type="submit">保存新密码</button></footer>
+    </form>
+  </dialog>
+
   <dialog class="dialog action-dialog" id="action-dialog" aria-labelledby="action-title">
     <form id="action-form">
       <header class="dialog-head"><div><p class="eyebrow">写作工作台</p><h2 id="action-title"></h2></div><button class="icon-button" type="button" id="close-action" aria-label="关闭">×</button></header>
       <p class="muted" id="action-description"></p>
       <div class="fields" id="action-fields"></div>
+      <section class="generation-stream" id="action-stream" hidden aria-label="实时生成内容">
+        <div class="generation-head"><strong>实时生成</strong><span id="action-stream-status" class="muted" role="status"></span></div>
+        <details class="generation-thinking" hidden open><summary>模型思考</summary><pre id="action-stream-thinking" tabindex="0" aria-label="模型实时返回的思考内容"></pre></details>
+        <pre class="generation-output" id="action-stream-text" tabindex="0" aria-label="模型正在生成的内容"></pre>
+      </section>
       <p class="form-error" id="action-error" role="alert" hidden></p>
       <footer class="dialog-foot"><button class="button secondary" type="button" id="cancel-action">取消</button><button class="button primary" type="submit" id="action-submit">继续</button></footer>
     </form>
   </dialog>
 
   <dialog class="dialog wizard" id="wizard" aria-labelledby="wizard-title">
-    <header class="dialog-head"><div><p class="eyebrow">新建小说</p><h2 id="wizard-title">和世界观助手聊聊</h2></div><button class="icon-button" type="button" id="close-wizard" aria-label="关闭">×</button></header>
+    <header class="dialog-head"><div><p class="eyebrow">新建小说</p><h2 id="wizard-title">选择小说基础设定</h2></div><button class="icon-button" type="button" id="close-wizard" aria-label="关闭">×</button></header>
     <div class="wizard-grid">
       <div class="wizard-conversation">
         <div class="chat" id="chat" role="log" aria-label="设定问答"></div>
-        <form class="composer" id="chat-form"><label class="sr-only" for="chat-input">你的设定</label><input id="chat-input" required maxlength="4000" autocomplete="off" placeholder="输入你的设定…"><button class="button primary" type="submit" id="chat-send">发送</button></form>
+        <div class="question-picker" id="question-picker" hidden><p class="muted" id="question-label"></p><div class="question-options" id="question-options" role="group" aria-labelledby="question-label"></div></div>
+        <form class="composer" id="chat-form" hidden><label class="sr-only" for="chat-input">自定义设定或修改已收集设定</label><input id="chat-input" required maxlength="4000" autocomplete="off" placeholder="输入自定义设定…"><button class="button primary" type="submit" id="chat-send">发送</button></form>
       </div>
       <aside class="wizard-settings"><h3>已收集设定 <span id="slot-count" class="muted"></span></h3><dl class="slots" id="slots"></dl><button class="button primary" type="button" id="confirm-world" disabled>确认并生成</button></aside>
     </div>
+    <section class="generation-stream" id="wizard-stream" hidden aria-label="实时生成世界观">
+      <div class="generation-head"><strong>世界观与大纲</strong><span id="wizard-stream-status" class="muted" role="status"></span></div>
+      <details class="generation-thinking" hidden open><summary>模型思考</summary><pre id="wizard-stream-thinking" tabindex="0" aria-label="模型实时返回的思考内容"></pre></details>
+      <pre class="generation-output" id="wizard-stream-text" tabindex="0" aria-label="模型正在生成的世界观内容"></pre>
+    </section>
     <section class="wizard-preview" id="wizard-preview" hidden aria-label="生成结果"></section>
     <footer class="dialog-foot"><button class="button secondary" type="button" id="restart-wizard">开始新对话</button><button class="button primary" type="button" id="open-created" hidden>进入项目 →</button></footer>
   </dialog>

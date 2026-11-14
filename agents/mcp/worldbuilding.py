@@ -11,6 +11,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from agents.mcp.server import DEFAULT_API_BASE_URL
+from core.identity import AUTH_TOKEN
 
 
 WORLD_QUERY_TOOLS = ("list_novel_world", "read_novel_world")
@@ -18,12 +19,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def server_parameters() -> StdioServerParameters:
+    token = AUTH_TOKEN.get() or os.getenv("AITXT_AUTH_TOKEN", "")
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "agents.mcp"],
         env={
             "PYTHONPATH": str(PROJECT_ROOT),
             "AITXT_API_BASE_URL": os.getenv("AITXT_API_BASE_URL", DEFAULT_API_BASE_URL),
+            "AITXT_AUTH_TOKEN": token,
         },
     )
 
@@ -64,7 +67,7 @@ async def call_novel_tool(session: ClientSession, name: str, arguments: dict) ->
     result = await session.call_tool(name, arguments)
     if result.isError or not isinstance(result.structuredContent, dict):
         message = next((block.text for block in result.content if block.type == "text"), "")
-        match = re.search(r"小说 API 返回 HTTP (404|409|422)\b", message)
+        match = re.search(r"小说 API 返回 HTTP (401|403|404|409|422)\b", message)
         raise NovelToolError(name, int(match[1]) if match else 503)
     return result.structuredContent
 

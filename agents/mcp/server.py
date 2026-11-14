@@ -19,7 +19,7 @@ from api.writing_schemas import (
 
 
 DEFAULT_API_BASE_URL = f"http://127.0.0.1:8000{CRUD_PREFIX}"
-ERROR_DETAILS = {404: "记录不存在", 409: "记录或关联冲突", 422: "参数校验失败", 502: "生成失败",
+ERROR_DETAILS = {401: "请先登录或更新账号令牌", 403: "账号无权执行此操作", 404: "记录不存在", 409: "记录或关联冲突", 422: "参数校验失败", 502: "生成失败",
                  503: "服务暂时不可用", 504: "模型响应超时"}
 WORKFLOW_TIMEOUT = httpx.Timeout(300, connect=5)
 
@@ -135,7 +135,8 @@ def register_writing_tools(server: FastMCP) -> None:
                              json=(payload or WritingInput()).model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
 
 
-def create_server(api_base_url: str, *, transport: httpx.AsyncBaseTransport | None = None) -> FastMCP:
+def create_server(api_base_url: str, *, transport: httpx.AsyncBaseTransport | None = None,
+                  auth_token: str | None = None) -> FastMCP:
     base_url = httpx.URL(api_base_url)
     if (base_url.scheme not in {"http", "https"} or not base_url.host
             or base_url.userinfo or base_url.query or base_url.fragment):
@@ -143,8 +144,10 @@ def create_server(api_base_url: str, *, transport: httpx.AsyncBaseTransport | No
 
     @asynccontextmanager
     async def lifespan(_server):
+        token = auth_token if auth_token is not None else os.getenv("AITXT_AUTH_TOKEN", "")
         async with httpx.AsyncClient(
             base_url=base_url, timeout=httpx.Timeout(30, connect=5), trust_env=False, transport=transport,
+            headers={"Authorization": f"Bearer {token}"} if token else {},
         ) as client:
             yield client
 
@@ -156,4 +159,8 @@ def create_server(api_base_url: str, *, transport: httpx.AsyncBaseTransport | No
 
 
 def main() -> None:
-    create_server(os.getenv("AITXT_API_BASE_URL", DEFAULT_API_BASE_URL)).run(transport="stdio")
+    from core.logging import configure_external_logging
+
+    server = create_server(os.getenv("AITXT_API_BASE_URL", DEFAULT_API_BASE_URL))
+    configure_external_logging()
+    server.run(transport="stdio")

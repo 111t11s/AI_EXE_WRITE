@@ -1,8 +1,31 @@
--- Novel project schema v1.0 (MySQL 8.0+, InnoDB, utf8mb4)
--- Fresh schema for new data. It intentionally has no migration assumptions.
+-- Novel project schema v1.1 (MySQL 8.0+, InnoDB, utf8mb4)
+-- For existing installations run: python -m db.migrate_accounts
+
+CREATE TABLE IF NOT EXISTS app_account (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '账号主键',
+    username VARCHAR(32) NOT NULL COMMENT '登录用户名，统一小写',
+    display_name VARCHAR(80) NOT NULL COMMENT '显示昵称',
+    password_hash VARCHAR(255) NOT NULL COMMENT '加盐密码哈希',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE COMMENT '账号是否启用',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_account_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='创作账号';
+
+CREATE TABLE IF NOT EXISTS app_auth_session (
+    token_hash CHAR(64) NOT NULL COMMENT '登录令牌 SHA256 摘要',
+    account_id BIGINT UNSIGNED NOT NULL COMMENT '所属账号',
+    expires_at DATETIME NOT NULL COMMENT 'UTC 过期时间',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    PRIMARY KEY (token_hash),
+    KEY ix_app_auth_session_account_id (account_id),
+    KEY ix_app_auth_session_expires_at (expires_at),
+    CONSTRAINT fk_auth_account FOREIGN KEY (account_id) REFERENCES app_account(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='登录会话';
 
 CREATE TABLE IF NOT EXISTS novel_project (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '项目主键',
+    account_id BIGINT UNSIGNED NULL COMMENT '所属账号，旧项目待迁移',
     title VARCHAR(200) NOT NULL DEFAULT '待命名小说' COMMENT '小说名称',
     genre VARCHAR(80) NOT NULL COMMENT '小说类型',
     setting VARCHAR(500) NOT NULL COMMENT '时代与背景',
@@ -14,11 +37,14 @@ CREATE TABLE IF NOT EXISTS novel_project (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间',
     PRIMARY KEY (id),
-    KEY idx_project_status_updated (status, updated_at)
+    KEY idx_project_status_updated (status, updated_at),
+    KEY idx_project_account (account_id),
+    CONSTRAINT fk_project_account FOREIGN KEY (account_id) REFERENCES app_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='小说项目表';
 
 CREATE TABLE IF NOT EXISTS novel_design_session (
     id CHAR(36) NOT NULL COMMENT '会话 UUID',
+    account_id BIGINT UNSIGNED NULL COMMENT '所属账号，旧会话待迁移',
     project_id BIGINT UNSIGNED NULL COMMENT '关联小说项目 ID',
     status ENUM('collecting','ready','generating','completed','failed') NOT NULL DEFAULT 'collecting' COMMENT '会话状态：收集中/待生成/生成中/已完成/失败',
     collected_data JSON NOT NULL COMMENT '问答阶段收集的设定 JSON',
@@ -26,8 +52,10 @@ CREATE TABLE IF NOT EXISTS novel_design_session (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间',
     PRIMARY KEY (id),
     KEY idx_design_project (project_id),
+    KEY idx_design_account (account_id),
     KEY idx_design_status_updated (status, updated_at),
-    CONSTRAINT fk_design_project FOREIGN KEY (project_id) REFERENCES novel_project(id) ON DELETE SET NULL
+    CONSTRAINT fk_design_project FOREIGN KEY (project_id) REFERENCES novel_project(id) ON DELETE SET NULL,
+    CONSTRAINT fk_design_account FOREIGN KEY (account_id) REFERENCES app_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='设定问答会话表';
 
 CREATE TABLE IF NOT EXISTS novel_design_message (

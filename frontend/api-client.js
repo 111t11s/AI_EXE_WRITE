@@ -6,3 +6,32 @@ export function resolveApiBaseUrl(value = '') {
   }
   return url.href.replace(/\/+$/, '');
 }
+
+let sessionToken;
+export function getAuthToken() {
+  if (sessionToken === undefined) {
+    try { sessionToken = sessionStorage.getItem('mojian-session') || ''; }
+    catch { sessionToken = ''; }
+  }
+  return sessionToken;
+}
+
+export function setAuthToken(token = '') {
+  sessionToken = token;
+  try {
+    if (token) sessionStorage.setItem('mojian-session', token);
+    else sessionStorage.removeItem('mojian-session');
+  } catch { /* Keep this tab usable when browser storage is unavailable. */ }
+}
+
+export async function authenticatedFetch(url, options = {}) {
+  const token = getAuthToken();
+  const headers = new Headers(options.headers);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(url, {...options, headers});
+  if (response.status === 401 && token && getAuthToken() === token) {
+    setAuthToken();
+    globalThis.dispatchEvent(new Event('aitxt:unauthorized'));
+  }
+  return response;
+}

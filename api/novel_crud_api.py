@@ -1,53 +1,23 @@
 """CRUD routes for the 15 tables in db/schema.sql."""
 
 import json
-from contextlib import contextmanager
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import JSON, Boolean, Engine, column, delete, insert, select, table, update
-from sqlalchemy.exc import DBAPIError, TimeoutError as PoolTimeout
+from fastapi import APIRouter, HTTPException, Query, Response
+from sqlalchemy import delete, insert, select, update
 
 from api.novel_contracts import CRUD_RESOURCES, CrudResource
+from api.account_api import CurrentAccount
+from api.database import Database, get_database, transaction
+from api.novel_tables import tables
+from api.ownership import owned_condition, require_owned, validate_owned_links
 from core.logging import get_logger
-from db.connection import DatabaseNotConfigured, get_engine, legacy_json_columns
+from db.connection import legacy_json_columns
 
 
 router = APIRouter()
 logger = get_logger("novel_crud")
-tables = {}
-
-
-def get_database() -> Engine:
-    try:
-        return get_engine()
-    except DatabaseNotConfigured:
-        raise HTTPException(503, "数据库连接未配置") from None
-
-
-Database = Annotated[Engine, Depends(get_database)]
-
-
-@contextmanager
-def transaction(engine):
-    try:
-        with engine.begin() as connection:
-            yield connection
-    except PoolTimeout:
-        raise HTTPException(503, "数据库连接池暂时繁忙") from None
-    except DBAPIError as exc:
-        code = next(iter(getattr(exc.orig, "args", ())), None)
-        if code == 1062:
-            raise HTTPException(409, "记录与现有数据的唯一键冲突") from None
-        if code in {1451, 1452}:
-            raise HTTPException(409, "关联记录不存在或仍被引用") from None
-        if code in {1048, 1264, 1366, 1406, 3140, 3141}:
-            raise HTTPException(422, "字段值超出数据库允许的范围") from None
-        logger.error("小说数据操作失败 code=%s", code if isinstance(code, int) else "unknown")
-        if exc.connection_invalidated or code in {1044, 1045, 1049, 1146, 1205, 1213, 2002, 2003, 2006, 2013, 2026}:
-            raise HTTPException(503, "数据库暂时不可用") from None
-        raise HTTPException(500, "数据库操作失败") from None
 
 
 def get_row(connection, relation, record_id, *, lock=False):
@@ -124,16 +94,11 @@ def add_resource(resource: CrudResource):
     create_schema, id_type = resource.create_schema, resource.id_type
     patch_schema, read_schema = resource.patch_schema, resource.read_schema
     page_schema, filter_schema = resource.page_schema, resource.filter_schema
-    sql_types = {"collected_data": JSON(), "is_current": Boolean()}
-    relation = table(
-        table_name, column("id"), *(column(key, sql_types.get(key)) for key in create_schema.model_fields),
-        *(column(key) for key in resource.timestamps),
-    )
-    tables[table_name] = relation
+    relation = tables[table_name]
     is_world = table_name == "novel_world"
 
-    def list_rows(query: Annotated[filter_schema, Query()], engine: Database):
-        statement = select(relation)
+    def list_rows(query: Annotated[filter_schema, Query()], user: CurrentAccount, engine: Database):
+        statement = select(relation).where(owned_condition(relation, user.id))
         for key, value in query.model_dump(exclude={"limit", "offset"}, exclude_none=True).items():
             statement = statement.where(relation.c[key] == value)
         ordering = (*resource.order, "id")
@@ -146,11 +111,14 @@ def add_resource(resource: CrudResource):
                 "limit": query.limit, "offset": query.offset,
                 "has_more": len(rows) > query.limit}
 
-    def create_row(payload: create_schema, engine: Database):
+    def create_row(payload: create_schema, user: CurrentAccount, engine: Database):
         values = payload.model_dump()
+        if resource.account_owned:
+            values["account_id"] = user.id
         if resource.session_ids:
             values["id"] = str(uuid4())
         with transaction(engine) as connection:
+            validate_owned_links(connection, relation, values, user.id)
             json_columns = legacy_json_columns(connection, table_name)
             validate_links(connection, relation, values)
             if is_world and values["is_current"]:
@@ -160,21 +128,24 @@ def add_resource(resource: CrudResource):
             row = get_row(connection, relation, values["id"] if resource.session_ids else result.lastrowid)
             return response_row(row, json_columns)
 
-    def read_row(record_id: id_type, engine: Database):
+    def read_row(record_id: id_type, user: CurrentAccount, engine: Database):
         with transaction(engine) as connection:
+            require_owned(connection, table_name, record_id, user.id)
             row = get_row(connection, relation, record_id)
             return response_row(row, legacy_json_columns(connection, table_name))
 
-    def patch_row(record_id: id_type, payload: patch_schema, engine: Database):
+    def patch_row(record_id: id_type, payload: patch_schema, user: CurrentAccount, engine: Database):
         changes = payload.model_dump(exclude_unset=True)
         if not changes:
             raise HTTPException(422, "请提供至少一个要更新的字段")
         with transaction(engine) as connection:
+            require_owned(connection, table_name, record_id, user.id)
             json_columns = legacy_json_columns(connection, table_name)
             if is_world and changes.get("is_current") is True:
                 world = get_row(connection, relation, record_id)
                 lock_world_project(connection, world["project_id"])
             row = get_row(connection, relation, record_id, lock=True)
+            validate_owned_links(connection, relation, {**row, **changes}, user.id)
             validate_links(connection, relation, {**row, **changes})
             if is_world and changes.get("is_current") is True:
                 clear_current_world(connection, relation, row["project_id"], record_id)
@@ -182,8 +153,9 @@ def add_resource(resource: CrudResource):
             connection.execute(statement.values(**storage_values(changes, json_columns)))
             return response_row(get_row(connection, relation, record_id, lock=True), json_columns)
 
-    def delete_row(record_id: id_type, engine: Database):
+    def delete_row(record_id: id_type, user: CurrentAccount, engine: Database):
         with transaction(engine) as connection:
+            require_owned(connection, table_name, record_id, user.id)
             result = connection.execute(delete(relation).where(relation.c.id == record_id))
             if result.rowcount == 0:
                 raise HTTPException(404, "记录不存在")

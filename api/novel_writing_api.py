@@ -1,11 +1,16 @@
 """Coordinate writing agents with scoped MCP context and validated saves."""
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from agents import writing_agents as agents
+from agents.llm_streaming import emit_generation_event
+from api.generation_stream import generation_response
+from api.account_api import CurrentAccount
+from api.ownership import require_resource
 from agents.mcp.worldbuilding import NovelToolError, call_novel_tool, novel_session
 from api.novel_crud_api import Database
 from api.novel_schemas import RowId
@@ -106,7 +111,7 @@ async def load_context(loader, *args):
             except (HTTPException, NovelToolError) as exc:
                 problem = exc
     except Exception as exc:
-        logger.warning("写作上下文连接失败 type=%s", type(exc).__name__)
+        logger.warning("写作资料连接失败：异常类型=%s", type(exc).__name__)
         raise HTTPException(503, "无法连接小说 MCP 服务") from None
     if isinstance(problem, HTTPException):
         raise problem
@@ -116,14 +121,14 @@ async def load_context(loader, *args):
 async def generate(role, context, payload):
     try:
         return await run_in_threadpool(agents.generate, role, {**context, "request": payload.model_dump()})
-    except APITimeoutError:
-        logger.warning("模型请求超时 output=%s", role.output.__name__)
+    except (APITimeoutError, httpx.TimeoutException):
+        logger.warning("模型请求超时：任务=%s", role.title)
         raise HTTPException(504, "模型响应超时，请稍后重试") from None
-    except APIConnectionError:
-        logger.warning("模型网关连接失败 output=%s", role.output.__name__)
+    except (APIConnectionError, httpx.RequestError):
+        logger.warning("模型网关连接失败：任务=%s", role.title)
         raise HTTPException(502, "无法连接模型网关，请检查网络或模型服务配置") from None
     except APIStatusError as exc:
-        logger.warning("模型网关请求失败 output=%s status=%s", role.output.__name__, exc.status_code)
+        logger.warning("模型网关请求失败：任务=%s，状态码=%s", role.title, exc.status_code)
         if exc.status_code in (401, 403):
             detail = "模型网关拒绝了访问，请检查 API 密钥和模型权限"
         elif exc.status_code == 429:
@@ -134,41 +139,72 @@ async def generate(role, context, payload):
             detail = "模型网关拒绝了生成请求，请检查模型和服务地址配置"
         raise HTTPException(502, detail) from None
     except ValidationError:
-        logger.warning("模型输出未通过内容校验 output=%s", role.output.__name__)
+        logger.warning("模型输出未通过内容校验：任务=%s", role.title)
         raise HTTPException(502, "模型已返回内容，但格式未通过校验，请重试生成") from None
     except Exception as exc:
-        logger.warning("写作智能体生成失败 output=%s type=%s", role.output.__name__, type(exc).__name__)
+        logger.warning("写作智能体生成失败：任务=%s，异常类型=%s", role.title, type(exc).__name__)
         raise HTTPException(502, "模型生成失败或未返回有效的小说内容") from None
 
 
 @router.post("/projects/{project_id}/outline", response_model=OutlineReceipt, status_code=201, summary="生成并保存小说大纲")
-async def write_outline(project_id: RowId, payload: OutlineRequest, engine: Database):
+async def write_outline(project_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
     context = await load_context(project_context, project_id)
     artifact = await generate(agents.OUTLINE, context, payload)
     if len(artifact.volumes) != payload.volume_count:
         raise HTTPException(502, "模型返回的分卷数量与请求不符")
+    emit_generation_event("status", message="大纲校验通过，正在保存大纲与分卷…")
     return await run_in_threadpool(save_outline, engine, project_id, artifact)
 
 
 @router.post("/volumes/{volume_id}/chapter-plan", response_model=ChapterPlanReceipt, status_code=201, summary="生成并保存分卷的章节规划")
-async def write_chapter_plan(volume_id: RowId, payload: ChapterPlanRequest, engine: Database):
+async def write_chapter_plan(volume_id: RowId, payload: ChapterPlanRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_outline_volume", volume_id, user.id)
     if payload.start_chapter + payload.chapter_count - 1 > 2**32 - 1:
         raise HTTPException(422, "章节规划范围超出允许的章号")
     context = await load_context(plan_context, volume_id, payload.start_chapter)
     artifact = await generate(agents.PLAN, context, payload)
     if len(artifact.chapters) != payload.chapter_count:
         raise HTTPException(502, "模型返回的章节数量与请求不符")
+    emit_generation_event("status", message="章节规划校验通过，正在保存…")
     return await run_in_threadpool(save_chapter_plan, engine, context["project"]["id"], volume_id, payload.start_chapter, artifact)
 
 
 @router.post("/chapters/{chapter_id}/draft", response_model=DraftReceipt, summary="生成并保存章节正文初稿")
-async def write_draft(chapter_id: RowId, payload: DraftRequest, engine: Database):
+async def write_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     context = await load_context(chapter_context, chapter_id, False)
     artifact = await generate(agents.DRAFT, context, payload)
+    emit_generation_event("status", message="正文校验通过，正在保存初稿…")
     return await run_in_threadpool(save_draft, engine, chapter_id, artifact.content, context["chapter"])
 
 
 @router.post("/chapters/{chapter_id}/review", response_model=ReviewReport, summary="审读章节正文并返回修改建议")
-async def review_chapter(chapter_id: RowId, payload: WritingInput):
+async def review_chapter(chapter_id: RowId, payload: WritingInput, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     context = await load_context(chapter_context, chapter_id, True)
     return await generate(agents.REVIEW, context, payload)
+
+
+@router.post("/projects/{project_id}/outline/stream", summary="实时生成并保存小说大纲")
+async def stream_outline(project_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    return generation_response(lambda: write_outline(project_id, payload, user, engine))
+
+
+@router.post("/volumes/{volume_id}/chapter-plan/stream", summary="实时生成并保存章节规划")
+async def stream_chapter_plan(volume_id: RowId, payload: ChapterPlanRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_outline_volume", volume_id, user.id)
+    return generation_response(lambda: write_chapter_plan(volume_id, payload, user, engine))
+
+
+@router.post("/chapters/{chapter_id}/draft/stream", summary="实时生成并保存章节正文")
+async def stream_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
+    return generation_response(lambda: write_draft(chapter_id, payload, user, engine))
+
+
+@router.post("/chapters/{chapter_id}/review/stream", summary="实时审读章节正文")
+async def stream_review(chapter_id: RowId, payload: WritingInput, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
+    return generation_response(lambda: review_chapter(chapter_id, payload, user, engine))

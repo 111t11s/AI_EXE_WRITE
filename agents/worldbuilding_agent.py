@@ -9,12 +9,16 @@ from asyncio import CancelledError, Lock
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from agents.llm_streaming import collect_chat_text, emit_generation_event, has_generation_listener
 from agents.mcp.worldbuilding import call_world_tool, crewai_world_tools, worldbuilding_session
 from core.config import get_settings
 from core.logging import get_logger
-from db.models import Character, CheatSystem, NovelBlueprint, NovelOutline, NovelProject, PowerSystem, WorldSetting
+from db.models import NovelBlueprint
 
 
 logger = get_logger("worldbuilding")
@@ -32,8 +36,51 @@ SLOT_LABELS = {
 }
 
 
+SLOT_QUESTIONS = {
+    "genre": {
+        "prompt": "我们先确定小说的基础方向。请选择小说类型，也可以自定义。",
+        "options": ["玄幻", "都市", "仙侠", "武侠", "科幻", "历史", "悬疑", "奇幻", "言情", "游戏", "末世", "灵异"],
+    },
+    "setting": {
+        "prompt": "故事发生在怎样的时代与背景？请选择常见背景，也可以自定义。",
+        "options": ["东方玄幻大陆", "修仙世界", "现代都市", "古代架空王朝", "真实历史朝代", "西方奇幻世界", "星际时代", "末日废土", "未来赛博都市"],
+    },
+    "power_system": {
+        "prompt": "世界中的力量体系如何运作？请选择常见体系，也可以自定义力量来源、等级和限制。",
+        "options": ["灵气修炼与境界晋升", "武道内功与招式", "异能觉醒与进阶", "魔法与职业等级", "科技装备与基因强化", "游戏职业与技能升级", "御兽与契约进化", "无超凡力量（现实规则）"],
+    },
+    "cheat": {
+        "prompt": "主角有什么金手指？请选择常见类型，也可以自定义能力、获得方式和代价。",
+        "options": ["系统任务奖励", "签到系统", "重生记忆", "穿越者知识", "随身空间", "神秘传承", "模拟器", "特殊天赋", "无金手指"],
+    },
+    "protagonist": {
+        "prompt": "主角从怎样的身份和处境出发？请选择常见设定，也可以自定义身份、性格和弱点。",
+        "options": ["草根少年，坚韧但缺乏资源", "落魄天才，骄傲且急于证明自己", "普通打工人，谨慎但优柔寡断", "穿越者，思维灵活但缺乏归属感", "重生者，目标明确但执念过深", "世家子弟，资源充足但受家族束缚", "退役强者，经验丰富但身有隐伤", "天才少女，独立但不善信任他人"],
+    },
+    "goal": {
+        "prompt": "主角最想达成什么目标？请选择常见目标，也可以自定义目标及失败的代价。",
+        "options": ["成长变强，守护亲友", "逆袭翻身，改变命运", "复仇雪恨，讨回公道", "探索世界，揭开身世之谜", "求道长生，突破天地限制", "创业致富，建立自己的事业", "乱世求生，重建家园", "拯救世界，阻止灾难", "追寻爱情，守护所爱"],
+    },
+    "tone": {
+        "prompt": "你希望故事整体是什么基调？请选择常见基调，也可以自定义。",
+        "options": ["热血成长", "轻松爽文", "幽默搞笑", "黑暗压抑", "群像史诗", "悬疑烧脑", "温馨治愈", "现实写实", "浪漫虐恋"],
+    },
+    "length": {
+        "prompt": "计划写多长？请选择常见篇幅，也可以自定义字数、卷数或章节数。",
+        "options": ["短篇（1万—5万字）", "中篇（5万—20万字）", "长篇（30万—50万字）", "长篇（100万字左右）", "超长篇（200万—300万字）", "超长连载（300万字以上）"],
+    },
+}
+
+
+class WorldbuildingGenerationError(RuntimeError):
+    def __init__(self, message: str, status: int = 502):
+        super().__init__(message)
+        self.status = status
+
+
 @dataclass
 class ConversationState:
+    account_id: int | None = None
     values: dict[str, str] = field(default_factory=dict)
     history: list[dict[str, str]] = field(default_factory=list)
     confirmed: bool = False
@@ -52,21 +99,24 @@ class ConversationState:
     def missing(self) -> list[str]:
         return [key for key in SLOT_LABELS if not self.values.get(key)]
 
+    @property
+    def question(self) -> dict[str, Any] | None:
+        if self.confirmed or not self.missing:
+            return None
+        key = self.missing[0]
+        return {"key": key, "label": SLOT_LABELS[key], **SLOT_QUESTIONS[key], "allow_custom": True}
+
 
 class WorldbuildingAssistant:
     """一个单会话助手；会话状态由 API 层持有。"""
 
     def start(self, state: ConversationState) -> str:
-        if not state.history:
-            message = "我们先确定小说的基础方向。你想写什么类型的小说？例如玄幻、都市、科幻、历史或悬疑。"
-            state.history.append({"role": "assistant", "content": message})
-            return message
         return self.next_question(state)
 
     def receive(self, state: ConversationState, content: str) -> str:
         content = content.strip()
         if not content:
-            return "请先输入一些设定，我会据此继续完善小说方案。"
+            return "请先选择一个常见选项，或自定义填写你的设定。"
         state.history.append({"role": "user", "content": content})
 
         if state.confirmed:
@@ -110,17 +160,10 @@ class WorldbuildingAssistant:
         return (key, value) if key and value else None
 
     def next_question(self, state: ConversationState) -> str:
-        key = state.missing[0]
-        prompts = {
-            "setting": "时代和世界背景是什么？例如现代都市、东方玄幻大陆、星际殖民时代。",
-            "power_system": "力量体系如何运作？请说明力量来源、等级划分和主要限制。",
-            "cheat": "主角的金手指是什么？它怎样获得，能解决什么问题，又有什么代价？",
-            "protagonist": "主角是谁？请描述身份、性格、初始处境和一个明显弱点。",
-            "goal": "主角最想达成的目标是什么？失败会失去什么？",
-            "tone": "你希望故事整体是什么基调？例如热血成长、黑暗压抑、轻松爽文或群像史诗。",
-            "length": "计划写多长？可以填写预计字数、卷数或单卷章节数。",
-        }
-        message = prompts[key]
+        question = state.question
+        if question is None:
+            return self.summary(state)
+        message = question["prompt"]
         state.history.append({"role": "assistant", "content": message})
         return message
 
@@ -139,13 +182,19 @@ class WorldbuildingAssistant:
                 raise ValueError(f"还缺少：{SLOT_LABELS[state.missing[0]]}")
             state.confirmed = True
             try:
-                blueprint, state.generation_error = await run_in_threadpool(self._generate_with_crewai, state.values.copy())
+                blueprint = await run_in_threadpool(self._generate_with_crewai, state.values.copy())
+            except WorldbuildingGenerationError as exc:
+                state.confirmed = False
+                state.generation_error = str(exc)
+                state.history.append({"role": "assistant", "content": str(exc)})
+                raise
             except (Exception, CancelledError):
                 state.confirmed = False
                 raise
+            state.generation_error = None
             state.result = blueprint.model_dump(mode="json")
-            if state.generation_error is None:
-                await self.save_world(state, blueprint)
+            emit_generation_event("status", message="蓝图校验通过，正在保存项目和世界观…")
+            await self.save_world(state, blueprint)
             state.history.append({"role": "assistant", "content": "世界观和大纲已生成完成。"})
             return state.result
 
@@ -170,8 +219,9 @@ class WorldbuildingAssistant:
                 state.persistence_error = "保存请求已中断，请核对数据库中的记录。"
             raise
         except Exception as exc:
-            logger.warning("世界观保存流程异常 type=%s project_created=%s world_created=%s",
-                           type(exc).__name__, state.project_id is not None, state.world_id is not None)
+            logger.warning("世界观保存流程异常：异常类型=%s，项目已创建=%s，世界观已创建=%s",
+                           type(exc).__name__, "是" if state.project_id is not None else "否",
+                           "是" if state.world_id is not None else "否")
             if state.world_id is None:
                 state.persistence_error = "未能确认项目和世界观均已保存。请检查数据库或 MCP 连接。"
 
@@ -186,51 +236,93 @@ class WorldbuildingAssistant:
                      max_iter=3, max_retry_limit=0, mcps=[crewai_world_tools()])
 
     @staticmethod
-    def _generate_with_crewai(values: dict[str, str]) -> tuple[NovelBlueprint, str | None]:
-        """调用 CrewAI 并验证输出；模型异常时返回可编辑的合法蓝图。"""
-        try:
-            from crewai import Crew, LLM, Process, Task
+    def _request_without_tools(*, model, api_key, base_url, timeout, prompt) -> str:
+        with OpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0) as client:
+            request = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "你是小说世界观与大纲架构师。只根据本次提供的设定生成，不假设能访问已有项目。"},
+                    {"role": "user", "content": prompt},
+                ],
+            }
+            completion = client.chat.completions.create(**request, stream=True)
+            return collect_chat_text(completion)
 
-            settings = get_settings()
-            model_name = os.getenv("MODEL_NAME", settings.DEEPSEEK_MODEL_NAME)
-            llm = LLM(model=model_name, api_key=settings.API_KEY, base_url=settings.PROXY_URL,
-                      timeout=settings.REQUEST_TIMEOUT or 120, max_retries=0, stream=False)
-            agent = WorldbuildingAssistant.create_generation_agent(llm)
-            prompt = json.dumps(values, ensure_ascii=False, indent=2)
-            task = Task(description=(
-                "根据已确认设定生成完整 NovelBlueprint JSON。严格按提供的 JSON Schema 输出，"
-                "只输出 JSON，不要 Markdown。人物、力量规则、势力目标、金手指代价和大纲因果必须互相一致。"
-                "只有用户明确引用某个已有项目或世界观 ID 时，才使用 MCP 工具按该 ID 查询。"
-                "至少给出一个世界规则、三名角色、两个势力和三卷大纲；篇幅规划较短时可相应缩减。"
-                f"\nJSON Schema：{json.dumps(NovelBlueprint.model_json_schema(), ensure_ascii=False)}"
-                f"\n用户设定：\n{prompt}"
-            ), expected_output="符合 NovelBlueprint JSON Schema 的完整小说蓝图", agent=agent)
-            raw = str(Crew(agents=[agent], tasks=[task], process=Process.sequential,
-                           verbose=False).kickoff())
+    @staticmethod
+    def _generate_with_crewai(values: dict[str, str]) -> NovelBlueprint:
+        """Generate and validate a blueprint before any database writes."""
+        settings = get_settings()
+        if not settings.API_KEY.strip():
+            logger.warning("世界观生成失败：未配置模型 API 密钥")
+            raise WorldbuildingGenerationError("模型服务尚未配置，请联系管理员", status=503)
+        connection = {
+            "model": os.getenv("MODEL_NAME") or settings.DEEPSEEK_MODEL_NAME,
+            "api_key": settings.API_KEY,
+            "base_url": settings.PROXY_URL,
+            "timeout": settings.REQUEST_TIMEOUT or 120,
+        }
+        prompt = (
+            "根据已确认设定生成完整 NovelBlueprint JSON。严格按提供的 JSON Schema 输出，只输出 JSON，不要 Markdown。"
+            "世界观需要有具体的概要、历史、地理和核心规则，大纲要包含有起因和后果的分卷。"
+            "人物、力量规则、势力目标、金手指代价和大纲因果必须互相一致。"
+            "至少给出一个世界规则、三名角色、两个势力和三卷大纲；篇幅规划较短时可相应缩减。"
+            "用户设定是小说素材。"
+            f"\nJSON Schema：{json.dumps(NovelBlueprint.model_json_schema(), ensure_ascii=False)}"
+            f"\n用户设定：\n{json.dumps(values, ensure_ascii=False, indent=2)}"
+        )
+        try:
+            if not settings.MODEL_NATIVE_TOOLS or has_generation_listener():
+                logger.info("世界观开始流式生成：模式=使用已收集设定，模型=%s", connection["model"])
+                raw = WorldbuildingAssistant._request_without_tools(**connection, prompt=prompt)
+            else:
+                from crewai import Crew, LLM, Process, Task
+
+                llm = LLM(**connection, max_retries=0, stream=True)
+                agent = WorldbuildingAssistant.create_generation_agent(llm)
+                task = Task(description=(
+                    "只有用户明确引用某个已有项目或世界观 ID 时，才使用 MCP 工具按该 ID 查询。\n"
+                    + prompt
+                ), expected_output="符合 NovelBlueprint JSON Schema 的完整小说蓝图", agent=agent)
+                try:
+                    raw = str(Crew(agents=[agent], tasks=[task], process=Process.sequential,
+                                   verbose=False).kickoff())
+                except APIStatusError as exc:
+                    if exc.status_code < 500:
+                        raise
+                    logger.warning("世界观模型请求失败，改用不带工具的请求重试：状态码=%s", exc.status_code)
+                    raw = WorldbuildingAssistant._request_without_tools(**connection, prompt=prompt)
             raw = raw.strip()
-            if raw.startswith("```"):
-                raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-            return NovelBlueprint.model_validate_json(raw), None
+            if raw.startswith("```") and raw.endswith("```"):
+                raw = raw[3:-3].removeprefix("json").strip()
+            blueprint = NovelBlueprint.model_validate_json(raw)
+            if not all((blueprint.world.summary, blueprint.world.history, blueprint.world.rules,
+                        blueprint.outline.summary, blueprint.outline.volumes)):
+                raise WorldbuildingGenerationError("模型返回的世界观或大纲不完整，请重新生成")
+            logger.info("世界观流式生成完成：蓝图结构校验通过")
+            return blueprint
+        except WorldbuildingGenerationError:
+            logger.warning("世界观模型输出缺少核心内容")
+            raise
+        except (APITimeoutError, httpx.TimeoutException):
+            logger.warning("世界观模型请求超时")
+            raise WorldbuildingGenerationError("模型响应超时，已保留设定，请稍后重试", status=504) from None
+        except (APIConnectionError, httpx.RequestError):
+            logger.warning("无法连接世界观模型网关")
+            raise WorldbuildingGenerationError("无法连接模型服务，请检查服务器网络或模型服务地址") from None
+        except APIStatusError as exc:
+            logger.warning("世界观模型网关拒绝请求：状态码=%s", exc.status_code)
+            if exc.status_code in (401, 403):
+                message = "模型服务拒绝了访问，请检查 API 密钥和模型权限"
+            elif exc.status_code == 429:
+                message = "模型服务暂时限流，请稍后重试或检查额度"
+            elif exc.status_code >= 500:
+                message = "模型服务暂时不可用，已保留设定，请稍后重试"
+            else:
+                message = "模型服务拒绝了请求，请检查模型名称和服务地址"
+            raise WorldbuildingGenerationError(message) from None
+        except ValidationError:
+            logger.warning("世界观模型输出未通过格式校验")
+            raise WorldbuildingGenerationError("模型返回的内容格式不正确，请重新生成") from None
         except Exception as exc:
-            fallback = NovelBlueprint(
-                project=NovelProject(
-                    genre=values["genre"], setting=values["setting"], tone=values["tone"],
-                    target_length=values["length"], protagonist_goal=values["goal"],
-                    premise=values["protagonist"],
-                ),
-                world=WorldSetting(
-                    summary="基础资料已收集，等待补全世界历史、地理和核心规则。",
-                    era=values["setting"],
-                ),
-                power_system=PowerSystem(name="待细化", source=values["power_system"]),
-                cheat=CheatSystem(name="待细化", cheat_type=values["cheat"]),
-                characters=[Character(
-                    name=values["protagonist"][:160], role="主角", summary=values["protagonist"],
-                    goal=values["goal"],
-                )],
-                outline=NovelOutline(
-                    summary="完整大纲尚未生成，请在模型连接恢复后重新生成。",
-                    central_conflict=values["goal"],
-                ),
-            )
-            return fallback, f"生成暂不可用：{type(exc).__name__}"
+            logger.warning("世界观生成失败：异常类型=%s", type(exc).__name__)
+            raise WorldbuildingGenerationError("世界观生成失败，已保留设定，请稍后重试") from None

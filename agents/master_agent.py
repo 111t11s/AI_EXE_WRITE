@@ -23,7 +23,7 @@ def create_master_agent() -> Agent:
         base_url=settings.PROXY_URL,
         timeout=settings.REQUEST_TIMEOUT or 120,
         max_retries=0,
-        stream=False,
+        stream=True,
     )
     return Agent(
         role="小说创作总策划",

@@ -1,4 +1,5 @@
-import {resolveApiBaseUrl} from './api-client.js';
+import {authenticatedFetch, getAuthToken, resolveApiBaseUrl, setAuthToken} from './api-client.js';
+import {createGenerationView, postGeneration} from './generation-stream.js';
 
 const API_BASE_URL = resolveApiBaseUrl(window.AITXT_CONFIG?.apiBaseUrl);
 const $ = (id) => document.getElementById(id);
@@ -8,9 +9,11 @@ const statusNames = {planning: '规划中', writing: '写作中', completed: '�
 const labels = {genre: '小说类型', setting: '时代与背景', power_system: '力量体系', cheat: '金手指',
   protagonist: '主角设定', goal: '主角目标', tone: '故事基调', length: '篇幅规划'};
 const pageSize = 15;
-const state = {projects: [], project: null, worlds: [], outlines: [], tab: 'overview',
+const initialState = () => ({projects: [], project: null, worlds: [], outlines: [], tab: 'overview',
   outline: null, volumes: null, volume: null, beats: null, page: null, chapter: null, chapterId: null,
-  busy: false, reviews: new Map()};
+  busy: false, reviews: new Map()});
+const state = initialState();
+let account = null;
 const sequence = {};
 const view = $('view');
 
@@ -38,8 +41,9 @@ const key = (name) => (sequence[name] = (sequence[name] ?? 0) + 1);
 const current = (name, token) => sequence[name] === token;
 
 async function api(path, {method = 'GET', data, filters} = {}) {
+  const requestingToken = getAuthToken();
   const query = new URLSearchParams(filters ?? {}).toString();
-  const response = await fetch(`${API_BASE_URL}${path}${query ? `?${query}` : ''}`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}${path}${query ? `?${query}` : ''}`, {
     method, cache: 'no-store',
     ...(data !== undefined ? {
       headers: {'Content-Type': 'application/json'},
@@ -47,6 +51,11 @@ async function api(path, {method = 'GET', data, filters} = {}) {
     } : {}),
   });
   const body = await response.json().catch(() => null);
+  if (getAuthToken() !== requestingToken) {
+    const error = new Error('登录状态已变更，请重新操作。');
+    error.status = 401;
+    throw error;
+  }
   if (!response.ok) {
     const detail = body?.detail;
     const message = Array.isArray(detail) ? detail.map((item) => item.msg).join('；') : detail;
@@ -58,6 +67,9 @@ async function api(path, {method = 'GET', data, filters} = {}) {
 }
 
 const post = (path, data = {}) => api(path, {method: 'POST', data});
+
+const actionGeneration = createGenerationView($('action-stream'));
+const wizardGeneration = createGenerationView($('wizard-stream'));
 
 async function allRows(path, filters = {}) {
   const items = [];
@@ -82,6 +94,8 @@ function setBusy(message = '') {
   $('activity-text').textContent = message;
   $('new-project').disabled = state.busy;
   $('refresh').disabled = state.busy;
+  $('account-logout').disabled = state.busy;
+  $('account-password-change').disabled = state.busy;
   renderLibrary();
 }
 
@@ -101,7 +115,7 @@ function renderLibrary() {
 }
 
 function rememberedProject() {
-  try { return Number(localStorage.getItem('mojian-project')); } catch { return null; }
+  try { return Number(localStorage.getItem(`mojian-project-${account.id}`)); } catch { return null; }
 }
 
 async function loadLibrary(preferred = state.project?.id ?? rememberedProject()) {
@@ -144,7 +158,7 @@ async function openProject(projectId) {
     ]);
     if (!current('project', token)) return;
     Object.assign(state, {project, worlds, outlines: outlines.reverse()});
-    try { localStorage.setItem('mojian-project', String(projectId)); } catch { /* optional */ }
+    try { localStorage.setItem(`mojian-project-${account.id}`, String(projectId)); } catch { /* optional */ }
   } catch (error) {
     if (current('project', token)) state.projectError = error.message;
   } finally {
@@ -357,6 +371,7 @@ function openAction(options) {
   $('action-title').textContent = options.title;
   $('action-description').textContent = options.description;
   $('action-error').hidden = true;
+  actionGeneration.hide();
   $('action-submit').textContent = options.submit;
   $('action-fields').replaceChildren(...options.fields.map(({label, type, value, ...attributes}, index) => {
     const input = type === 'textarea' ? element('textarea', attributes) : element('input', {...attributes, type});
@@ -369,7 +384,7 @@ function openAction(options) {
 
 function setActionBusy(busy) {
   for (const control of $('action-form').elements) control.disabled = busy;
-  $('action-submit').textContent = busy ? (task.pending || '正在生成…') : task.submit;
+  $('action-submit').textContent = busy ? (task?.pending || '正在生成…') : (task?.submit || '继续');
 }
 
 function closeAction() { if (!state.busy) action.close(); }
@@ -380,6 +395,7 @@ action.addEventListener('cancel', (event) => { if (state.busy) event.preventDefa
 $('action-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   if (state.busy || !task) return;
+  const requestingAccount = account;
   const submitted = task;
   const data = Object.fromEntries(new FormData(event.currentTarget));
   for (const field of submitted.fields) {
@@ -389,10 +405,18 @@ $('action-form').addEventListener('submit', async (event) => {
   $('action-error').hidden = true;
   setBusy(submitted.pending || '智能体正在处理，可能需要几分钟。');
   setActionBusy(true);
+  if (submitted.streamPath) actionGeneration.begin();
   try {
     let receipt;
-    try { receipt = await submitted.send(data); }
+    try {
+      receipt = submitted.streamPath ? await postGeneration(`${API_BASE_URL}${submitted.streamPath}`, data,
+        (name, fragment) => { if (account === requestingAccount) actionGeneration.event(name, fragment); }) : await submitted.send(data);
+      if (account !== requestingAccount) return;
+      if (submitted.streamPath) actionGeneration.finish();
+    }
     catch (error) {
+      if (account !== requestingAccount) return;
+      if (submitted.streamPath) actionGeneration.fail(error.message);
       $('action-error').textContent = error instanceof TypeError ? '连接中断。若操作会写入数据，请刷新项目核对结果后再试。' : error.message;
       $('action-error').hidden = false;
       return;
@@ -402,9 +426,11 @@ $('action-form').addEventListener('submit', async (event) => {
     try { await submitted.after(receipt); }
     catch (error) { notify(`操作已完成，但刷新结果失败：${error.message}。请刷新书架。`, 'error'); }
   } finally {
-    setActionBusy(false);
-    setBusy();
-    render();
+    if (account === requestingAccount) {
+      setActionBusy(false);
+      setBusy();
+      render();
+    }
   }
 });
 
@@ -412,7 +438,7 @@ function outlineDialog() {
   const id = state.project.id;
   openAction({title: '生成新大纲', description: '根据当前世界观创建一个新版本，已有大纲会保留。生成可能需要几分钟。',
     submit: '生成并保存', fields: [numberField('volume_count', '分卷数', 3, 1, 5), noteField],
-    send: (data) => post(`/writing/projects/${id}/outline`, data),
+    streamPath: `/writing/projects/${id}/outline/stream`,
     success: (result) => `大纲 v${result.version_no} 已保存，包含 ${result.volume_ids.length} 卷、${result.plot_beat_count} 个剧情节点。`,
     after: async (result) => {
       state.outlines = (await allRows('/outlines', {project_id: id})).reverse();
@@ -427,7 +453,7 @@ function planDialog(volume) {
   openAction({title: '规划章节', description: `把《${volume.title}》的剧情节点拆成章节。章号在全书内唯一，已有章节不会被覆盖。`,
     submit: '规划并保存', fields: [numberField('start_chapter', '起始章号', start, 1, 4294967295),
       numberField('chapter_count', '生成章节数', 5, 1, 12), noteField],
-    send: (data) => post(`/writing/volumes/${volume.id}/chapter-plan`, data),
+    streamPath: `/writing/volumes/${volume.id}/chapter-plan/stream`,
     success: (result) => `已保存 ${result.chapters.length} 个计划章节，选中任一章节即可生成正文。`,
     after: async (result) => { state.tab = 'chapters'; await loadChapters(0, result.chapters[0].chapter_id); },
   });
@@ -436,7 +462,7 @@ function planDialog(volume) {
 function draftDialog(chapter) {
   openAction({title: '生成正文', description: `为第 ${chapter.chapter_number} 章生成初稿，正文会直接保存到当前章节。`,
     submit: '写作并保存', fields: [numberField('target_characters', '目标篇幅（字符）', 2000, 300, 6000), noteField],
-    send: (data) => post(`/writing/chapters/${chapter.id}/draft`, data),
+    streamPath: `/writing/chapters/${chapter.id}/draft/stream`,
     success: (result) => `第 ${chapter.chapter_number} 章初稿已保存，共 ${result.word_count} 字。`,
     after: () => refreshChapter(chapter.id),
   });
@@ -444,7 +470,7 @@ function draftDialog(chapter) {
 
 function reviewDialog(chapter) {
   openAction({title: '审读本章', description: '检查世界规则、人物动机、前文衔接和章节目标。审读只给建议，不会修改正文。',
-    submit: '开始审读', fields: [noteField], send: (data) => post(`/writing/chapters/${chapter.id}/review`, data),
+    submit: '开始审读', fields: [noteField], streamPath: `/writing/chapters/${chapter.id}/review/stream`,
     success: () => '审读完成，建议显示在正文下方。',
     after: (report) => { state.reviews.set(chapter.id, report); },
   });
@@ -475,16 +501,31 @@ async function refreshChapter(id) {
 }
 
 const wizard = $('wizard');
-let session = {id: null, values: {}, done: false, busy: false, projectId: null};
+let session = {id: null, values: {}, question: null, custom: false, done: false, busy: false, projectId: null};
 
 function syncWizard() {
-  const {id, values, done, busy, projectId} = session;
+  const {id, values, question, custom, done, busy, projectId} = session;
   const count = Object.keys(labels).filter((name) => values[name]).length;
   $('slot-count').textContent = `${count} / ${Object.keys(labels).length}`;
   $('slots').replaceChildren(...Object.entries(labels).map(([name, label]) =>
     element('div', {}, element('dt', {}, label), element('dd', {}, values[name] || '待补充'))));
   $('chat-input').disabled = !id || busy || done;
   $('chat-send').disabled = !id || busy || done;
+  $('chat-form').hidden = !id || done || Boolean(question && !custom);
+  $('chat-input').placeholder = question ? `输入自定义${question.label}…` : '修改设定，例如：小说类型：仙侠';
+  $('question-picker').hidden = !id || !question || done;
+  $('question-options').replaceChildren();
+  if (question && !done) {
+    $('question-label').textContent = `${question.label} · 点击选择，或自定义填写`;
+    $('question-options').append(...question.options.map((option) =>
+      button(option, () => sendMessage(option), 'secondary question-option', busy)),
+    element('button', {type: 'button', class: 'button secondary question-option custom-option',
+      disabled: busy, 'aria-pressed': String(custom), 'aria-controls': 'chat-form', click: () => {
+        session.custom = !session.custom;
+        syncWizard();
+        if (session.custom) $('chat-input').focus();
+      }}, '自定义…'));
+  }
   $('confirm-world').disabled = !id || busy || done || count !== Object.keys(labels).length;
   $('confirm-world').textContent = busy && count === Object.keys(labels).length ? '处理中…' : '确认并生成';
   $('restart-wizard').disabled = busy;
@@ -498,18 +539,25 @@ function bubble(text, user = false) {
 }
 
 async function startConversation() {
-  session = {id: null, values: {}, done: false, busy: true, projectId: null};
+  session = {id: null, values: {}, question: null, custom: false, done: false, busy: true, projectId: null};
+  const requestingSession = session;
   $('chat').replaceChildren();
   $('wizard-preview').hidden = true;
+  wizardGeneration.hide();
   $('chat-input').value = '';
   syncWizard();
   try {
     const reply = await post('/novel-assistant/sessions');
+    if (session !== requestingSession) return;
     session.id = reply.session_id;
     session.values = reply.values;
+    session.question = reply.question;
     bubble(reply.message);
-  } catch (error) { bubble(`无法开始对话：${error.message}。可点击「开始新对话」重试。`); }
-  finally { session.busy = false; syncWizard(); }
+  } catch (error) {
+    if (session === requestingSession) bubble(`无法开始对话：${error.message}。可点击「开始新对话」重试。`);
+  } finally {
+    if (session === requestingSession) { session.busy = false; syncWizard(); }
+  }
 }
 
 function openWizard() {
@@ -521,27 +569,41 @@ function openWizard() {
 
 async function sendMessage(content) {
   if (!content || !session.id || session.busy || session.done) return;
+  const requestingSession = session;
   session.busy = true;
   syncWizard();
   bubble(content, true);
   const generating = ['确认生成', '确认', '开始生成'].includes(content);
-  if (generating) bubble('正在生成世界观，可能需要几分钟。');
+  if (generating) wizardGeneration.begin();
   try {
-    const reply = await post(`/novel-assistant/sessions/${session.id}/messages`, {content});
+    const path = `/novel-assistant/sessions/${session.id}/messages`;
+    const reply = generating ? await postGeneration(`${API_BASE_URL}${path}/stream`, {content},
+      (name, fragment) => { if (session === requestingSession) wizardGeneration.event(name, fragment); }) : await post(path, {content});
+    if (session !== requestingSession) return;
+    if (generating) wizardGeneration.finish(reply.persistence?.world_id ? '生成完成，世界观已保存' : '生成完成，请查看保存状态');
     session.values = reply.values;
     session.done = reply.done;
+    session.question = reply.question;
+    session.custom = false;
+    $('chat-input').value = '';
     bubble(reply.message);
     if (reply.result) {
       session.projectId = reply.persistence?.world_id ? reply.persistence.project_id : null;
       const preview = $('wizard-preview');
-      preview.replaceChildren(element('h3', {}, reply.result.world.title), prose(reply.result.world.summary),
-        reply.warning ? muted(reply.warning) : null, reply.persistence?.error ? muted(reply.persistence.error) : null,
-        session.projectId ? pill('世界观已保存') : muted('世界观未完整入库。'));
+      const content = [element('h3', {}, reply.result.world.title), prose(reply.result.world.summary)];
+      if (reply.warning) content.push(muted(reply.warning));
+      if (session.projectId) content.push(pill('世界观已保存'));
+      else content.push(muted(reply.persistence?.error || '世界观尚未保存。'));
+      preview.replaceChildren(...content);
       preview.hidden = false;
     }
   } catch (error) {
+    if (session !== requestingSession) return;
     bubble(error.status === 404 ? '这个会话已过期，请点击「开始新对话」。' : `请求失败：${error.message}`);
-  } finally { session.busy = false; syncWizard(); }
+    if (generating) wizardGeneration.fail(error.message);
+  } finally {
+    if (session === requestingSession) { session.busy = false; syncWizard(); }
+  }
 }
 
 $('new-project').onclick = openWizard;
@@ -556,8 +618,155 @@ $('chat-form').addEventListener('submit', (event) => {
   const input = $('chat-input');
   const text = input.value.trim();
   if (!text) return;
-  input.value = '';
   void sendMessage(text);
 });
 
-void loadLibrary();
+const accountDialog = $('account-dialog');
+const passwordDialog = $('password-dialog');
+let registering = false;
+let accountBusy = false;
+let passwordBusy = false;
+
+function showAccount(message = '') {
+  $('app-shell').hidden = true;
+  $('account-error').textContent = message;
+  $('account-error').hidden = !message;
+  if (!accountDialog.open) accountDialog.showModal();
+}
+
+function resetAccount(message = '') {
+  account = null;
+  setAuthToken();
+  for (const name of Object.keys(sequence)) key(name);
+  for (const name of Object.keys(state)) delete state[name];
+  Object.assign(state, initialState());
+  session = {id: null, values: {}, question: null, custom: false, done: false, busy: false, projectId: null};
+  task = null;
+  action.close();
+  wizard.close();
+  passwordDialog.close();
+  $('password-form').reset();
+  actionGeneration.hide();
+  wizardGeneration.hide();
+  $('chat').replaceChildren();
+  $('wizard-preview').replaceChildren();
+  $('action-fields').replaceChildren();
+  $('action-title').textContent = '';
+  $('action-description').textContent = '';
+  $('action-error').textContent = '';
+  $('chat-input').value = '';
+  notify();
+  syncWizard();
+  $('account-name').textContent = '';
+  $('account-password').value = '';
+  $('activity').hidden = true;
+  renderLibrary();
+  render();
+  showAccount(message);
+}
+
+async function enterAccount(user) {
+  account = user;
+  $('account-name').textContent = user.display_name || user.username;
+  $('account-password').value = '';
+  accountDialog.close();
+  $('app-shell').hidden = false;
+  $('new-project').disabled = false;
+  $('refresh').disabled = false;
+  $('account-logout').disabled = false;
+  $('account-password-change').disabled = false;
+  notify();
+  await loadLibrary();
+}
+
+accountDialog.addEventListener('cancel', (event) => event.preventDefault());
+$('account-toggle').onclick = () => {
+  registering = !registering;
+  $('account-title').textContent = registering ? '注册账号' : '登录账号';
+  $('account-submit').textContent = registering ? '注册并进入书架' : '登录';
+  $('account-toggle').textContent = registering ? '已有账号，去登录' : '注册新账号';
+  $('account-display-field').hidden = !registering;
+  $('account-password').autocomplete = registering ? 'new-password' : 'current-password';
+  $('account-error').hidden = true;
+};
+
+$('account-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (accountBusy) return;
+  accountBusy = true;
+  const controls = [...event.currentTarget.elements];
+  for (const control of controls) control.disabled = true;
+  $('account-error').hidden = true;
+  const data = {username: $('account-username').value.trim(), password: $('account-password').value};
+  if (registering) data.display_name = $('account-display-name').value.trim();
+  try {
+    const receipt = await post(`/auth/${registering ? 'register' : 'login'}`, data);
+    setAuthToken(receipt.access_token);
+    await enterAccount(receipt.account);
+  } catch (error) {
+    $('account-error').textContent = error.message;
+    $('account-error').hidden = false;
+  } finally {
+    accountBusy = false;
+    for (const control of controls) control.disabled = false;
+  }
+});
+
+$('account-logout').onclick = async () => {
+  if (state.busy || session.busy) return;
+  $('account-logout').disabled = true;
+  try {
+    await post('/auth/logout');
+    resetAccount('已退出账号。');
+  } catch (error) {
+    if (error.status !== 401) notify(`退出失败：${error.message}`, 'error');
+  } finally { $('account-logout').disabled = false; }
+};
+
+window.addEventListener('aitxt:unauthorized', () => resetAccount('登录已过期，请重新登录。'));
+
+$('account-password-change').onclick = () => {
+  if (!account || state.busy || session.busy || passwordBusy) return;
+  $('password-error').hidden = true;
+  $('password-form').reset();
+  passwordDialog.showModal();
+};
+$('cancel-password').onclick = () => { if (!passwordBusy) passwordDialog.close(); };
+passwordDialog.addEventListener('cancel', (event) => { if (passwordBusy) event.preventDefault(); });
+passwordDialog.addEventListener('close', () => $('password-form').reset());
+$('password-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (passwordBusy) return;
+  const data = {current_password: $('current-password').value, new_password: $('new-password').value};
+  if (data.new_password !== $('confirm-password').value) {
+    $('password-error').textContent = '两次输入的新密码不一致。';
+    $('password-error').hidden = false;
+    return;
+  }
+  const requestingAccount = account;
+  const controls = [...event.currentTarget.elements];
+  passwordBusy = true;
+  for (const control of controls) control.disabled = true;
+  $('password-error').hidden = true;
+  try {
+    await post('/auth/password', data);
+    if (account === requestingAccount) resetAccount('密码已修改，请使用新密码重新登录。');
+  } catch (error) {
+    if (account === requestingAccount) {
+      $('password-error').textContent = error.message;
+      $('password-error').hidden = false;
+    }
+  } finally {
+    passwordBusy = false;
+    for (const control of controls) control.disabled = false;
+  }
+});
+
+async function initializeAccount() {
+  showAccount();
+  if (!getAuthToken()) return;
+  try { await enterAccount(await api('/auth/me')); }
+  catch (error) { showAccount(error.status === 401 ? '请重新登录。' : error.message); }
+}
+
+export const ready = initializeAccount();
