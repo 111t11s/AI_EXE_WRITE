@@ -2,16 +2,30 @@
 
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from agents.worldbuilding_agent import ConversationState, WorldbuildingAssistant, WorldbuildingGenerationError
 from api.generation_stream import generation_response
+from api import generation_jobs
 from api.account_api import CurrentAccount
+from agents.outline_skills import OutlineSkillError, outline_skill_selection
 
 router = APIRouter(prefix="/novel-assistant")
 _sessions: dict[str, ConversationState] = {}
 _assistant = WorldbuildingAssistant()
+
+
+def skill_selection(genre):
+    try:
+        return outline_skill_selection(genre)
+    except OutlineSkillError as exc:
+        raise HTTPException(503, str(exc)) from None
+
+
+@router.get("/outline-skills")
+def get_outline_skills(user: CurrentAccount, genre: str = Query(default="", max_length=200)) -> dict:
+    return skill_selection(genre)
 
 
 class MessageRequest(BaseModel):
@@ -24,7 +38,7 @@ def create_session(user: CurrentAccount) -> dict:
     state = ConversationState(account_id=user.id)
     _sessions[session_id] = state
     return {"session_id": session_id, "message": _assistant.start(state), "values": state.values,
-            "question": state.question}
+            "question": state.question, "outline_skill": skill_selection(None)}
 
 
 @router.post("/sessions/{session_id}/messages")
@@ -48,10 +62,11 @@ async def send_message(session_id: str, request: MessageRequest, user: CurrentAc
             "persistence": state.persistence,
             "done": True,
             "question": state.question,
+            "outline_skill": skill_selection(state.values.get("genre")),
         }
     reply = _assistant.receive(state, message)
     return {"message": reply, "values": state.values, "done": state.result is not None,
-            "question": state.question}
+            "question": state.question, "outline_skill": skill_selection(state.values.get("genre"))}
 
 
 @router.get("/sessions/{session_id}")
@@ -67,6 +82,7 @@ def get_session(session_id: str, user: CurrentAccount) -> dict:
         "warning": state.generation_error,
         "persistence": state.persistence,
         "done": state.result is not None and not state.confirmation_lock.locked(),
+        "outline_skill": skill_selection(state.values.get("genre")),
     }
 
 
@@ -80,3 +96,15 @@ async def stream_message(session_id: str, request: MessageRequest, user: Current
     if state.missing:
         raise HTTPException(400, "请先完成基础设定")
     return generation_response(lambda: send_message(session_id, request, user), message="正在连接模型，准备生成世界观…")
+
+
+@router.post("/sessions/{session_id}/messages/tasks", status_code=202)
+async def start_worldbuilding(session_id: str, request: MessageRequest, user: CurrentAccount):
+    state = _sessions.get(session_id)
+    if state is None or state.account_id != user.id:
+        raise HTTPException(404, "会话不存在或已过期")
+    if request.content.strip() not in {"确认生成", "确认", "开始生成"} or state.missing:
+        raise HTTPException(400, "请先完成基础设定并确认生成")
+    return generation_jobs.store.start(account_id=user.id, key=f"worldbuilding:{session_id}", kind="worldbuilding",
+        title="生成世界观与大纲", resource_id=session_id,
+        operation=lambda: send_message(session_id, request, user)).summary()

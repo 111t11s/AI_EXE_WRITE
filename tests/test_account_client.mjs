@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {authenticatedFetch, getAuthToken, setAuthToken} from '../frontend/api-client.js';
-import {postGeneration} from '../frontend/generation-stream.js';
+import {postGeneration, watchGeneration} from '../frontend/generation-stream.js';
 
 test('ordinary and streaming requests carry the account token in headers', async (context) => {
   const originalFetch = globalThis.fetch;
@@ -44,4 +44,25 @@ test('a late failure from the previous session cannot log out a newer account', 
   resolve(new Response('{}', {status: 401}));
   await pending;
   assert.equal(getAuthToken(), 'new-token');
+});
+
+test('opening progress uses an authenticated cancellable GET without starting generation', async (context) => {
+  const previous = globalThis.fetch;
+  context.after(() => { globalThis.fetch = previous; setAuthToken(); });
+  setAuthToken('progress-account-token');
+  const controller = new AbortController();
+  const events = [];
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, '/api/v1/generation-jobs/job-id/events');
+    assert.equal(options.method, 'GET');
+    assert.equal(options.body, undefined);
+    assert.equal(options.signal, controller.signal);
+    assert.equal(options.headers.get('Authorization'), 'Bearer progress-account-token');
+    return new Response('event: snapshot\ndata: {"text":"已生成"}\n\nevent: result\ndata: {"saved":true}\n\n',
+      {headers: {'Content-Type': 'text/event-stream'}});
+  };
+  const result = await watchGeneration('/api/v1/generation-jobs/job-id/events',
+    (event, data) => events.push([event, data]), {signal: controller.signal});
+  assert.deepEqual(result, {saved: true});
+  assert.deepEqual(events[0], ['snapshot', {text: '已生成'}]);
 });

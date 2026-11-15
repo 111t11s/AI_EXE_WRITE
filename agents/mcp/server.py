@@ -15,6 +15,8 @@ from api.novel_schemas import RowId, SessionId
 from api.writing_schemas import (
     ChapterPlanReceipt, ChapterPlanRequest, DraftReceipt, DraftRequest, OutlineReceipt, OutlineRequest,
     ReviewReport, WritingInput,
+    CoreCharacterRequest, SupportingCharacterRequest, CharacterReceipt,
+    ConsistencyRequest, ConsistencyReceipt,
 )
 
 
@@ -104,6 +106,28 @@ def register_writing_tools(server: FastMCP) -> None:
     def annotations(*, read_only: bool = False) -> ToolAnnotations:
         return ToolAnnotations(readOnlyHint=read_only, destructiveHint=False,
                                idempotentHint=False, openWorldHint=True)
+
+    @server.tool(description="按用户指定的大纲版本及多选章节核对剧情、人物和设定是否偏移，返回带原文依据的报告，不修改小说。",
+                 annotations=annotations(read_only=True))
+    async def check_novel_consistency(ctx: Context, project_id: RowId, payload: ConsistencyRequest) -> ConsistencyReceipt:
+        return await request(ctx, "POST", f"writing/projects/{project_id}/consistency", 200,
+                             result_schema=ConsistencyReceipt, json=payload.model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
+
+    @server.tool(description="根据当前世界观生成主角和重要配角，校验后整批新增保存；不会覆盖已有角色。",
+                 annotations=annotations())
+    async def generate_novel_core_characters(ctx: Context, project_id: RowId,
+                                             payload: CoreCharacterRequest | None = None) -> CharacterReceipt:
+        return await request(ctx, "POST", f"writing/projects/{project_id}/characters/core", 201,
+                             result_schema=CharacterReceipt, json=(payload or CoreCharacterRequest()).model_dump(mode="json"),
+                             timeout=WORKFLOW_TIMEOUT)
+
+    @server.tool(description="根据指定大纲及分卷节点生成其余配角，尊重世界观和已有核心人物，整批新增保存。",
+                 annotations=annotations())
+    async def generate_novel_supporting_characters(ctx: Context, outline_id: RowId,
+                                                   payload: SupportingCharacterRequest | None = None) -> CharacterReceipt:
+        return await request(ctx, "POST", f"writing/outlines/{outline_id}/characters/supporting", 201,
+                             result_schema=CharacterReceipt,
+                             json=(payload or SupportingCharacterRequest()).model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
 
     @server.tool(description="为项目生成一版新大纲，并保存分卷和剧情节点。需要已有当前世界观。",
                  annotations=annotations())

@@ -135,6 +135,16 @@ test('view displays thinking and unfinished JSON while the request remains open'
   paint();
   assert.equal(thinking.hidden, true);
   assert.equal(thinkingOutput.textContent, '');
+  view.event('snapshot', {text: '{"content":"补回前半段', thinking: '此前思考', message: '生成中'});
+  assert.equal(output.textContent, '正文\n补回前半段');
+  assert.equal(thinkingOutput.textContent, '此前思考');
+  view.event('delta', {text: '后半段'});
+  paint();
+  assert.equal(output.textContent, '正文\n补回前半段后半段');
+  // Reopening a task replaces its replay snapshot rather than duplicating it.
+  view.event('snapshot', {text: '{"content":"补回前半段后半段', thinking: '此前思考', message: '已完成'});
+  assert.equal(output.textContent, '正文\n补回前半段后半段');
+  view.begin();
   view.event('delta', {text: '{"content":"断流前内容'});
   view.fail('连接中断');
   assert.equal(root.dataset.state, 'error');

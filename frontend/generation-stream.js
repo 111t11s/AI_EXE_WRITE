@@ -87,6 +87,13 @@ export async function postGeneration(url, data, onEvent) {
   }
 }
 
+export async function watchGeneration(url, onEvent, {signal} = {}) {
+  const response = await authenticatedFetch(url, {
+    method: 'GET', cache: 'no-store', headers: {Accept: 'text/event-stream'}, signal,
+  });
+  return readGenerationStream(response, onEvent);
+}
+
 // The same incremental view is used by the worldbuilding and writing dialogs.
 export function createGenerationView(root) {
   const output = root.querySelector('.generation-output');
@@ -146,7 +153,15 @@ export function createGenerationView(root) {
       frame = requestAnimationFrame(flush);
     },
     event(event, data) {
-      if (event === 'thinking' || event === 'delta') {
+      if (event === 'snapshot') {
+        text = data.text || '';
+        thinkingText = data.thinking || '';
+        characters = Array.from(text).length;
+        thinkingCharacters = Array.from(thinkingText).length;
+        status.textContent = data.message || '正在生成…';
+        if (data.truncated) status.textContent += ' · 仅显示最近生成的内容';
+        flush();
+      } else if (event === 'thinking' || event === 'delta') {
         if (typeof data.text !== 'string' || !data.text) return;
         if (event === 'thinking') {
           if (!thinkingText) revealOutput = true;
@@ -184,10 +199,11 @@ const fieldNames = {title: '标题', name: '名称', genre: '小说类型', sett
   growth_rules: '成长规则', breakthrough_condition: '突破条件', capabilities: '能力', cheat_type: '金手指类型',
   origin: '来历', functions: '功能', costs: '代价', growth_path: '成长路线', story_secret: '故事秘密',
   faction_type: '势力类型', goal: '目标', leader: '领袖', territory: '领地', strengths: '优势', weaknesses: '弱点',
-  relationships: '人物关系', role: '角色定位', personality: '性格', background: '背景', motivation: '动机',
+  relationships: '人物关系', category: '分类', severity: '问题等级', role: '角色定位', personality: '性格', background: '背景', motivation: '动机',
   weakness: '弱点', character_arc: '人物成长', abilities: '能力', faction_name: '所属势力',
   central_conflict: '核心冲突', themes: '主题', main_conflict: '主要冲突', climax: '高潮', ending_hook: '结尾悬念',
-  foreshadowing: '伏笔', content: '正文', evidence: '文中依据', suggestion: '修改建议', verdict: '审读结论'};
+  foreshadowing: '伏笔', content: '正文', evidence: '文中依据', suggestion: '修改建议', verdict: '审读结论',
+  quote: '原文引文', explanation: '偏移说明', kind: '对照类型', field: '对照字段'};
 
 export function formatGenerationText(text) {
   const entries = [];
@@ -201,7 +217,9 @@ export function formatGenerationText(text) {
       try { value = JSON.parse(`"${raw}"`); break; }
       catch { raw = raw.slice(0, -1); }
     }
-    if (value) entries.push(`${label}\n${({ready: '可用', revise: '建议修改'})[value] ?? value}`);
+    if (value) entries.push(`${label}\n${({ready: '可用', revise: '建议修改', protagonist: '主角', important: '重要配角', supporting: '配角',
+      consistent: '所选范围未发现明确偏移', drifted: '发现偏移', insufficient: '资料不足',
+      plot: '剧情', character: '人物', world: '世界观', continuity: '章节衔接', minor: '细节建议', major: '主要问题'})[value] ?? value}`);
   }
   return entries.join('\n\n') || text;
 }

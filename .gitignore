@@ -140,3 +140,4 @@ captures/
 
 # Keep source, documentation, tests, deployment templates and Gradle wrapper.
 # Capacitor generated assets are excluded by mobile/android/.gitignore.
+/meterials/

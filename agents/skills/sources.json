@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "source_count": 13,
+  "unique_source_count": 11,
+  "method": "人工阅读提炼。TXT 按 GB18030 解码，DOC 按 OLE Word piece table 提取正文，DOCX 提取 word/document.xml；未执行文档宏或读取外部链接。",
+  "scope": "项目运行时大纲技能。保留通用方法，类型适配建议在各技能中说明，原始资料保持不变。",
+  "excluded": "原文个人信息、网址、完整范例、固定性别与后宫设定、成功保证、禁止第一人称等偏好；科幻等无专项资料的类型回退通用技能。",
+  "sources": [
+    {
+      "path": "meterials/大纲相关/[写作相关] 写作技巧 YY小说大纲 [复制链接].doc",
+      "sha256": "db0086de857ccae0a247965fd9b6b1c6bdcd5c5843081c718319cf0bcb8440e1",
+      "skills": [],
+      "distillation": "已审阅；夸张拼接范例，未用于技能指令或剧情素材。"
+    },
+    {
+      "path": "meterials/大纲相关/[置顶] 网络商业写作新手指南之大纲设定 .txt",
+      "sha256": "ff2bfd5f057d021f9d98dfedb423d0c60e6f786f166785dc784d992a3a6c0802",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼设定与大纲的区别、主线及分段规划；未采纳读者画像和商业成功保证。"
+    },
+    {
+      "path": "meterials/大纲相关/【写作大纲】经典都市写作大纲二十二条主线.doc",
+      "sha256": "bcc0321637155321dfce878f8abc3593df5415c03953f17131722492ec7c1b36",
+      "skills": [
+        "outline-urban"
+      ],
+      "distillation": "仅提炼事业与关系线交叉、旧身份回归和线索揭示；原文为连续套路链而非独立主线库。"
+    },
+    {
+      "path": "meterials/大纲相关/【教程】小说大纲如何设定(1).doc",
+      "sha256": "0ed06bf8b1b2010c0efac9df0a54727c3159bc32e45d10069bbe5a6e95f23b56",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "结构化提纲字段、人物能力及主支线关系；与大纲模块设定有内容重叠。"
+    },
+    {
+      "path": "meterials/大纲相关/【教程】小说大纲如何设定.doc",
+      "sha256": "0ed06bf8b1b2010c0efac9df0a54727c3159bc32e45d10069bbe5a6e95f23b56",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "结构化提纲字段、人物能力及主支线关系；与大纲模块设定有内容重叠。",
+      "duplicate_of": "meterials/大纲相关/【教程】小说大纲如何设定(1).doc"
+    },
+    {
+      "path": "meterials/大纲相关/买断大纲格式模板——豆子.docx",
+      "sha256": "9e135601bdd5ce2b2226df3c4c48c2f7e2dc715918b4a23a2c5d258f59945226",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "仅保留卖点、人物、风格、简介和详细大纲等创作字段；排除联系方式和投稿报价。"
+    },
+    {
+      "path": "meterials/大纲相关/大纲拓展.doc",
+      "sha256": "5d9ed9baca6f0835077b14999e388ce433a07cef2347afc6e4ebe6e2f1cb95a4",
+      "skills": [
+        "outline-general",
+        "outline-xuanhuan",
+        "outline-wuxia",
+        "outline-xianxia"
+      ],
+      "distillation": "一句话扩展、目标分解与障碍组织；删去必然超强、人物性别及外貌限制。"
+    },
+    {
+      "path": "meterials/大纲相关/大纲模块设定.txt",
+      "sha256": "a20624469ed765d26f4e6d7b7cfc21a81d9b6ab10de6fdecd928996b8a7cd34f",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "环境、角色、能力、道具与情节的结构化组织，不要求填写全部栏目。"
+    },
+    {
+      "path": "meterials/大纲相关/大纲详细写法(1).doc",
+      "sha256": "87b2b79e93a239f466340f1f45542be40c7623f67f7c91bec1941840b60ff115",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "主角动机、开局到结尾的关键节点、铺垫、情绪余韵；排除人称和比例等一刀切规则。"
+    },
+    {
+      "path": "meterials/大纲相关/大纲详细写法.doc",
+      "sha256": "87b2b79e93a239f466340f1f45542be40c7623f67f7c91bec1941840b60ff115",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "主角动机、开局到结尾的关键节点、铺垫、情绪余韵；排除人称和比例等一刀切规则。",
+      "duplicate_of": "meterials/大纲相关/大纲详细写法(1).doc"
+    },
+    {
+      "path": "meterials/大纲相关/小说大纲word.doc",
+      "sha256": "008cf5f490f33e6bc726b8c3d152b1214183766b39ce06d203c91353d6deff88",
+      "skills": [],
+      "distillation": "已审阅；原文含不作商业使用声明，仅记录目录与校验值，不纳入运行时技能或复制范例。"
+    },
+    {
+      "path": "meterials/大纲相关/武侠（仙侠）小说写作大纲详细指南.txt",
+      "sha256": "f64e5dffcfdf693f3eb172cb1c0d5f2226174c222cc0e9e25b377365328b8656",
+      "skills": [
+        "outline-wuxia",
+        "outline-xianxia"
+      ],
+      "distillation": "通用类型承诺、人物与剧情驱动及神话虚构中的组织关系；不复制谱系和故事，不视为历史依据。"
+    },
+    {
+      "path": "meterials/大纲相关/玄幻大纲范文.docx",
+      "sha256": "b5209135906cf2e980ca73f22180d77a5e2bc381c22f22af844dcc5c611746a4",
+      "skills": [
+        "outline-xuanhuan",
+        "outline-xianxia"
+      ],
+      "distillation": "提炼力量、资源、地理、势力和分卷状态联动；不复制人名、术语、剧情和固定卷数。"
+    }
+  ]
+}

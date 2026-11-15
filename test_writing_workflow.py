@@ -72,7 +72,7 @@ async def run(engine, token):
     with patch('api.novel_writing_api.novel_session',session),patch('agents.writing_agents.generate',side_effect=fake):
         async with session() as c:
             tools=(await c.list_tools()).tools
-            assert len(tools)==79 and all(t.outputSchema for t in tools)
+            assert len(tools)==82 and all(t.outputSchema for t in tools)
             async def call(name,code=None,**args):
                 result=await c.call_tool(name,args)
                 if code:

@@ -5,16 +5,16 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#212b25">
   <title>墨间 · 小说工作台</title>
-  <link rel="stylesheet" href="/workbench.css?v=password-reset-20261114">
-  <script src="/runtime-config.js?v=password-reset-20261114"></script>
+  <link rel="stylesheet" href="/workbench.css?v=outline-skills-20261114">
+  <script src="/runtime-config.js?v=outline-skills-20261114"></script>
   <script type="importmap">
     {"imports": {
-      "/workbench.js": "/workbench.js?v=password-reset-20261114",
-      "/api-client.js": "/api-client.js?v=password-reset-20261114",
-      "/generation-stream.js": "/generation-stream.js?v=password-reset-20261114"
+      "/workbench.js": "/workbench.js?v=outline-skills-20261114",
+      "/api-client.js": "/api-client.js?v=outline-skills-20261114",
+      "/generation-stream.js": "/generation-stream.js?v=outline-skills-20261114"
     }}
   </script>
-  <script defer src="/bootstrap.js?v=password-reset-20261114"></script>
+  <script defer src="/bootstrap.js?v=outline-skills-20261114"></script>
 </head>
 <body>
   <section class="panel empty startup-status" id="startup-status" role="status">
@@ -29,6 +29,9 @@
       <header class="brand"><span class="brand-mark" aria-hidden="true">墨</span><div><strong>墨间</strong><small>小说工作台</small></div></header>
       <div class="account-bar"><span id="account-name"></span><span class="account-actions"><button type="button" class="account-logout" id="account-password-change">修改密码</button><button type="button" class="account-logout" id="account-logout">退出账号</button></span></div>
       <button class="button primary new-project" type="button" id="new-project"><span aria-hidden="true">＋</span> 新建小说</button>
+      <div class="task-navigation"><button class="button secondary" type="button" id="generation-tasks" aria-expanded="false" aria-controls="task-submenus">任务中心 <span id="generation-task-count">0</span></button>
+        <nav id="task-submenus" class="task-submenus" aria-label="任务分类" hidden></nav>
+      </div>
       <div class="rail-heading"><span>项目书架</span><button class="icon-button" type="button" id="refresh" aria-label="刷新项目" title="刷新项目">↻</button></div>
       <nav id="projects" class="projects" aria-label="选择小说"><p class="rail-note">正在读取项目…</p></nav>
       <div class="rail-footer"><span class="connection" id="connection" role="status">连接中</span><a href="/docs" target="_blank" rel="noopener">接口文档 ↗</a></div>
@@ -37,6 +40,18 @@
       <header class="topline"><span>创作空间</span><span class="topline-note">从设定到正文</span></header>
       <div class="notice" id="notice" role="status" hidden></div>
       <div class="activity" id="activity" role="status" hidden><span class="spinner" aria-hidden="true"></span><span id="activity-text"></span></div>
+      <section class="task-summary" id="task-summary" aria-label="后台生成任务" hidden></section>
+      <section class="task-progress-page" id="task-progress-page" aria-labelledby="task-progress-title" hidden>
+        <header class="panel-head"><div><p class="eyebrow">生成进度</p><h1 id="task-progress-title">正在打开任务…</h1><p class="muted" id="task-progress-description"></p></div><button class="button secondary" type="button" id="back-to-tasks">返回任务列表</button></header>
+        <p class="muted">离开此页面后任务仍会继续，可随时回来查看。</p>
+        <section class="generation-stream" id="task-progress-stream" aria-label="实时生成内容">
+          <div class="generation-head"><strong>实时生成</strong><span class="muted" role="status"></span></div>
+          <details class="generation-thinking" hidden open><summary>模型思考</summary><pre tabindex="0" aria-label="模型实时返回的思考内容"></pre></details>
+          <pre class="generation-output" tabindex="0" aria-label="模型正在生成的内容"></pre>
+        </section>
+        <div class="actions progress-actions"><button class="button secondary" type="button" id="reconnect-progress" hidden>重新连接进度</button></div>
+        <div class="stack" id="task-progress-result"></div>
+      </section>
       <div id="view" aria-busy="true"><section class="panel empty"><h1>正在打开书架</h1><p>正在加载可用的小说项目。</p></section></div>
     </main>
   </div>
@@ -75,11 +90,6 @@
       <header class="dialog-head"><div><p class="eyebrow">写作工作台</p><h2 id="action-title"></h2></div><button class="icon-button" type="button" id="close-action" aria-label="关闭">×</button></header>
       <p class="muted" id="action-description"></p>
       <div class="fields" id="action-fields"></div>
-      <section class="generation-stream" id="action-stream" hidden aria-label="实时生成内容">
-        <div class="generation-head"><strong>实时生成</strong><span id="action-stream-status" class="muted" role="status"></span></div>
-        <details class="generation-thinking" hidden open><summary>模型思考</summary><pre id="action-stream-thinking" tabindex="0" aria-label="模型实时返回的思考内容"></pre></details>
-        <pre class="generation-output" id="action-stream-text" tabindex="0" aria-label="模型正在生成的内容"></pre>
-      </section>
       <p class="form-error" id="action-error" role="alert" hidden></p>
       <footer class="dialog-foot"><button class="button secondary" type="button" id="cancel-action">取消</button><button class="button primary" type="submit" id="action-submit">继续</button></footer>
     </form>
@@ -93,15 +103,9 @@
         <div class="question-picker" id="question-picker" hidden><p class="muted" id="question-label"></p><div class="question-options" id="question-options" role="group" aria-labelledby="question-label"></div></div>
         <form class="composer" id="chat-form" hidden><label class="sr-only" for="chat-input">自定义设定或修改已收集设定</label><input id="chat-input" required maxlength="4000" autocomplete="off" placeholder="输入自定义设定…"><button class="button primary" type="submit" id="chat-send">发送</button></form>
       </div>
-      <aside class="wizard-settings"><h3>已收集设定 <span id="slot-count" class="muted"></span></h3><dl class="slots" id="slots"></dl><button class="button primary" type="button" id="confirm-world" disabled>确认并生成</button></aside>
+      <aside class="wizard-settings"><h3>已收集设定 <span id="slot-count" class="muted"></span></h3><dl class="slots" id="slots"></dl><p class="muted" id="outline-skill" role="status" aria-live="polite">选择小说类型后自动加载大纲设计技能。</p><button class="button primary" type="button" id="confirm-world" disabled>确认并生成</button></aside>
     </div>
-    <section class="generation-stream" id="wizard-stream" hidden aria-label="实时生成世界观">
-      <div class="generation-head"><strong>世界观与大纲</strong><span id="wizard-stream-status" class="muted" role="status"></span></div>
-      <details class="generation-thinking" hidden open><summary>模型思考</summary><pre id="wizard-stream-thinking" tabindex="0" aria-label="模型实时返回的思考内容"></pre></details>
-      <pre class="generation-output" id="wizard-stream-text" tabindex="0" aria-label="模型正在生成的世界观内容"></pre>
-    </section>
-    <section class="wizard-preview" id="wizard-preview" hidden aria-label="生成结果"></section>
-    <footer class="dialog-foot"><button class="button secondary" type="button" id="restart-wizard">开始新对话</button><button class="button primary" type="button" id="open-created" hidden>进入项目 →</button></footer>
+    <footer class="dialog-foot"><button class="button secondary" type="button" id="restart-wizard">开始新对话</button></footer>
   </dialog>
 </body>
 </html>

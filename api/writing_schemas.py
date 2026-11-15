@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.novel_schemas import RowId, Sequence
 
@@ -28,6 +28,27 @@ class ChapterPlanRequest(WritingInput):
 
 class DraftRequest(WritingInput):
     target_characters: int = Field(default=2000, ge=300, le=6000)
+
+
+class CoreCharacterRequest(WritingInput):
+    protagonist_count: int = Field(default=1, ge=1, le=2)
+    important_count: int = Field(default=3, ge=0, le=8)
+
+
+class SupportingCharacterRequest(WritingInput):
+    supporting_count: int = Field(default=6, ge=1, le=12)
+
+
+class ConsistencyRequest(WritingInput):
+    outline_id: RowId
+    chapter_ids: list[RowId] = Field(min_length=1, max_length=20)
+
+    @field_validator("chapter_ids")
+    @classmethod
+    def unique_chapters(cls, values):
+        if len(values) != len(set(values)):
+            raise ValueError("所选章节不能重复")
+        return values
 
 
 class Generated(BaseModel):
@@ -83,6 +104,69 @@ class ReviewReport(Generated):
     issues: list[ReviewIssue] = Field(max_length=12)
 
 
+class CharacterDraft(Generated):
+    category: Literal["protagonist", "important", "supporting"]
+    name: Annotated[str, Field(min_length=1, max_length=160)]
+    role: str = Field(min_length=1, max_length=70)
+    summary: Detail
+    personality: Detail
+    background: Detail
+    goal: Detail
+    motivation: Detail
+    weakness: Detail
+    character_arc: Detail
+    abilities: Detail
+
+
+class CharacterDraftList(Generated):
+    characters: list[CharacterDraft] = Field(min_length=1, max_length=22)
+
+
+class ChapterEvidence(Generated):
+    chapter_id: RowId
+    quote: str = Field(min_length=1, max_length=1000)
+
+
+class ConsistencyBasis(Generated):
+    kind: Literal["outline", "volume", "plot_beat", "character", "world", "chapter"]
+    record_id: RowId
+    field: str = Field(min_length=1, max_length=80)
+    quote: str = Field(min_length=1, max_length=1000)
+
+
+class ConsistencyIssue(Generated):
+    severity: Literal["minor", "major"]
+    category: Literal["plot", "character", "world", "continuity"]
+    title: Title
+    evidence: list[ChapterEvidence] = Field(min_length=1, max_length=5)
+    basis: ConsistencyBasis
+    explanation: Detail
+    suggestion: Detail
+
+
+class ConsistencyReport(Generated):
+    verdict: Literal["consistent", "drifted", "insufficient"]
+    summary: Detail
+    issues: list[ConsistencyIssue] = Field(max_length=30)
+    limitations: list[Detail] = Field(default_factory=list, max_length=12)
+
+
+class ConsistencyReference(BaseModel):
+    kind: str
+    record_id: RowId
+    label: str
+
+
+class ConsistencyReceipt(ConsistencyReport):
+    project_id: RowId
+    outline_id: RowId
+    outline_version: Sequence
+    checked_at: str
+    chapters: list["ChapterPlanEntry"]
+    references: list[ConsistencyReference]
+    limitations: list[Detail] = Field(max_length=16)
+
+
 class OutlineReceipt(BaseModel):
     project_id: RowId
     outline_id: RowId
@@ -107,3 +191,9 @@ class DraftReceipt(BaseModel):
     chapter_id: RowId
     status: Literal["draft"] = "draft"
     word_count: int
+
+
+class CharacterReceipt(BaseModel):
+    project_id: RowId
+    character_ids: list[RowId]
+    counts: dict[str, int]

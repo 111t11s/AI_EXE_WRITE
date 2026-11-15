@@ -28,7 +28,9 @@ from api.novel_assistant_api import router as assistant_router
 from api.novel_contracts import CRUD_PREFIX
 from api.novel_crud_api import router as crud_router
 from api.novel_writing_api import router as writing_router
+from api.novel_consistency_api import router as consistency_router
 from api.account_api import CurrentAccount, router as account_router
+from api.generation_jobs import router as jobs_router
 
 app = FastAPI(
     title="AI 小说工程 API",
@@ -64,8 +66,10 @@ def access(user: CurrentAccount):
 # 注册小说设定助手 API，并提供一个可直接操作的浏览器页面。
 app.include_router(assistant_router, prefix="/api/v1", tags=["小说设定助手"])
 app.include_router(account_router, prefix="/api/v1")
+app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(crud_router, prefix=CRUD_PREFIX)
 app.include_router(writing_router, prefix=CRUD_PREFIX)
+app.include_router(consistency_router, prefix=CRUD_PREFIX)
 app.mount("/", FrontendFiles(directory=PROJECT_ROOT / "frontend", html=True), name="frontend")
 
 

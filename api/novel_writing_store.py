@@ -2,10 +2,52 @@
 
 from fastapi import HTTPException
 from sqlalchemy import func, insert, select, update
+from collections import Counter
+from unicodedata import normalize
 
-from api.novel_crud_api import get_row, storage_values, tables, transaction
+from api.novel_crud_api import get_row, response_row, storage_values, tables, transaction
 from api.writing_schemas import ChapterPlanDraft, DraftReceipt, OutlineDraft, OutlineReceipt, ChapterPlanReceipt
 from db.connection import legacy_json_columns
+from api.writing_schemas import CharacterReceipt
+
+
+CHARACTER_LABELS = {"protagonist": "主角", "important": "重要配角", "supporting": "配角"}
+
+
+def character_name_key(name):
+    return normalize("NFKC", name).strip().casefold()
+
+
+def save_characters(engine, project_id, artifact, sources):
+    """Save the whole validated cast, without overwriting any existing person."""
+    relation = tables["novel_character"]
+    with transaction(engine) as connection:
+        get_row(connection, tables["novel_project"], project_id, lock=True)
+        current = tables["novel_world"]
+        world_ids = list(connection.scalars(select(current.c.id).where(
+            current.c.project_id == project_id, current.c.is_current.is_(True))))
+        if world_ids != [sources[0][1]["id"]]:
+            raise HTTPException(409, "生成期间当前世界观发生变化，请重新生成角色")
+        for table_name, source in sources:
+            saved = response_row(get_row(connection, tables[table_name], source["id"], lock=True),
+                                 legacy_json_columns(connection, table_name))
+            if any(saved.get(key) != value for key, value in source.items() if key not in {"created_at", "updated_at"}):
+                raise HTTPException(409, "生成期间世界观或大纲资料发生变化，请重新生成角色")
+        names = {character_name_key(name) for name in connection.scalars(
+            select(relation.c.name).where(relation.c.project_id == project_id))}
+        new_names = [character_name_key(item.name) for item in artifact.characters]
+        if len(set(new_names)) != len(new_names):
+            raise HTTPException(502, "模型返回了重复角色姓名，请重新生成")
+        if names.intersection(new_names):
+            raise HTTPException(409, "生成角色与已有角色同名，本批次未保存，请调整要求后重试")
+        ids = []
+        for item in artifact.characters:
+            values = item.model_dump(exclude={"category", "role"})
+            ids.append(insert_row(connection, relation, project_id=project_id, faction_id=None,
+                                  role=f"{CHARACTER_LABELS[item.category]} · {item.role}",
+                                  first_appearance_chapter=None, status="active", **values))
+        return CharacterReceipt(project_id=project_id, character_ids=ids,
+                                counts=dict(Counter(item.category for item in artifact.characters)))
 
 
 def insert_row(connection, relation, **values):

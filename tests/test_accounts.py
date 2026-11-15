@@ -15,6 +15,7 @@ from agents.mcp.server import create_server
 from agents.mcp.worldbuilding import server_parameters
 from api import novel_assistant_api as assistant, novel_writing_api as writing
 from api import account_api
+from api import generation_jobs
 from api.database import get_database
 from api.novel_contracts import CRUD_RESOURCES
 from api.novel_tables import tables
@@ -34,6 +35,7 @@ def setup_accounts(monkeypatch):
     engine = create_test_db()
     monkeypatch.setitem(app.dependency_overrides, get_database, lambda: engine)
     monkeypatch.setattr(assistant, "_sessions", {})
+    monkeypatch.setattr(generation_jobs, "store", generation_jobs.JobStore())
     with TestClient(app) as client:
         users = {}
         for name in ("admin", "writer"):
@@ -319,7 +321,8 @@ def test_mcp_uses_the_current_account_and_refuses_other_accounts_data(setup_acco
         AUTH_TOKEN.reset(token)
 
 
-def test_worldbuilding_generation_retains_account_through_background_stream_and_mcp(setup_accounts, monkeypatch):
+@pytest.mark.parametrize('background', [False, True])
+def test_worldbuilding_generation_retains_account_through_background_stream_and_mcp(setup_accounts, monkeypatch, background):
     _, client, users = setup_accounts
     from test_worldbuilding_generation import BLUEPRINT, VALUES
     from db.models import NovelBlueprint
@@ -334,8 +337,11 @@ def test_worldbuilding_generation_retains_account_through_background_stream_and_
     monkeypatch.setattr(worldbuilding_agent, 'worldbuilding_session', mcp_session)
     assistant._sessions['owned'] = worldbuilding_agent.ConversationState(
         account_id=users['admin']['account']['id'], values=VALUES.copy())
-    response = client.post('/api/v1/novel-assistant/sessions/owned/messages/stream', json={'content': '确认生成'},
+    response = client.post('/api/v1/novel-assistant/sessions/owned/messages/' + ('tasks' if background else 'stream'), json={'content': '确认生成'},
                            headers=headers(users['admin']))
+    if background:
+        assert response.status_code == 202
+        response = client.get(f"/api/v1/generation-jobs/{response.json()['id']}/events", headers=headers(users['admin']))
     assert response.status_code == 200 and 'event: result' in response.text and 'event: error' not in response.text
     rows = client.get('/api/v1/projects', headers=headers(users['admin'])).json()['items']
     assert len(rows) == 1 and rows[0]['account_id'] == users['admin']['account']['id']

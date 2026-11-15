@@ -1,5 +1,8 @@
 """Coordinate writing agents with scoped MCP context and validated saves."""
 
+import json
+from collections import Counter
+
 import httpx
 from fastapi import APIRouter, HTTPException
 from openai import APIConnectionError, APIStatusError, APITimeoutError
@@ -8,16 +11,23 @@ from starlette.concurrency import run_in_threadpool
 
 from agents import writing_agents as agents
 from agents.llm_streaming import emit_generation_event
+from agents.outline_skills import OutlineSkillError
 from api.generation_stream import generation_response
+from api import generation_jobs
 from api.account_api import CurrentAccount
 from api.ownership import require_resource
 from agents.mcp.worldbuilding import NovelToolError, call_novel_tool, novel_session
 from api.novel_crud_api import Database
 from api.novel_schemas import RowId
 from api.novel_writing_store import require_empty_plan, save_chapter_plan, save_draft, save_outline
+from api.novel_writing_store import save_characters
+from api.novel_tables import tables
+from api.database import transaction
+from sqlalchemy import select
 from api.writing_schemas import (
     ChapterPlanReceipt, ChapterPlanRequest, DraftReceipt, DraftRequest, OutlineReceipt, OutlineRequest,
     ReviewReport, WritingInput,
+    CoreCharacterRequest, SupportingCharacterRequest, CharacterReceipt,
 )
 from core.logging import get_logger
 
@@ -39,17 +49,114 @@ def excerpt(row, *fields, limit=1400):
     return {key: value[:limit] if isinstance(value, str) else value for key in fields if (value := row.get(key)) is not None}
 
 
-async def project_context(session, project_id):
+async def project_context(session, project_id, include_characters=True):
     project = await read(session, "project", project_id)
     worlds = await listing(session, "world", project_id=project_id, is_current=True, limit=2)
     if len(worlds) != 1:
         raise HTTPException(409, "请先为小说项目设置唯一的当前世界观")
-    characters = await listing(session, "character", project_id=project_id, limit=12)
+    characters = await all_context_rows(session, "character", project_id=project_id) if include_characters else []
     return {
         "project": excerpt(project, "id", "title", "genre", "setting", "tone", "target_length", "premise", "protagonist_goal"),
         "world": excerpt(worlds[0], "id", "title", "summary", "era", "history", "rules", "cultures", limit=2400),
-        "characters": [excerpt(item, "name", "role", "summary", "goal", limit=300) for item in characters],
+        "characters": [excerpt(item, "name", "role", "summary", "personality", "goal", "motivation",
+                               "weakness", "abilities", "character_arc", limit=300) for item in characters],
     }
+
+
+async def all_context_rows(session, table, **filters):
+    rows = []
+    while True:
+        page = await call_novel_tool(session, f"list_novel_{table}",
+                                     {"filters": {**filters, "limit": 100, "offset": len(rows)}})
+        rows.extend(page["items"])
+        if not page["has_more"]:
+            return rows
+        if not page["items"] or len(rows) >= 500:
+            raise HTTPException(422, "小说资料记录过多，请缩减单个项目资料后重试")
+
+
+async def character_context(session, project_id, outline_id=None):
+    context = await project_context(session, project_id, include_characters=False)
+    world = await read(session, "world", context["world"]["id"])
+    context["project"] = await read(session, "project", project_id)
+    context["world"] = world
+    sources = [("novel_world", world)]
+    context["characters"] = await all_context_rows(session, "character", project_id=project_id)
+    sources.append(("novel_project", context["project"]))
+    sources.extend(("novel_character", row) for row in context["characters"])
+    for name in ("region", "power_system", "cheat_system", "faction"):
+        rows = await all_context_rows(session, name, world_id=world["id"])
+        context[name] = rows
+        sources.extend((f"novel_{name}", row) for row in rows)
+    for system in context["power_system"]:
+        ranks = await all_context_rows(session, "power_rank", power_system_id=system["id"])
+        context.setdefault("power_ranks", []).extend(ranks)
+        sources.extend(("novel_power_rank", row) for row in ranks)
+    if outline_id is not None:
+        outline = await read(session, "outline", outline_id)
+        if outline["project_id"] != project_id:
+            raise HTTPException(404, "相关小说记录不存在")
+        context["outline"] = outline
+        sources.append(("novel_outline", outline))
+        volumes = await all_context_rows(session, "outline_volume", outline_id=outline_id)
+        context["volumes"] = []
+        for volume in volumes:
+            beats = await all_context_rows(session, "plot_beat", volume_id=volume["id"])
+            context["volumes"].append({**volume, "beats": beats})
+            sources.append(("novel_outline_volume", volume))
+            sources.extend(("novel_plot_beat", row) for row in beats)
+    # Keep a useful bound rather than silently omitting later characters or plot nodes.
+    if len(json.dumps(context, ensure_ascii=False, default=str)) > 150000:
+        raise HTTPException(422, "角色生成资料超过单次容量，请精简世界观、角色或大纲")
+    return context, sources
+
+
+async def create_characters(project_id, outline_id, payload, user, engine):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    if outline_id is not None:
+        await run_in_threadpool(require_resource, engine, "novel_outline", outline_id, user.id)
+    emit_generation_event("status", message="正在通过 MCP 读取世界观、已有角色和剧情资料…")
+    context, sources = await load_context(character_context, project_id, outline_id)
+    core = outline_id is None
+    artifact = await generate(agents.CORE_CHARACTERS if core else agents.SUPPORTING_CHARACTERS, context, payload)
+    counts = Counter(item.category for item in artifact.characters)
+    expected = {"protagonist": payload.protagonist_count, "important": payload.important_count} if core else {
+        "supporting": payload.supporting_count}
+    if +counts != +Counter(expected):
+        raise HTTPException(502, "模型返回的角色数量或层级与请求不符，本批次未保存")
+    emit_generation_event("status", message="角色设定校验通过，正在整批保存角色…")
+    return await run_in_threadpool(save_characters, engine, project_id, artifact, sources)
+
+
+@router.post("/projects/{project_id}/characters/core", response_model=CharacterReceipt, status_code=201,
+             summary="根据世界观生成主角和重要配角")
+async def write_core_characters(project_id: RowId, payload: CoreCharacterRequest, user: CurrentAccount, engine: Database):
+    return await create_characters(project_id, None, payload, user, engine)
+
+
+@router.post("/outlines/{outline_id}/characters/supporting", response_model=CharacterReceipt, status_code=201,
+             summary="根据大纲生成其余配角")
+async def write_supporting_characters(outline_id: RowId, payload: SupportingCharacterRequest,
+                                      user: CurrentAccount, engine: Database):
+    project_id = await run_in_threadpool(task_project, engine, "novel_outline", outline_id, user.id)
+    return await create_characters(project_id, outline_id, payload, user, engine)
+
+
+@router.post("/projects/{project_id}/characters/core/tasks", status_code=202, summary="后台生成主角和重要配角")
+async def start_core_characters(project_id: RowId, payload: CoreCharacterRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    return generation_jobs.store.start(account_id=user.id, key=f"characters:core:{project_id}", kind="characters",
+        title="根据世界观生成主角与重要配角", project_id=project_id, resource_id=project_id,
+        operation=lambda: write_core_characters(project_id, payload, user, engine)).summary()
+
+
+@router.post("/outlines/{outline_id}/characters/supporting/tasks", status_code=202, summary="后台生成大纲配角")
+async def start_supporting_characters(outline_id: RowId, payload: SupportingCharacterRequest,
+                                      user: CurrentAccount, engine: Database):
+    project_id = await run_in_threadpool(task_project, engine, "novel_outline", outline_id, user.id)
+    return generation_jobs.store.start(account_id=user.id, key=f"characters:supporting:{outline_id}", kind="characters",
+        title="根据大纲补充配角", project_id=project_id, resource_id=outline_id,
+        operation=lambda: write_supporting_characters(outline_id, payload, user, engine)).summary()
 
 
 async def volume_context(session, volume_id):
@@ -121,6 +228,8 @@ async def load_context(loader, *args):
 async def generate(role, context, payload):
     try:
         return await run_in_threadpool(agents.generate, role, {**context, "request": payload.model_dump()})
+    except OutlineSkillError as exc:
+        raise HTTPException(503, str(exc)) from None
     except (APITimeoutError, httpx.TimeoutException):
         logger.warning("模型请求超时：任务=%s", role.title)
         raise HTTPException(504, "模型响应超时，请稍后重试") from None
@@ -208,3 +317,48 @@ async def stream_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAc
 async def stream_review(chapter_id: RowId, payload: WritingInput, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     return generation_response(lambda: review_chapter(chapter_id, payload, user, engine))
+
+
+def task_project(engine, table_name, record_id, account_id):
+    require_resource(engine, table_name, record_id, account_id)
+    relation = tables[table_name]
+    with transaction(engine) as connection:
+        if table_name == "novel_project":
+            return record_id
+        if table_name == "novel_outline_volume":
+            outline = tables["novel_outline"]
+            return connection.scalar(select(outline.c.project_id).select_from(
+                relation.join(outline, relation.c.outline_id == outline.c.id)).where(relation.c.id == record_id))
+        return connection.scalar(select(relation.c.project_id).where(relation.c.id == record_id))
+
+
+@router.post("/projects/{project_id}/outline/tasks", status_code=202, summary="后台生成大纲")
+async def start_outline(project_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    return generation_jobs.store.start(account_id=user.id, key=f"outline:{project_id}", kind="outline",
+        title="生成小说大纲", project_id=project_id, resource_id=project_id,
+        operation=lambda: write_outline(project_id, payload, user, engine)).summary()
+
+
+@router.post("/volumes/{volume_id}/chapter-plan/tasks", status_code=202, summary="后台规划章节")
+async def start_plan(volume_id: RowId, payload: ChapterPlanRequest, user: CurrentAccount, engine: Database):
+    project_id = await run_in_threadpool(task_project, engine, "novel_outline_volume", volume_id, user.id)
+    return generation_jobs.store.start(account_id=user.id, key=f"plan:{volume_id}", kind="plan",
+        title="生成章节规划", project_id=project_id, resource_id=volume_id,
+        operation=lambda: write_chapter_plan(volume_id, payload, user, engine)).summary()
+
+
+@router.post("/chapters/{chapter_id}/draft/tasks", status_code=202, summary="后台生成正文")
+async def start_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    project_id = await run_in_threadpool(task_project, engine, "novel_chapter", chapter_id, user.id)
+    return generation_jobs.store.start(account_id=user.id, key=f"draft:{chapter_id}", kind="draft",
+        title="生成章节正文", project_id=project_id, resource_id=chapter_id,
+        operation=lambda: write_draft(chapter_id, payload, user, engine)).summary()
+
+
+@router.post("/chapters/{chapter_id}/review/tasks", status_code=202, summary="后台审读正文")
+async def start_review(chapter_id: RowId, payload: WritingInput, user: CurrentAccount, engine: Database):
+    project_id = await run_in_threadpool(task_project, engine, "novel_chapter", chapter_id, user.id)
+    return generation_jobs.store.start(account_id=user.id, key=f"review:{chapter_id}", kind="review",
+        title="审读章节正文", project_id=project_id, resource_id=chapter_id,
+        operation=lambda: review_chapter(chapter_id, payload, user, engine)).summary()
