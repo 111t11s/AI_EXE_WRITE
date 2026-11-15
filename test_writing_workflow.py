@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from agents import writing_agents as a
 from agents.mcp.server import create_server
 from api.novel_crud_api import get_database
+from api.novel_contracts import CRUD_RESOURCES
 from api.novel_writing_store import save_outline
 from api.writing_schemas import OutlineDraft, ChapterPlanDraft, ChapterDraft, ReviewReport
 from main import app
@@ -72,7 +73,7 @@ async def run(engine, token):
     with patch('api.novel_writing_api.novel_session',session),patch('agents.writing_agents.generate',side_effect=fake):
         async with session() as c:
             tools=(await c.list_tools()).tools
-            assert len(tools)==82 and all(t.outputSchema for t in tools)
+            assert len(tools)==5 * len(CRUD_RESOURCES) + 7 and all(t.outputSchema for t in tools)
             async def call(name,code=None,**args):
                 result=await c.call_tool(name,args)
                 if code:
@@ -83,6 +84,7 @@ async def run(engine, token):
             pid=(await call('create_novel_project',payload=dict(genre='Fantasy',setting='Harbor',tone='Hopeful',target_length='Short',protagonist_goal='Find her')))['id']
             await call('generate_novel_outline',409,project_id=pid,payload={'volume_count':1})
             await call('create_novel_world',payload={'project_id':pid,'summary':'Memories shape tides','era':'Lost moon'})
+            await call('create_novel_character', payload={'project_id':pid,'name':'Apprentice','role':'主角','summary':'A lighthouse apprentice'})
             one=await call('generate_novel_outline',project_id=pid,payload={'volume_count':1})
             two=await call('generate_novel_outline',project_id=pid,payload={'volume_count':1})
             assert one['version_no']==1 and two['version_no']==2 and one['plot_beat_count']==1

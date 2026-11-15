@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from api.novel_schemas import RowId, Sequence
 
@@ -36,7 +36,19 @@ class CoreCharacterRequest(WritingInput):
 
 
 class SupportingCharacterRequest(WritingInput):
-    supporting_count: int = Field(default=6, ge=1, le=12)
+    supporting_count: int = Field(default=6, ge=0, le=12)
+    volume_id: RowId | None = None
+    reuse_character_ids: list[RowId] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def check_selection(self):
+        if len(self.reuse_character_ids) != len(set(self.reuse_character_ids)):
+            raise ValueError("复用角色不能重复")
+        if self.reuse_character_ids and self.volume_id is None:
+            raise ValueError("复用角色必须选择目标分卷")
+        if not self.supporting_count and not self.reuse_character_ids:
+            raise ValueError("请新增至少一位配角或勾选要复用的配角")
+        return self
 
 
 class ConsistencyRequest(WritingInput):
@@ -118,8 +130,20 @@ class CharacterDraft(Generated):
     abilities: Detail
 
 
+class ReusedCharacterDraft(Generated):
+    character_id: RowId
+    scenes: Detail
+
+
 class CharacterDraftList(Generated):
-    characters: list[CharacterDraft] = Field(min_length=1, max_length=22)
+    characters: list[CharacterDraft] = Field(max_length=22)
+    reused_characters: list[ReusedCharacterDraft] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def require_cast(self):
+        if not self.characters and not self.reused_characters:
+            raise ValueError("角色和复用戏份不能同时为空")
+        return self
 
 
 class ChapterEvidence(Generated):
@@ -197,3 +221,5 @@ class CharacterReceipt(BaseModel):
     project_id: RowId
     character_ids: list[RowId]
     counts: dict[str, int]
+    volume_id: RowId | None = None
+    reused_character_ids: list[RowId] = Field(default_factory=list)

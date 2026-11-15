@@ -34,7 +34,7 @@ from api.generation_jobs import router as jobs_router
 
 app = FastAPI(
     title="AI 小说工程 API",
-    description="账号登录、个人小说书架、小说设定助手、写作智能体与 15 类小说数据的 CRUD 接口",
+    description="账号登录、个人小说书架、小说设定助手、写作智能体与 16 类小说数据的 CRUD 接口",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs" if get_settings().ENABLE_API_DOCS else None,

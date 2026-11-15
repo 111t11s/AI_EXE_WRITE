@@ -121,7 +121,7 @@ def register_writing_tools(server: FastMCP) -> None:
                              result_schema=CharacterReceipt, json=(payload or CoreCharacterRequest()).model_dump(mode="json"),
                              timeout=WORKFLOW_TIMEOUT)
 
-    @server.tool(description="根据指定大纲及分卷节点生成其余配角，尊重世界观和已有核心人物，整批新增保存。",
+    @server.tool(description="根据指定大纲生成配角；可用 volume_id 指定分卷，reuse_character_ids 勾选前卷配角安排新戏份，原档案保持不变。",
                  annotations=annotations())
     async def generate_novel_supporting_characters(ctx: Context, outline_id: RowId,
                                                    payload: SupportingCharacterRequest | None = None) -> CharacterReceipt:

@@ -23,3 +23,12 @@ body{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset
 .consistency-chapter{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:8px;cursor:pointer}.consistency-chapter input{flex:none;width:18px;height:18px}.consistency-chapter strong{font-size:.9rem}.consistency-chapter .muted{font-size:.78rem}.consistency-quote{margin:8px 0;padding:10px 14px;border-left:3px solid var(--green);background:var(--soft)}
 .task-navigation{display:grid;gap:7px}.task-submenus{display:grid;gap:3px;padding-left:12px;border-left:1px solid #ffffff30;margin-left:8px}.task-menu-item{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:35px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--rail-text);padding:6px 9px;text-align:left;font-size:.8rem}.task-menu-item:hover,.task-menu-item[aria-current=page]{background:#3b4c3e;color:#fffdf3;border-color:#536752}.task-menu-count{min-width:22px;text-align:center;border-radius:20px;background:#ffffff15;font-size:.73rem}.task-navigation>button{width:100%}.task-status-filters{display:flex;flex-wrap:wrap;gap:8px}.task-status-filters [aria-pressed=true]{background:var(--green);color:white;border-color:var(--green)}@media(max-width:620px){.task-navigation{grid-column:1/-1}.task-submenus{grid-template-columns:repeat(2,minmax(0,1fr));padding-left:0;border-left:0;margin-left:0}}
 .rail{overflow-y:auto}.task-submenus{max-height:min(34vh,280px);overflow:auto}.task-navigation{flex-shrink:0}@media(max-width:620px){.task-submenus{max-height:none}}
+
+/* Keep long chapters inside the reading area and stop scroll chaining to the page. */
+.reader{width:100%;max-height:60vh;max-height:60dvh;overflow-y:auto;overscroll-behavior-y:contain;scrollbar-gutter:stable;padding-inline:12px}
+.reader:focus-visible{outline:3px solid #a66d3c;outline-offset:3px}
+
+.reuse-characters{min-width:0;margin:0;padding:12px;border:1px solid var(--line);border-radius:8px;max-height:38dvh;overflow-y:auto;overscroll-behavior-y:contain}
+.reuse-characters legend{font-size:.88rem;font-weight:650;color:var(--green)}
+.reuse-character{display:flex;align-items:flex-start;gap:10px;padding:12px 0;cursor:pointer;border-bottom:1px solid var(--line)}
+.reuse-character:last-child{border-bottom:0}.reuse-character input{flex:none;width:18px;height:18px;margin-top:3px}.reuse-character>span{min-width:0;overflow-wrap:anywhere}.reuse-character .muted{margin-top:4px;font-size:.8rem}

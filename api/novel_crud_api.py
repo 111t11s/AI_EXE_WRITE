@@ -1,4 +1,4 @@
-"""CRUD routes for the 15 tables in db/schema.sql."""
+"""CRUD routes for the novel tables in db/schema.sql."""
 
 import json
 from typing import Annotated
@@ -42,6 +42,14 @@ def validate_links(connection, relation, values):
         statement = select(outline.c.project_id).select_from(
             volume.join(outline, volume.c.outline_id == outline.c.id)
         ).where(volume.c.id == values["volume_id"])
+    elif relation.name == "novel_volume_character":
+        volume, outline, character = tables["novel_outline_volume"], tables["novel_outline"], tables["novel_character"]
+        volume_project = connection.scalar(select(outline.c.project_id).select_from(
+            volume.join(outline, volume.c.outline_id == outline.c.id)).where(volume.c.id == values["volume_id"]))
+        character_project = connection.scalar(select(character.c.project_id).where(character.c.id == values["character_id"]))
+        if volume_project is None or volume_project != character_project:
+            raise HTTPException(409, "分卷和角色必须属于同一小说项目")
+        return
     elif relation.name == "novel_character_relationship":
         source, target = values["source_character_id"], values["target_character_id"]
         if source == target:

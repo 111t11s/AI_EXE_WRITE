@@ -8,6 +8,7 @@ This is the new canonical structure for the novel-design workflow. The legacy XM
 - `schema.sql`: fresh MySQL 8 schema. Apply it to an empty database; it does not migrate or alter an existing database.
 - `accounts.py`: account/session tables and salted password hashing.
 - `migrate_accounts.py`: idempotent ownership migration for existing databases.
+- `migrate_volume_characters.py`: additive, idempotent migration for per-volume character scenes. Run `python -m db.migrate_volume_characters` when upgrading an existing MySQL database.
 - `reset_password.py`: interactive administrator password reset that revokes all sessions.
 
 小说和问答会话使用 `account_id` 绑定账号，所有子资源沿外键链继承小说归属。API 自动填写账号 ID，不接受客户端指定或修改归属。已有小说统一绑定 `admin` 的命令见 [部署说明](../deployment/README.md#账号与旧小说迁移)。
@@ -51,6 +52,7 @@ Primary keys, foreign keys, ordering/version fields, status values, timestamps, 
 | `novel_outline` | 小说大纲版本表 |
 | `novel_outline_volume` | 大纲分卷表 |
 | `novel_plot_beat` | 剧情节点表 |
+| `novel_volume_character` | 分卷角色戏份表 |
 | `novel_chapter` | 小说章节表 |
 
 ## CRUD 接口

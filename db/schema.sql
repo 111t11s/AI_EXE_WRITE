@@ -242,6 +242,17 @@ CREATE TABLE IF NOT EXISTS novel_plot_beat (
     CONSTRAINT fk_beat_volume FOREIGN KEY (volume_id) REFERENCES novel_outline_volume(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='剧情节点表';
 
+CREATE TABLE IF NOT EXISTS novel_volume_character (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '分卷角色戏份主键',
+    volume_id BIGINT UNSIGNED NOT NULL COMMENT '所属分卷 ID',
+    character_id BIGINT UNSIGNED NOT NULL COMMENT '复用的角色档案 ID',
+    scenes TEXT NOT NULL COMMENT '角色在本卷的戏份与剧情作用',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_volume_character (volume_id, character_id),
+    CONSTRAINT fk_volume_character_volume FOREIGN KEY (volume_id) REFERENCES novel_outline_volume(id) ON DELETE CASCADE,
+    CONSTRAINT fk_volume_character_person FOREIGN KEY (character_id) REFERENCES novel_character(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='分卷角色戏份表';
+
 CREATE TABLE IF NOT EXISTS novel_chapter (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '章节主键',
     project_id BIGINT UNSIGNED NOT NULL COMMENT '所属小说项目 ID',

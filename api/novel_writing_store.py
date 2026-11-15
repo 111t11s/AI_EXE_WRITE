@@ -18,8 +18,8 @@ def character_name_key(name):
     return normalize("NFKC", name).strip().casefold()
 
 
-def save_characters(engine, project_id, artifact, sources):
-    """Save the whole validated cast, without overwriting any existing person."""
+def save_characters(engine, project_id, artifact, sources, volume_id=None, legacy_assignments=()):
+    """Save new people and per-volume scenes atomically; keep existing profiles."""
     relation = tables["novel_character"]
     with transaction(engine) as connection:
         get_row(connection, tables["novel_project"], project_id, lock=True)
@@ -41,13 +41,33 @@ def save_characters(engine, project_id, artifact, sources):
         if names.intersection(new_names):
             raise HTTPException(409, "生成角色与已有角色同名，本批次未保存，请调整要求后重试")
         ids = []
+        assignments = []
         for item in artifact.characters:
             values = item.model_dump(exclude={"category", "role"})
             ids.append(insert_row(connection, relation, project_id=project_id, faction_id=None,
                                   role=f"{CHARACTER_LABELS[item.category]} · {item.role}",
                                   first_appearance_chapter=None, status="active", **values))
+            if volume_id is not None:
+                assignments.append((ids[-1], item.summary))
+        assignments.extend((item.character_id, item.scenes) for item in artifact.reused_characters)
+        cast = tables["novel_volume_character"]
+        # Materialize explicitly matched legacy history on first reuse, so the
+        # original volume remains part of this character's history in later volumes.
+        for previous_id, character_id, scenes in legacy_assignments:
+            existing = connection.scalar(select(cast.c.id).where(
+                cast.c.volume_id == previous_id, cast.c.character_id == character_id))
+            if existing is None:
+                insert_row(connection, cast, volume_id=previous_id, character_id=character_id, scenes=scenes)
+        for character_id, scenes in assignments:
+            existing = connection.scalar(select(cast.c.id).where(
+                cast.c.volume_id == volume_id, cast.c.character_id == character_id))
+            if existing is None:
+                insert_row(connection, cast, volume_id=volume_id, character_id=character_id, scenes=scenes)
+            else:
+                connection.execute(update(cast).where(cast.c.id == existing).values(scenes=scenes))
         return CharacterReceipt(project_id=project_id, character_ids=ids,
-                                counts=dict(Counter(item.category for item in artifact.characters)))
+                                counts=dict(Counter(item.category for item in artifact.characters)), volume_id=volume_id,
+                                reused_character_ids=[item.character_id for item in artifact.reused_characters])
 
 
 def insert_row(connection, relation, **values):

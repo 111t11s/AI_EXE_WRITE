@@ -58,7 +58,7 @@ async def project_context(session, project_id, include_characters=True):
     return {
         "project": excerpt(project, "id", "title", "genre", "setting", "tone", "target_length", "premise", "protagonist_goal"),
         "world": excerpt(worlds[0], "id", "title", "summary", "era", "history", "rules", "cultures", limit=2400),
-        "characters": [excerpt(item, "name", "role", "summary", "personality", "goal", "motivation",
+        "characters": [excerpt(item, "id", "name", "role", "summary", "personality", "goal", "motivation",
                                "weakness", "abilities", "character_arc", limit=300) for item in characters],
     }
 
@@ -102,13 +102,50 @@ async def character_context(session, project_id, outline_id=None):
         context["volumes"] = []
         for volume in volumes:
             beats = await all_context_rows(session, "plot_beat", volume_id=volume["id"])
-            context["volumes"].append({**volume, "beats": beats})
+            cast = await all_context_rows(session, "volume_character", volume_id=volume["id"])
+            context["volumes"].append({**volume, "beats": beats, "cast": cast})
             sources.append(("novel_outline_volume", volume))
             sources.extend(("novel_plot_beat", row) for row in beats)
+            sources.extend(("novel_volume_character", row) for row in cast)
     # Keep a useful bound rather than silently omitting later characters or plot nodes.
     if len(json.dumps(context, ensure_ascii=False, default=str)) > 150000:
         raise HTTPException(422, "角色生成资料超过单次容量，请精简世界观、角色或大纲")
     return context, sources
+
+
+def reusable_characters(context, volume_id):
+    target = next((row for row in context["volumes"] if row["id"] == volume_id), None)
+    if target is None:
+        raise HTTPException(404, "目标分卷不属于当前大纲")
+    previous = sorted((row for row in context["volumes"] if row["volume_number"] < target["volume_number"]),
+                      key=lambda row: row["volume_number"])
+    candidates = []
+    for character in context["characters"]:
+        if character["role"].startswith("主角"):
+            continue
+        history = []
+        has_cast = any(row["character_id"] == character["id"] for volume in context["volumes"] for row in volume["cast"])
+        for volume in previous:
+            assignment = next((row for row in volume["cast"] if row["character_id"] == character["id"]), None)
+            # Earlier releases included a volume's title in summaries, without cast links.
+            if assignment or (not has_cast and volume["title"] in character["summary"]):
+                history.append({"volume_id": volume["id"], "volume_number": volume["volume_number"],
+                                "title": volume["title"], "scenes": assignment["scenes"] if assignment else character["summary"]})
+        if history:
+            candidates.append({**character, "previous_scenes": history})
+    return target, candidates
+
+
+@router.get("/volumes/{volume_id}/reusable-characters", summary="查询前面分卷可复用的配角及戏份")
+async def list_reusable_characters(volume_id: RowId, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_outline_volume", volume_id, user.id)
+    with transaction(engine) as connection:
+        relation = tables["novel_outline_volume"]
+        outline_id = connection.scalar(select(relation.c.outline_id).where(relation.c.id == volume_id))
+    project_id = await run_in_threadpool(task_project, engine, "novel_outline", outline_id, user.id)
+    context, _ = await load_context(character_context, project_id, outline_id)
+    _, candidates = reusable_characters(context, volume_id)
+    return {"items": candidates}
 
 
 async def create_characters(project_id, outline_id, payload, user, engine):
@@ -118,14 +155,32 @@ async def create_characters(project_id, outline_id, payload, user, engine):
     emit_generation_event("status", message="正在通过 MCP 读取世界观、已有角色和剧情资料…")
     context, sources = await load_context(character_context, project_id, outline_id)
     core = outline_id is None
+    volume_id = None if core else payload.volume_id
+    selected = [] if core else payload.reuse_character_ids
+    legacy_assignments = []
+    if volume_id is not None:
+        target, candidates = reusable_characters(context, volume_id)
+        by_id = {row["id"]: row for row in candidates}
+        if any(record_id not in by_id for record_id in selected):
+            raise HTTPException(422, "只能复用同一大纲前面分卷已经出场的配角")
+        context["target_volume"] = target
+        context["reuse_characters"] = [by_id[record_id] for record_id in selected]
+        for character in context["reuse_characters"]:
+            for scene in character["previous_scenes"]:
+                previous_volume = next(row for row in context["volumes"] if row["id"] == scene["volume_id"])
+                if not any(row["character_id"] == character["id"] for row in previous_volume["cast"]):
+                    legacy_assignments.append((scene["volume_id"], character["id"], scene["scenes"]))
     artifact = await generate(agents.CORE_CHARACTERS if core else agents.SUPPORTING_CHARACTERS, context, payload)
     counts = Counter(item.category for item in artifact.characters)
     expected = {"protagonist": payload.protagonist_count, "important": payload.important_count} if core else {
         "supporting": payload.supporting_count}
     if +counts != +Counter(expected):
         raise HTTPException(502, "模型返回的角色数量或层级与请求不符，本批次未保存")
+    returned = [item.character_id for item in artifact.reused_characters]
+    if Counter(returned) != Counter(selected):
+        raise HTTPException(502, "模型返回的复用角色与勾选不符，本批次未保存")
     emit_generation_event("status", message="角色设定校验通过，正在整批保存角色…")
-    return await run_in_threadpool(save_characters, engine, project_id, artifact, sources)
+    return await run_in_threadpool(save_characters, engine, project_id, artifact, sources, volume_id, legacy_assignments)
 
 
 @router.post("/projects/{project_id}/characters/core", response_model=CharacterReceipt, status_code=201,
@@ -154,7 +209,7 @@ async def start_core_characters(project_id: RowId, payload: CoreCharacterRequest
 async def start_supporting_characters(outline_id: RowId, payload: SupportingCharacterRequest,
                                       user: CurrentAccount, engine: Database):
     project_id = await run_in_threadpool(task_project, engine, "novel_outline", outline_id, user.id)
-    return generation_jobs.store.start(account_id=user.id, key=f"characters:supporting:{outline_id}", kind="characters",
+    return generation_jobs.store.start(account_id=user.id, key=f"characters:supporting:{outline_id}:{payload.volume_id}", kind="characters",
         title="根据大纲补充配角", project_id=project_id, resource_id=outline_id,
         operation=lambda: write_supporting_characters(outline_id, payload, user, engine)).summary()
 
@@ -164,7 +219,8 @@ async def volume_context(session, volume_id):
     outline = await read(session, "outline", volume["outline_id"])
     context = await project_context(session, outline["project_id"])
     context["outline"] = excerpt(outline, "id", "summary", "central_conflict", "themes")
-    context["volume"] = excerpt(volume, "id", "title", "summary", "protagonist_goal", "main_conflict", "climax", "ending_hook")
+    context["volume"] = excerpt(volume, "id", "volume_number", "title", "summary", "protagonist_goal", "main_conflict", "climax", "ending_hook")
+    context["volume_characters"] = await all_context_rows(session, "volume_character", volume_id=volume_id)
     beats = await listing(session, "plot_beat", volume_id=volume_id, limit=12)
     context["plot_beats"] = [excerpt(item, "sort_order", "title", "summary", "foreshadowing", limit=500) for item in beats]
     return context
@@ -198,6 +254,8 @@ async def chapter_context(session, chapter_id, review):
         context = await volume_context(session, chapter["volume_id"])
     else:
         context = await project_context(session, chapter["project_id"])
+    if not review and not context["characters"]:
+        raise HTTPException(409, "尚未生成角色信息，请先在角色页面设置数量并生成角色，再生成正文")
     if len(chapter["summary"]) > 8000:
         raise HTTPException(422, "章节摘要超过单次写作上限 8000 字符")
     context["chapter"] = {key: chapter[key] for key in ("id", "chapter_number", "title", "summary")}

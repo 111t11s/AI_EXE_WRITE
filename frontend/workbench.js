@@ -201,9 +201,11 @@ function renderTaskResult(job, result) {
     if (job.kind === 'outline') message = `大纲 v${result.version_no} 已保存，共 ${result.volume_ids.length} 卷。`;
     if (job.kind === 'plan') message = `已保存 ${result.chapters.length} 个计划章节。`;
     if (job.kind === 'draft') message = `正文已保存，共 ${result.word_count} 字。`;
-    if (job.kind === 'characters') message = `已保存 ${result.character_ids.length} 位角色：${[
-      ['protagonist', '主角'], ['important', '重要配角'], ['supporting', '配角']
-    ].filter(([kind]) => result.counts[kind]).map(([kind, label]) => `${label} ${result.counts[kind]} 位`).join('、')}。`;
+    if (job.kind === 'characters') {
+      const counts = [['protagonist', '主角'], ['important', '重要配角'], ['supporting', '配角']]
+        .filter(([kind]) => result.counts[kind]).map(([kind, label]) => `${label} ${result.counts[kind]} 位`).join('、');
+      message = `已新增 ${result.character_ids.length} 位角色${counts ? `（${counts}）` : ''}${result.reused_character_ids?.length ? `，复用 ${result.reused_character_ids.length} 位配角并保存本卷新戏份` : ''}。`;
+    }
     content.push(panel('生成结果', prose(message)));
   }
   if (result.warning || result.persistence?.error) content.push(prose(result.warning || result.persistence.error));
@@ -220,8 +222,13 @@ function renderTaskResult(job, result) {
       state.consistencyOutlineId = result.outline_id;
       await loadConsistencyChapters();
     } else if (job.kind === 'characters') {
-      state.tab = 'characters';
-      await loadCharacters();
+      if (result.volume_id) {
+        state.tab = 'outline';
+        await loadOutline(job.resource_id, result.volume_id);
+      } else {
+        state.tab = 'characters';
+        await loadCharacters();
+      }
     } else if (job.kind === 'outline') {
       state.tab = 'outline';
       await loadOutline(result.outline_id);
@@ -582,9 +589,9 @@ function characterView() {
     muted('根据当前世界观建立主角与重要配角；大纲完成后，再补充推动剧情的其他配角。任务在后台生成，可通过「查看进度」查看实时内容。'),
     actions(button('生成主角与重要配角', coreCharacterDialog, 'primary', state.busy || state.worlds.length !== 1),
       state.outlines.length ? version : null,
-      button('根据大纲补充配角', supportingCharacterDialog, 'secondary', state.busy || !state.outlines.length || state.worlds.length !== 1),
+      button('根据大纲补充配角', () => supportingCharacterDialog(), 'secondary', state.busy || !state.outlines.length || state.worlds.length !== 1),
       button('刷新角色', loadCharacters, 'secondary', state.characterLoading)),
-    muted('可设置生成数量和补充要求。新增角色保存在当前小说下，已有角色会作为创作依据；同名冲突时整批不保存。'),
+    muted('按分卷设置新增配角数量；后续卷可勾选前卷配角，为他们安排新戏份。已有角色档案会保留。'),
     state.worlds.length !== 1 ? muted('请先设置唯一的当前世界观。') : null,
     !state.outlines.length ? muted('生成大纲后即可补充剧情配角。') : null));
   if (state.characterError) return stack(controls, empty('角色读取失败', state.characterError, button('重试', loadCharacters)));
@@ -616,11 +623,17 @@ async function loadOutline(id, preferredVolume) {
 
 async function loadVolume(id) {
   const token = key('volume');
-  Object.assign(state, {volume: state.volumes.find((item) => item.id === id), beats: null, volumeError: null});
+  Object.assign(state, {volume: state.volumes.find((item) => item.id === id), beats: null, volumeCast: null, volumeError: null});
   render();
   try {
-    const beats = await allRows('/plot-beats', {volume_id: id});
-    if (current('volume', token)) state.beats = beats;
+    const [beats, cast, characters] = await Promise.all([
+      allRows('/plot-beats', {volume_id: id}), allRows('/volume-characters', {volume_id: id}),
+      allRows('/characters', {project_id: state.project.id})]);
+    if (current('volume', token)) {
+      state.beats = beats;
+      state.characters = characters;
+      state.volumeCast = cast.map(row => ({...row, name: characters.find(person => person.id === row.character_id)?.name || '角色已移除'}));
+    }
   } catch (error) {
     if (current('volume', token)) state.volumeError = error.message;
   } finally { if (current('volume', token)) render(); }
@@ -646,8 +659,11 @@ function outlineView() {
     muted('正在读取剧情节点…') : state.beats.length ? element('ol', {class: 'numbered'}, state.beats.map((beat) =>
       element('li', {}, element('strong', {}, beat.title), prose(beat.summary), beat.foreshadowing ? prose(`伏笔：${beat.foreshadowing}`) : null))) : muted('这一卷暂无剧情节点。');
   const detail = v ? panel(v.title, stack(details(['分卷摘要', v.summary], ['主角目标', v.protagonist_goal], ['主要冲突', v.main_conflict],
-    ['高潮', v.climax], ['结尾悬念', v.ending_hook]), rule(), element('h3', {}, '剧情节点'), beats), `第 ${v.volume_number} 卷`,
-  button('规划章节 →', () => planDialog(v), 'primary', state.busy || state.worlds.length !== 1)) : empty('请选择分卷', '打开一卷查看剧情节点。');
+    ['高潮', v.climax], ['结尾悬念', v.ending_hook]), rule(), element('h3', {}, '剧情节点'), beats,
+    state.volumeCast?.length ? stack(rule(), element('h3', {}, '本卷配角戏份'),
+      ...state.volumeCast.map(row => stack(element('strong', {}, row.name), prose(row.scenes)))) : null), `第 ${v.volume_number} 卷`,
+  actions(button('生成本卷配角', () => supportingCharacterDialog(v), 'secondary', state.busy || state.worlds.length !== 1),
+    button('规划章节 →', () => planDialog(v), 'primary', state.busy || state.worlds.length !== 1))) : empty('请选择分卷', '打开一卷查看剧情节点。');
   return stack(header, element('div', {class: 'layout reading'}, volumeList, detail));
 }
 
@@ -704,7 +720,7 @@ function chapterView() {
   const hasContent = Boolean(chapter.content.trim());
   const canEdit = ['planned', 'draft'].includes(chapter.status);
   const section = panel(chapter.title || '未命名章节', stack(details(['章节规划', chapter.summary]), rule(),
-    hasContent ? element('article', {class: 'reader', 'aria-label': '章节正文'}, chapter.content) : muted('正文还没开始。可以生成初稿，也可以手动写。')),
+    hasContent ? element('article', {class: 'reader', tabindex: 0, 'aria-label': '章节正文'}, chapter.content) : muted('正文还没开始。可以生成初稿，也可以手动写。')),
   `第 ${chapter.chapter_number} 章 · ${statusNames[chapter.status] ?? chapter.status} · ${chapter.word_count ?? 0} 字`, actions(
     !hasContent && chapter.status === 'planned' ? button('生成正文', () => draftDialog(chapter), 'primary', state.busy || state.worlds.length !== 1) : null,
     canEdit ? button('编辑章节', () => editDialog(chapter), 'secondary', state.busy) : null,
@@ -726,12 +742,15 @@ function openAction(options) {
   $('action-description').textContent = options.description;
   $('action-error').hidden = true;
   $('action-submit').textContent = options.submit;
-  $('action-fields').replaceChildren(...options.fields.map(({label, type, value, ...attributes}, index) => {
-    const input = type === 'textarea' ? element('textarea', attributes) : element('input', {...attributes, type});
+  $('action-fields').replaceChildren(...options.fields.map(({label, type, value, choices, change, ...attributes}, index) => {
+    const input = type === 'select' ? element('select', {...attributes, change}, choices.map(choice =>
+      element('option', {value: choice.value}, choice.label))) :
+      type === 'textarea' ? element('textarea', attributes) : element('input', {...attributes, type});
     input.value = value ?? '';
     if (index === 0) input.autofocus = true;
     return element('label', {class: 'control'}, label, input);
   }));
+  if (options.extra) $('action-fields').append(options.extra);
   action.showModal();
 }
 
@@ -750,7 +769,8 @@ $('action-form').addEventListener('submit', async (event) => {
   if (state.busy || !task) return;
   const requestingAccount = account;
   const submitted = task;
-  const data = Object.fromEntries(new FormData(event.currentTarget));
+  const form = new FormData(event.currentTarget);
+  const data = Object.fromEntries(form);
   for (const field of submitted.fields) {
     if (field.type === 'number') data[field.name] = Number(data[field.name]);
     else if (field.name !== 'content') data[field.name] = data[field.name].trim();
@@ -761,7 +781,8 @@ $('action-form').addEventListener('submit', async (event) => {
   try {
     let receipt;
     try {
-      receipt = submitted.taskPath ? await post(submitted.taskPath, submitted.payload ? submitted.payload(data) : data) : await submitted.send(data);
+      const payload = submitted.payload ? submitted.payload(data, form) : data;
+      receipt = submitted.taskPath ? await post(submitted.taskPath, payload) : await submitted.send(payload);
       if (account !== requestingAccount) return;
     }
     catch (error) {
@@ -807,13 +828,60 @@ function coreCharacterDialog() {
     taskPath: `/writing/projects/${state.project.id}/characters/core/tasks`});
 }
 
-function supportingCharacterDialog() {
-  const outlineId = state.characterOutlineId || state.outlines[0]?.id;
+async function supportingCharacterDialog(preferredVolume) {
+  const outlineId = preferredVolume?.outline_id || state.characterOutlineId || state.outlines[0]?.id;
   if (!outlineId) return;
+  const projectId = state.project.id;
+  const requestingAccount = account;
   const outline = state.outlines.find(row => row.id === outlineId);
-  openAction({title: '根据大纲补充配角', description: `使用大纲 v${outline.version_no} 及其分卷、剧情节点补充其他配角，保留已有主角和重要配角。`,
-    submit: '后台生成并保存', fields: [numberField('supporting_count', '新增配角数', 6, 1, 12), noteField],
-    taskPath: `/writing/outlines/${outlineId}/characters/supporting/tasks`});
+  let volumes;
+  try { volumes = await allRows('/outline-volumes', {outline_id: outlineId}); }
+  catch (error) { if (account === requestingAccount) notify(`分卷读取失败：${error.message}`, 'error'); return; }
+  if (account !== requestingAccount || state.project?.id !== projectId) return;
+  if (!volumes.length) { notify('该大纲还没有分卷，请先完成分卷大纲。', 'error'); return; }
+  const selectedVolume = volumes.find(row => row.id === preferredVolume?.id) || volumes[0];
+  const reuse = element('fieldset', {class: 'reuse-characters', hidden: true});
+  let requestSequence = 0;
+  let selectionReady = false;
+  const options = {title: '根据分卷大纲生成配角', description: `使用大纲 v${outline.version_no} 的目标分卷安排配角。第二卷起可复用前卷配角；新增数可设为 0，仅生成勾选角色的新戏份。`,
+    submit: '后台生成并保存', fields: [
+      {name: 'volume_id', label: '目标分卷', type: 'select', value: selectedVolume.id,
+        choices: volumes.map(row => ({value: row.id, label: `第 ${row.volume_number} 卷 · ${row.title}`})),
+        change: event => loadReuse(Number(event.target.value))},
+      numberField('supporting_count', '新增配角数', 6, 0, 12), noteField], extra: reuse,
+    taskPath: `/writing/outlines/${outlineId}/characters/supporting/tasks`,
+    payload: (data, form) => {
+      if (!selectionReady) throw new Error('请等待前卷配角读取完成。');
+      const reuseIds = form.getAll('reuse_character_ids').map(Number);
+      if (!data.supporting_count && !reuseIds.length) throw new Error('请新增至少一位配角或勾选要复用的配角。');
+      return {...data, volume_id: Number(data.volume_id), reuse_character_ids: reuseIds};
+    }};
+  async function loadReuse(volumeId) {
+    const sequence = ++requestSequence;
+    const volume = volumes.find(row => row.id === volumeId);
+    selectionReady = false;
+    reuse.replaceChildren(element('legend', {}, '复用前卷配角'), muted('正在读取前卷配角…'));
+    reuse.hidden = volume.volume_number === 1;
+    if (reuse.hidden) { selectionReady = true; return; }
+    try {
+      const result = await api(`/writing/volumes/${volumeId}/reusable-characters`);
+      if (sequence !== requestSequence || task !== options || account !== requestingAccount) return;
+      reuse.replaceChildren(element('legend', {}, '复用前卷配角'),
+        muted('勾选后会接续以往戏份，为角色安排本卷的新行动和冲突。'),
+        ...result.items.map(row => element('label', {class: 'reuse-character'},
+          element('input', {type: 'checkbox', name: 'reuse_character_ids', value: row.id}),
+          element('span', {}, element('strong', {}, row.name), ' ', pill(row.role),
+            ...row.previous_scenes.map(scene => muted(`第 ${scene.volume_number} 卷《${scene.title}》：${scene.scenes}`))))),
+        ...(!result.items.length ? [muted('前面的分卷还没有可复用的配角，请先生成前卷配角，或在本卷新增配角。')] : []));
+      selectionReady = true;
+    } catch (error) {
+      if (sequence !== requestSequence || task !== options || account !== requestingAccount) return;
+      reuse.replaceChildren(element('legend', {}, '复用前卷配角'), muted(`读取失败：${error.message}`),
+        button('重试', () => loadReuse(volumeId)));
+    }
+  }
+  openAction(options);
+  if (task === options) await loadReuse(selectedVolume.id);
 }
 
 function planDialog(volume) {
@@ -826,8 +894,21 @@ function planDialog(volume) {
   });
 }
 
-function draftDialog(chapter) {
-  openAction({title: '生成正文', description: `为第 ${chapter.chapter_number} 章生成初稿，正文会直接保存到当前章节。`,
+async function draftDialog(chapter) {
+  const projectId = state.project.id;
+  const requestingAccount = account;
+  let characters;
+  try { characters = await api('/characters', {filters: {project_id: projectId, limit: 1}}); }
+  catch (error) { if (account === requestingAccount) notify(`角色信息检查失败：${error.message}`, 'error'); return; }
+  if (account !== requestingAccount || state.project?.id !== projectId) return;
+  if (!characters.items.length) {
+    await activate('characters');
+    if (account !== requestingAccount || state.project?.id !== projectId) return;
+    notify('尚未生成角色信息，请先设置数量并生成角色，再生成正文。');
+    coreCharacterDialog();
+    return;
+  }
+  openAction({title: '生成正文', description: `角色信息已就绪，为第 ${chapter.chapter_number} 章生成初稿，正文会直接保存到当前章节。`,
     submit: '写作并保存', fields: [numberField('target_characters', '目标篇幅（字符）', 2000, 300, 6000), noteField],
     taskPath: `/writing/chapters/${chapter.id}/draft/tasks`,
   });

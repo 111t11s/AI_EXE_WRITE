@@ -1,6 +1,6 @@
 # 小说数据 MCP 工具
 
-本服务通过 stdio 提供 15 个资源的 75 个 CRUD 工具和 7 个写作工作流工具。工具调用现有 FastAPI 接口，沿用它的字段校验、数据库配置和外键规则。
+本服务通过 stdio 提供 16 个资源的 80 个 CRUD 工具和 7 个写作工作流工具。工具调用现有 FastAPI 接口，沿用它的字段校验、数据库配置和外键规则。
 
 先从项目根目录启动 API：
 
@@ -54,9 +54,9 @@
 |---|---|---|
 | `generate_novel_outline` | `{"project_id":2,"payload":{"volume_count":3}}` | 新的大纲版本、分卷 ID、剧情节点数量 |
 | `generate_novel_core_characters` | `{"project_id":2,"payload":{"protagonist_count":1,"important_count":3}}` | 根据世界观生成并保存主角及重要配角，返回角色 ID 和分类人数 |
-| `generate_novel_supporting_characters` | `{"outline_id":8,"payload":{"supporting_count":6}}` | 根据指定大纲、分卷和节点补充其他配角，返回角色 ID 和分类人数 |
+| `generate_novel_supporting_characters` | `{"outline_id":8,"payload":{"volume_id":12,"supporting_count":2,"reuse_character_ids":[4,5]}}` | 根据分卷补充新配角并为勾选的前卷配角安排新戏份；新增数可为 0，返回新增及复用角色 ID |
 | `plan_novel_chapters` | `{"volume_id":12,"payload":{"start_chapter":1,"chapter_count":5}}` | 新的计划章节 ID、章号与标题 |
-| `draft_novel_chapter` | `{"chapter_id":34,"payload":{"target_characters":2000}}` | 初稿状态和字数；正文用 `read_novel_chapter` 获取 |
+| `draft_novel_chapter` | `{"chapter_id":34,"payload":{"target_characters":2000}}` | 检查项目已有角色后生成正文，缺少角色返回 409；初稿状态和字数；正文用 `read_novel_chapter` 获取 |
 | `review_novel_chapter` | `{"chapter_id":34}` | 审读结论、问题证据与修改建议；不修改数据库 |
 | `check_novel_consistency` | `{"project_id":2,"payload":{"outline_id":8,"chapter_ids":[34,35],"instruction":"关注主角动机与能力边界"}}` | 仅读取所选章节正文，结合大纲与人物档案核对偏移，返回带经校验原文引据的报告；不修改小说 |
 

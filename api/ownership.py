@@ -23,6 +23,7 @@ LINKS = {
     "novel_outline": {"project_id": "novel_project"},
     "novel_outline_volume": {"outline_id": "novel_outline"},
     "novel_plot_beat": {"volume_id": "novel_outline_volume"},
+    "novel_volume_character": {"volume_id": "novel_outline_volume", "character_id": "novel_character"},
     "novel_chapter": {"project_id": "novel_project", "volume_id": "novel_outline_volume"},
 }
 

@@ -66,6 +66,8 @@ sudo journalctl -u aitxt -f
 
 ## 账号与旧小说迁移
 
+本次分卷配角复用功能新增 `novel_volume_character` 表。已有数据库升级后执行 `python -m db.migrate_volume_characters`，再重启服务。此命令仅补建戏份表，可重复执行，保留已有小说、角色和大纲。新数据库导入最新版 `db/schema.sql` 即可。
+
 升级已有数据库时，`schema.sql` 的 `CREATE TABLE IF NOT EXISTS` 不会补齐旧表字段，必须运行迁移。先备份数据库、更新代码，再执行：
 
 ```bash

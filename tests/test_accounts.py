@@ -77,6 +77,7 @@ def graph(client, user):
     outline = create("outlines", project_id=project, summary="寻找灵脉", central_conflict="灵气衰退")
     volume = create("outline-volumes", outline_id=outline, volume_number=1, title="启程", summary="离乡")
     create("plot-beats", volume_id=volume, sort_order=1, title="遇险", summary="山中遭遇")
+    create("volume-characters", volume_id=volume, character_id=target_response.json()["id"], scenes="药师在山中救助主角")
     create("chapters", project_id=project, volume_id=volume, chapter_number=1, title="初行")
     return rows
 
@@ -195,7 +196,7 @@ def test_admin_reset_confirmation_failure_does_not_touch_database(monkeypatch, c
     assert 'recovered-password' not in output.out + output.err
 
 
-def test_all_fifteen_resources_are_isolated_for_lists_reads_updates_and_deletes(setup_accounts):
+def test_all_resources_are_isolated_for_lists_reads_updates_and_deletes(setup_accounts):
     _, client, users = setup_accounts
     own = graph(client, users["admin"])
     other = graph(client, users["writer"])
@@ -229,6 +230,7 @@ def test_foreign_links_cannot_attach_resources_from_another_account(setup_accoun
         ('characters', {'project_id': own['projects']['id'], 'faction_id': other['factions']['id'],
                         'name': '陌生人', 'role': '主角', 'summary': 'x'}),
         ('chapters', {'project_id': own['projects']['id'], 'volume_id': other['outline-volumes']['id'], 'chapter_number': 2}),
+        ('volume-characters', {'volume_id': own['outline-volumes']['id'], 'character_id': other['characters']['id'], 'scenes': '不允许跨账号引用'}),
         ('character-relationships', {'source_character_id': own['characters']['id'],
                                     'target_character_id': other['characters']['id'], 'relationship_type': '敌对', 'description': 'x'}),
         ('design-sessions', {'project_id': other['projects']['id']}),

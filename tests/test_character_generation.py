@@ -15,7 +15,7 @@ from agents.llm_streaming import emit_generation_event
 from agents.mcp.server import create_server
 from api import generation_jobs, novel_writing_api as writing, novel_writing_store as store
 from api.database import get_database
-from api.writing_schemas import CharacterDraftList
+from api.writing_schemas import CharacterDraftList, ChapterDraft
 from core.identity import AUTH_TOKEN
 from main import app
 from test_writing_workflow import create_test_db
@@ -264,3 +264,206 @@ def test_new_mcp_workflows_save_and_return_character_ids(novel):
                 assert len(result.structuredContent["character_ids"]) == count
     asyncio.run(run())
     assert len(rows(novel)) == 4
+
+
+def next_volume(novel, number=2):
+    return novel["create"]("outline-volumes", outline_id=novel["outline"], volume_number=number,
+                           title=f"远行卷{number}", summary="接续渡河后的旅程")
+
+
+def seed_volume_cast(novel):
+    response = novel["client"].post(novel["supporting"],
+        json={"volume_id": novel["volume"], "supporting_count": 1}, headers=novel["headers"]["writer"])
+    assert response.status_code == 201, response.text
+    return response.json()["character_ids"][0]
+
+
+def volume_cast(novel, volume_id):
+    response = novel["client"].get("/api/v1/volume-characters", params={"volume_id": volume_id},
+                                   headers=novel["headers"]["writer"])
+    assert response.status_code == 200, response.text
+    return response.json()["items"]
+
+
+@pytest.mark.parametrize("new_count", [0, 1])
+def test_reuse_keeps_profile_and_previous_scenes_and_reaches_draft(novel, monkeypatch, new_count):
+    character_id = seed_volume_cast(novel)
+    original = rows(novel)[0]
+    original_scenes = volume_cast(novel, novel["volume"])
+    second = next_volume(novel)
+    client, headers = novel["client"], novel["headers"]["writer"]
+    choices = client.get(f"/api/v1/writing/volumes/{second}/reusable-characters", headers=headers)
+    assert choices.status_code == 200, choices.text
+    assert [row["id"] for row in choices.json()["items"]] == [character_id]
+    assert choices.json()["items"][0]["previous_scenes"][0]["scenes"] == original["summary"]
+    scenes = "舟客再次出场，带主角潜入渡舟盟，因立场变化引发争执。"
+
+    def generate(role, context):
+        if role == agents.DRAFT:
+            assignment = next(row for row in context["volume_characters"] if row["character_id"] == character_id)
+            assert assignment["scenes"] == scenes
+            assert any(row["id"] == character_id for row in context["characters"])
+            return ChapterDraft(content="舟客引领主角潜入渡舟盟，雨水沿旧船的木板流下。" * 10)
+        assert context["target_volume"]["id"] == second
+        assert context["reuse_characters"][0]["id"] == character_id
+        assert context["reuse_characters"][0]["previous_scenes"][0]["volume_id"] == novel["volume"]
+        return CharacterDraftList(characters=[person("驿使", "supporting")] if new_count else [],
+            reused_characters=[{"character_id": character_id, "scenes": scenes}])
+
+    monkeypatch.setattr(agents, "generate", generate)
+    response = client.post(novel["supporting"], headers=headers,
+        json={"volume_id": second, "supporting_count": new_count, "reuse_character_ids": [character_id]})
+    assert response.status_code == 201, response.text
+    assert response.json()["reused_character_ids"] == [character_id]
+    assert response.json()["volume_id"] == second
+    assert len(response.json()["character_ids"]) == new_count
+    assert len(rows(novel)) == 1 + new_count
+    assert next(row for row in rows(novel) if row["id"] == character_id) == original
+    assert volume_cast(novel, novel["volume"]) == original_scenes
+    assert next(row for row in volume_cast(novel, second) if row["character_id"] == character_id)["scenes"] == scenes
+    third = next_volume(novel, 3)
+    choices = client.get(f"/api/v1/writing/volumes/{third}/reusable-characters", headers=headers).json()["items"]
+    history = next(row for row in choices if row["id"] == character_id)["previous_scenes"]
+    assert [row["volume_number"] for row in history] == [1, 2]
+    chapter = novel["create"]("chapters", project_id=novel["project"], volume_id=second,
+                                chapter_number=1, title="夜入渡舟盟", summary="舟客协助潜入")
+    draft = client.post(f"/api/v1/writing/chapters/{chapter}/draft", json={}, headers=headers)
+    assert draft.status_code == 200, draft.text
+
+
+@pytest.mark.parametrize("problem", ["first", "future", "core", "other-outline", "missing", "duplicate", "no-volume", "empty"])
+def test_invalid_reuse_does_not_call_model(novel, monkeypatch, problem):
+    character_id = seed_volume_cast(novel)
+    second = next_volume(novel)
+    payload = {"volume_id": second, "supporting_count": 0, "reuse_character_ids": [character_id]}
+    if problem == "first":
+        payload["volume_id"] = novel["volume"]
+    elif problem == "future":
+        future = novel["create"]("characters", project_id=novel["project"], name="后卷客", role="配角", summary="未来人物")
+        novel["create"]("volume-characters", volume_id=next_volume(novel, 3), character_id=future, scenes="下一卷才登场")
+        payload["reuse_character_ids"] = [future]
+    elif problem == "core":
+        core = novel["create"]("characters", project_id=novel["project"], name="主角", role="主角", summary="寻脉卷的主角")
+        novel["create"]("volume-characters", volume_id=novel["volume"], character_id=core, scenes="主角")
+        payload["reuse_character_ids"] = [core]
+    elif problem == "other-outline":
+        outline = novel["create"]("outlines", project_id=novel["project"], version_no=2, summary="另一个大纲", central_conflict="冲突")
+        payload["volume_id"] = novel["create"]("outline-volumes", outline_id=outline, volume_number=2, title="另版卷", summary="另一版")
+    elif problem == "missing":
+        payload["reuse_character_ids"] = [99999]
+    elif problem == "duplicate":
+        payload["reuse_character_ids"] *= 2
+    elif problem == "no-volume":
+        payload.pop("volume_id")
+    else:
+        payload["reuse_character_ids"] = []
+    calls = []
+    monkeypatch.setattr(agents, "generate", lambda *args: calls.append(args))
+    response = novel["client"].post(novel["supporting"], json=payload, headers=novel["headers"]["writer"])
+    assert response.status_code in {404, 422}, response.text
+    assert not calls and volume_cast(novel, second) == []
+
+
+@pytest.mark.parametrize("problem", ["missing", "duplicate", "wrong-id"])
+def test_model_must_return_exactly_selected_roles_before_any_save(novel, monkeypatch, problem):
+    character_id = seed_volume_cast(novel)
+    second = next_volume(novel)
+    reuse = [{"character_id": character_id, "scenes": "本卷新戏份"}]
+    if problem == "missing":
+        reuse = []
+    elif problem == "duplicate":
+        reuse *= 2
+    else:
+        reuse[0]["character_id"] = 99999
+    monkeypatch.setattr(agents, "generate", lambda *args: CharacterDraftList(
+        characters=[person("新客", "supporting")], reused_characters=reuse))
+    response = novel["client"].post(novel["supporting"], headers=novel["headers"]["writer"],
+        json={"volume_id": second, "supporting_count": 1, "reuse_character_ids": [character_id]})
+    assert response.status_code == 502, response.text
+    assert len(rows(novel)) == 1 and volume_cast(novel, second) == []
+
+
+def test_cast_save_failure_rolls_back_new_people_and_scenes(novel, monkeypatch):
+    second = next_volume(novel)
+    original = store.insert_row
+
+    def fail_cast(connection, relation, **values):
+        if relation.name == "novel_volume_character":
+            raise HTTPException(409, "模拟戏份保存失败")
+        return original(connection, relation, **values)
+
+    monkeypatch.setattr(store, "insert_row", fail_cast)
+    response = novel["client"].post(novel["supporting"], headers=novel["headers"]["writer"],
+        json={"volume_id": second, "supporting_count": 1})
+    assert response.status_code == 409, response.text
+    assert rows(novel) == [] and volume_cast(novel, second) == []
+
+
+def test_reuse_list_is_account_scoped_and_supports_legacy_volume_summaries(novel, monkeypatch):
+    second = next_volume(novel)
+    legacy = novel["create"]("characters", project_id=novel["project"], name="旧渡客", role="配角", summary="寻脉卷中帮助渡河")
+    path = f"/api/v1/writing/volumes/{second}/reusable-characters"
+    client = novel["client"]
+    assert client.get(path).status_code == 401
+    assert client.get(path, headers=novel["headers"]["other"]).status_code == 404
+    response = client.get(path, headers=novel["headers"]["writer"])
+    assert response.status_code == 200, response.text
+    assert [row["id"] for row in response.json()["items"]] == [legacy]
+    monkeypatch.setattr(agents, "generate", lambda *args: CharacterDraftList(characters=[],
+        reused_characters=[{"character_id": legacy, "scenes": "旧渡客在远行卷再次引路"}]))
+    saved = client.post(novel["supporting"], headers=novel["headers"]["writer"],
+        json={"volume_id": second, "supporting_count": 0, "reuse_character_ids": [legacy]})
+    assert saved.status_code == 201, saved.text
+    assert volume_cast(novel, novel["volume"])[0]["scenes"] == "寻脉卷中帮助渡河"
+    third = next_volume(novel, 3)
+    history = client.get(f"/api/v1/writing/volumes/{third}/reusable-characters", headers=novel["headers"]["writer"]).json()
+    assert [row["volume_number"] for row in history["items"][0]["previous_scenes"]] == [1, 2]
+
+
+def test_volume_cast_cannot_link_a_character_from_another_project(novel):
+    project = novel["create"]("projects", title="另一部小说", genre="都市", setting="当代", tone="日常",
+                                target_length="短篇", protagonist_goal="生活")
+    character = novel["create"]("characters", project_id=project, name="邻居", role="配角", summary="另一部小说的人物")
+    response = novel["client"].post("/api/v1/volume-characters", headers=novel["headers"]["writer"],
+        json={"volume_id": novel["volume"], "character_id": character, "scenes": "不能跨小说安排戏份"})
+    assert response.status_code == 409, response.text
+    assert volume_cast(novel, novel["volume"]) == []
+
+
+@pytest.mark.parametrize("suffix", ["", "/stream", "/tasks"])
+def test_draft_without_characters_is_blocked_until_user_generates_them(novel, monkeypatch, suffix):
+    chapter = novel["create"]("chapters", project_id=novel["project"], volume_id=novel["volume"],
+                                chapter_number=1, title="渡河", summary="启程渡河")
+    path = f"/api/v1/writing/chapters/{chapter}/draft{suffix}"
+    client, headers = novel["client"], novel["headers"]["writer"]
+    calls = []
+
+    def generate(role, context):
+        calls.append(role)
+        if role == agents.CORE_CHARACTERS:
+            return cast(role, context)
+        assert role == agents.DRAFT and context["characters"]
+        return ChapterDraft(content="舟客将小船撑离河岸，主角望向被雾气遮住的渡口。" * 10)
+
+    monkeypatch.setattr(agents, "generate", generate)
+
+    def post_draft():
+        response = client.post(path, json={}, headers=headers)
+        if suffix == "/tasks":
+            assert response.status_code == 202, response.text
+            return client.get(f'/api/v1/generation-jobs/{response.json()["id"]}/events', headers=headers)
+        return response
+
+    blocked = post_draft()
+    assert "角色" in blocked.text
+    assert blocked.status_code == (409 if not suffix else 200)
+    if suffix:
+        assert "event: error" in blocked.text
+    assert calls == [] and rows(novel) == []
+    saved = client.get(f"/api/v1/chapters/{chapter}", headers=headers).json()
+    assert saved["status"] == "planned" and saved["content"] == ""
+    generated = client.post(novel["core"], json={"protagonist_count": 1, "important_count": 1}, headers=headers)
+    assert generated.status_code == 201, generated.text
+    retry = post_draft()
+    assert retry.status_code == 200 and ("event: result" in retry.text if suffix else retry.json()["status"] == "draft")
+    assert calls == [agents.CORE_CHARACTERS, agents.DRAFT]

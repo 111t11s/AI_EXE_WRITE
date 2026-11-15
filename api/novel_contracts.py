@@ -97,6 +97,8 @@ CRUD_RESOURCES = (
                  owner="outline_id", order=("outline_id", "volume_number")),
     CrudResource("/plot-beats", "novel_plot_beat", "剧情节点", schemas.PlotBeatCreate,
                  owner="volume_id", order=("volume_id", "sort_order")),
+    CrudResource("/volume-characters", "novel_volume_character", "分卷角色戏份", schemas.VolumeCharacterCreate,
+                 owner="volume_id", filters=("character_id",)),
     CrudResource("/chapters", "novel_chapter", "小说章节", schemas.ChapterCreate,
                  owner="project_id", filters=("volume_id", "chapter_number", "status"),
                  order=("project_id", "chapter_number"), timestamps=AUDIT),

@@ -46,6 +46,11 @@ SUPPORTING_CHARACTERS = WritingRole(
     "优先展开大纲中尚未建档的人物；每位人物须服务具体剧情，role 写剧情职能，"
     "summary 说明在哪一卷/节点出场、承担的冲突或推动作用以及与已有角色的关系。"
     "补全性格、背景、目标、动机、弱点、成长变化、能力边界，遵守世界观和已有核心人物设定。"
+    "若提供 target_volume，仅为该卷新增人物和安排戏份，不为其他卷创建人物。"
+    "为 reuse_characters 中每一位勾选的旧配角返回 reused_characters 项，character_id 使用原 ID，"
+    "scenes 写在目标卷中的新行动、冲突、关系变化和具体剧情节点，接续 previous_scenes。"
+    "尊重人物的死亡、退场状态，不无故复活；不修改原人物档案，不在 characters 中复制旧角色。"
+    "supporting_count 只统计新人物；为 0 时 characters 返回空数组。未勾选的旧配角不返回复用项。"
     "只新增人物，不重建或改名复制已有角色，姓名不得与已有角色或本批次重复；不要编造数据库 ID 或章节号。",
     CharacterDraftList, STORY_TOOLS,
 )
@@ -59,12 +64,13 @@ OUTLINE = WritingRole(
 PLAN = WritingRole(
     "章节规划师",
     "将该卷的剧情节点拆成指定数量的章节，按章序返回。每章摘要写清行动、障碍、转折和收束；"
-    "注意与前一章衔接，暂不写正文。",
+    "结合 volume_characters 中角色在本卷的戏份，按 character_id 对照人物档案。注意与前一章衔接，暂不写正文。",
     ChapterPlanDraft, CHAPTER_TOOLS,
 )
 DRAFT = WritingRole(
     "小说正文作者",
     "按已保存的章节标题和摘要写一章中文正文，贴近指定篇幅。保持视角一致，用场景和对话推进故事；"
+    "结合 volume_characters 中角色在本卷的戏份安排，按 character_id 对照人物档案并遵守既有人物设定。"
     "接续前文，不在正文中写创作说明或重复章节标题。",
     ChapterDraft, CHAPTER_TOOLS,
 )

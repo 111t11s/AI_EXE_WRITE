@@ -159,6 +159,12 @@ class PlotBeatCreate(RowInput):
     foreshadowing: str = ""
 
 
+class VolumeCharacterCreate(RowInput):
+    volume_id: RowId
+    character_id: RowId
+    scenes: str = Field(min_length=1, max_length=4000)
+
+
 class ChapterCreate(RowInput):
     project_id: RowId
     volume_id: RowId | None = None
