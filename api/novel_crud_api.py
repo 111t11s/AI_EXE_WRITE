@@ -11,9 +11,11 @@ from api.novel_contracts import CRUD_RESOURCES, CrudResource
 from api.account_api import CurrentAccount
 from api.database import Database, get_database, transaction
 from api.novel_tables import tables
-from api.ownership import owned_condition, require_owned, validate_owned_links
+from api.ownership import readable_condition, require_readable, require_owned, validate_owned_links
 from core.logging import get_logger
 from db.connection import legacy_json_columns
+from db.accounts import account
+from db.character_progress import character_progress
 
 
 router = APIRouter()
@@ -105,8 +107,20 @@ def add_resource(resource: CrudResource):
     relation = tables[table_name]
     is_world = table_name == "novel_world"
 
+    def read_statement():
+        if table_name == "novel_project":
+            return select(relation, account.c.username.label("owner_username"),
+                          account.c.display_name.label("owner_display_name")).select_from(
+                              relation.outerjoin(account, relation.c.account_id == account.c.id))
+        return select(relation)
+
+    def read_response(connection, row, json_columns):
+        if table_name == "novel_project":
+            row = connection.execute(read_statement().where(relation.c.id == row["id"])).mappings().one()
+        return response_row(row, json_columns)
+
     def list_rows(query: Annotated[filter_schema, Query()], user: CurrentAccount, engine: Database):
-        statement = select(relation).where(owned_condition(relation, user.id))
+        statement = read_statement().where(readable_condition(relation, user))
         for key, value in query.model_dump(exclude={"limit", "offset"}, exclude_none=True).items():
             statement = statement.where(relation.c[key] == value)
         ordering = (*resource.order, "id")
@@ -134,13 +148,13 @@ def add_resource(resource: CrudResource):
                 clear_current_world(connection, relation, values["project_id"])
             result = connection.execute(insert(relation).values(**storage_values(values, json_columns)))
             row = get_row(connection, relation, values["id"] if resource.session_ids else result.lastrowid)
-            return response_row(row, json_columns)
+            return read_response(connection, row, json_columns)
 
     def read_row(record_id: id_type, user: CurrentAccount, engine: Database):
         with transaction(engine) as connection:
-            require_owned(connection, table_name, record_id, user.id)
+            require_readable(connection, table_name, record_id, user)
             row = get_row(connection, relation, record_id)
-            return response_row(row, legacy_json_columns(connection, table_name))
+            return read_response(connection, row, legacy_json_columns(connection, table_name))
 
     def patch_row(record_id: id_type, payload: patch_schema, user: CurrentAccount, engine: Database):
         changes = payload.model_dump(exclude_unset=True)
@@ -157,9 +171,13 @@ def add_resource(resource: CrudResource):
             validate_links(connection, relation, {**row, **changes})
             if is_world and changes.get("is_current") is True:
                 clear_current_world(connection, relation, row["project_id"], record_id)
+            if table_name == "novel_chapter" and any(
+                    key in changes and changes[key] != response_row(row, json_columns)[key]
+                    for key in ("content", "chapter_number", "volume_id")):
+                connection.execute(delete(character_progress).where(character_progress.c.chapter_id == record_id))
             statement = update(relation).where(relation.c.id == record_id)
             connection.execute(statement.values(**storage_values(changes, json_columns)))
-            return response_row(get_row(connection, relation, record_id, lock=True), json_columns)
+            return read_response(connection, get_row(connection, relation, record_id, lock=True), json_columns)
 
     def delete_row(record_id: id_type, user: CurrentAccount, engine: Database):
         with transaction(engine) as connection:

@@ -1,6 +1,6 @@
 # 小说数据 MCP 工具
 
-本服务通过 stdio 提供 16 个资源的 80 个 CRUD 工具和 7 个写作工作流工具。工具调用现有 FastAPI 接口，沿用它的字段校验、数据库配置和外键规则。
+本服务通过 stdio 提供 16 个资源的 80 个 CRUD 工具和 9 个写作工作流工具。工具调用现有 FastAPI 接口，沿用它的字段校验、数据库配置和外键规则。
 
 先从项目根目录启动 API：
 
@@ -53,12 +53,15 @@
 | MCP 工具 | 参数示例 | 产出 |
 |---|---|---|
 | `generate_novel_outline` | `{"project_id":2,"payload":{"volume_count":3}}` | 新的大纲版本、分卷 ID、剧情节点数量 |
-| `generate_novel_core_characters` | `{"project_id":2,"payload":{"protagonist_count":1,"important_count":3}}` | 根据世界观生成并保存主角及重要配角，返回角色 ID 和分类人数 |
+| `rewrite_novel_outline` | `{"outline_id":8,"payload":{"volume_count":3,"instruction":"加强第二卷冲突"}}` | 读取原大纲后重写，保存新版本，原大纲及章节保留 |
+| `generate_novel_core_characters` | `{"project_id":2,"payload":{"protagonist_count":1,"important_count":3,"outline_id":8}}` | 根据世界观及可选大纲生成核心人物；指定大纲时一并生成分卷阶段档案，返回角色 ID、档案角色 ID 与层级统计 |
 | `generate_novel_supporting_characters` | `{"outline_id":8,"payload":{"volume_id":12,"supporting_count":2,"reuse_character_ids":[4,5]}}` | 根据分卷补充新配角并为勾选的前卷配角安排新戏份；新增数可为 0，返回新增及复用角色 ID |
 | `plan_novel_chapters` | `{"volume_id":12,"payload":{"start_chapter":1,"chapter_count":5}}` | 新的计划章节 ID、章号与标题 |
-| `draft_novel_chapter` | `{"chapter_id":34,"payload":{"target_characters":2000}}` | 检查项目已有角色后生成正文，缺少角色返回 409；初稿状态和字数；正文用 `read_novel_chapter` 获取 |
+| `draft_novel_chapter` | `{"chapter_id":34,"payload":{"target_characters":2000}}` | 检查项目已有角色后生成正文，并验证原句、同步人物正文进展；正文与档案同一事务保存，缺少角色返回 409；正文用 `read_novel_chapter` 获取 |
+| `list_novel_character_progress` | `{"project_id":12,"before_chapter_number":34,"latest":true}` | 只读查询人物正文进展；按章序排除当前及未来章，latest 返回每人最近状态，支持 limit/offset 分页 |
+| `rewrite_novel_chapter` | `{"chapter_id":34,"payload":{"target_characters":2000,"instruction":"保留情节，加强对话"}}` | 读取原正文后重写并替换，设为草稿；期间章节变化则拒绝覆盖 |
 | `review_novel_chapter` | `{"chapter_id":34}` | 审读结论、问题证据与修改建议；不修改数据库 |
-| `check_novel_consistency` | `{"project_id":2,"payload":{"outline_id":8,"chapter_ids":[34,35],"instruction":"关注主角动机与能力边界"}}` | 仅读取所选章节正文，结合大纲与人物档案核对偏移，返回带经校验原文引据的报告；不修改小说 |
+| `check_novel_consistency` | `{"project_id":2,"payload":{"outline_id":8,"chapter_ids":[34,35],"instruction":"关注主角动机与能力边界"}}` | 先读取大纲、完整人物及关系档案、分卷戏份与相关设定，再对照所选正文；返回实际读取档案清单和经校验原文引据，无依据不认定偏移；不修改小说 |
 
 `payload.instruction` 可补充要求。大纲每次新建一版草稿；规划的章号不能和项目内已有章节重叠；正文只写入尚无内容的计划章节。模型生成可能需要几分钟，MCP 客户端的调用超时可设为 300 秒。运行生成工作流需要 `.env` 模型配置；启用原生工具模式时另需 CrewAI 的可选运行环境。应用日志的内容、级别和进度标签使用中文，JSON 日志保留标准字段名，避免记录小说正文和密钥。
 

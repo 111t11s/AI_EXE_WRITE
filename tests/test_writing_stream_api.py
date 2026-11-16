@@ -24,10 +24,15 @@ CASES = [
     ("/volumes/4/chapter-plan", {"chapter_count": 1},
      {"chapters": [{"title": "启程", "summary": "少年离家寻找灵脉"}]},
      "save_chapter_plan", {"project_id": 2, "volume_id": 4, "chapters": [{"chapter_id": 5, "chapter_number": 1, "title": "启程"}]}),
-    ("/chapters/5/draft", {}, {"content": "少年循着灵脉，踏上了远行的路。" * 20},
+    ("/chapters/5/draft", {}, {"content": "少年循着灵脉，踏上了远行的路。" * 20, "character_updates": []},
      "save_draft", {"chapter_id": 5, "status": "draft", "word_count": 300}),
     ("/chapters/5/review", {}, {"verdict": "ready", "summary": "人物与设定一致", "issues": []},
      None, {"verdict": "ready", "summary": "人物与设定一致", "issues": []}),
+    ("/outlines/3/rewrite", {"volume_count": 1, "instruction": "加强冲突"},
+     {"summary": "寻找灵脉", "central_conflict": "灵气枯竭", "themes": "守护", "volumes": [VOLUME]},
+     "save_outline", {"project_id": 2, "outline_id": 6, "version_no": 2, "volume_ids": [7], "plot_beat_count": 1}),
+    ("/chapters/5/rewrite", {"instruction": "加强对话"}, {"content": "少年循着灵脉，踏上了远行的路。" * 20, "character_updates": []},
+     "save_rewritten_draft", {"chapter_id": 5, "status": "draft", "word_count": 300}),
 ]
 
 
@@ -39,9 +44,13 @@ def test_all_writing_endpoints_stream_then_validate_and_save(monkeypatch, path, 
     monkeypatch.setitem(app.dependency_overrides, get_current_account,
                         lambda: Account(id=1, username="writer", display_name="作者"))
     monkeypatch.setattr(api, "require_resource", Mock())
-    monkeypatch.setattr(api, "load_context", AsyncMock(return_value={
+    monkeypatch.setattr(api, "task_project", Mock(return_value=2))
+    context = {
         "project": {"id": 2}, "world": {"rules": "施法消耗灵气"}, "chapter": {"id": 5}, "characters": [{"name": "少年"}],
-    }))
+    }
+    async def load(loader, *args):
+        return (context, []) if loader is api.character_context else context
+    monkeypatch.setattr(api, "load_context", AsyncMock(side_effect=load))
     save = Mock(return_value=receipt)
     if save_name:
         monkeypatch.setattr(api, save_name, save)

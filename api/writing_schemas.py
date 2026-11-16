@@ -33,6 +33,14 @@ class DraftRequest(WritingInput):
 class CoreCharacterRequest(WritingInput):
     protagonist_count: int = Field(default=1, ge=1, le=2)
     important_count: int = Field(default=3, ge=0, le=8)
+    outline_id: RowId | None = None
+    volume_id: RowId | None = None
+
+    @model_validator(mode="after")
+    def require_outline_for_volume(self):
+        if self.volume_id is not None and self.outline_id is None:
+            raise ValueError("指定分卷时必须选择所属大纲")
+        return self
 
 
 class SupportingCharacterRequest(WritingInput):
@@ -49,6 +57,17 @@ class SupportingCharacterRequest(WritingInput):
         if not self.supporting_count and not self.reuse_character_ids:
             raise ValueError("请新增至少一位配角或勾选要复用的配角")
         return self
+
+
+class CharacterProfileRequest(WritingInput):
+    character_ids: list[RowId] = Field(min_length=1, max_length=20)
+
+    @field_validator("character_ids")
+    @classmethod
+    def unique_characters(cls, values):
+        if len(values) != len(set(values)):
+            raise ValueError("角色不能重复选择")
+        return values
 
 
 class ConsistencyRequest(WritingInput):
@@ -100,8 +119,33 @@ class ChapterPlanDraft(Generated):
     chapters: list[ChapterPlan] = Field(min_length=1, max_length=12)
 
 
+class CharacterChapterUpdate(Generated):
+    character_id: RowId
+    actions: str = Field(min_length=1, max_length=1600)
+    current_state: str = Field(min_length=1, max_length=1600)
+    relationships: str = Field(default="", max_length=1600)
+    evidence: list[Annotated[str, Field(min_length=1, max_length=600)]] = Field(min_length=1, max_length=6)
+
+
 class ChapterDraft(Generated):
     content: str = Field(min_length=100, max_length=30000)
+    character_updates: list[CharacterChapterUpdate] = Field(max_length=40)
+
+
+class CharacterProgressEntry(CharacterChapterUpdate):
+    id: RowId
+    chapter_id: RowId
+    chapter_number: Sequence
+    title: str
+    volume_id: RowId | None
+
+
+class CharacterProgressPage(BaseModel):
+    project_id: RowId
+    items: list[CharacterProgressEntry]
+    limit: int
+    offset: int
+    has_more: bool
 
 
 class ReviewIssue(Generated):
@@ -116,6 +160,14 @@ class ReviewReport(Generated):
     issues: list[ReviewIssue] = Field(max_length=12)
 
 
+class CharacterVolumeProfile(Generated):
+    volume_id: RowId
+    plot_beat_ids: list[RowId] = Field(default_factory=list, max_length=30)
+    actions: str = Field(min_length=1, max_length=900)
+    outcome: str = Field(min_length=1, max_length=900)
+    progress_relation: str = Field(min_length=1, max_length=900)
+
+
 class CharacterDraft(Generated):
     category: Literal["protagonist", "important", "supporting"]
     name: Annotated[str, Field(min_length=1, max_length=160)]
@@ -128,11 +180,22 @@ class CharacterDraft(Generated):
     weakness: Detail
     character_arc: Detail
     abilities: Detail
+    volume_profiles: list[CharacterVolumeProfile] = Field(default_factory=list, max_length=5)
 
 
 class ReusedCharacterDraft(Generated):
     character_id: RowId
     scenes: Detail
+    volume_profiles: list[CharacterVolumeProfile] = Field(default_factory=list, max_length=5)
+
+
+class ExistingCharacterProfile(Generated):
+    character_id: RowId
+    volume_profiles: list[CharacterVolumeProfile] = Field(min_length=1, max_length=5)
+
+
+class CharacterProfileList(Generated):
+    profiles: list[ExistingCharacterProfile] = Field(min_length=1, max_length=20)
 
 
 class CharacterDraftList(Generated):
@@ -152,7 +215,8 @@ class ChapterEvidence(Generated):
 
 
 class ConsistencyBasis(Generated):
-    kind: Literal["outline", "volume", "plot_beat", "character", "world", "chapter"]
+    kind: Literal["project", "outline", "volume", "plot_beat", "character", "character_relationship",
+                  "volume_character", "world", "region", "power_system", "power_rank", "cheat_system", "faction", "chapter"]
     record_id: RowId
     field: str = Field(min_length=1, max_length=80)
     quote: str = Field(min_length=1, max_length=1000)
@@ -188,7 +252,8 @@ class ConsistencyReceipt(ConsistencyReport):
     checked_at: str
     chapters: list["ChapterPlanEntry"]
     references: list[ConsistencyReference]
-    limitations: list[Detail] = Field(max_length=16)
+    reference_materials: list[ConsistencyReference] = Field(default_factory=list)
+    limitations: list[Detail] = Field(max_length=20)
 
 
 class OutlineReceipt(BaseModel):
@@ -219,7 +284,9 @@ class DraftReceipt(BaseModel):
 
 class CharacterReceipt(BaseModel):
     project_id: RowId
+    outline_id: RowId | None = None
     character_ids: list[RowId]
     counts: dict[str, int]
     volume_id: RowId | None = None
     reused_character_ids: list[RowId] = Field(default_factory=list)
+    profile_character_ids: list[RowId] = Field(default_factory=list)

@@ -50,14 +50,16 @@ def background(monkeypatch):
     engine.dispose()
 
 
-@pytest.mark.parametrize('kind,method,table', [
-    ('outline', 'write_outline', 'projects'), ('plan', 'write_chapter_plan', 'volumes'),
-    ('draft', 'write_draft', 'chapters'), ('review', 'review_chapter', 'chapters'),
+@pytest.mark.parametrize('kind,method,table,suffix', [
+    ('outline', 'write_outline', 'projects', 'outline'), ('plan', 'write_chapter_plan', 'volumes', 'chapter-plan'),
+    ('draft', 'write_draft', 'chapters', 'draft'), ('review', 'review_chapter', 'chapters', 'review'),
+    ('outline', 'rewrite_outline', 'outlines', 'rewrite'), ('draft', 'rewrite_draft', 'chapters', 'rewrite'),
 ])
-def test_submit_returns_before_generation_and_deduplicates_owned_target(background, monkeypatch, kind, method, table):
+def test_submit_returns_before_generation_and_deduplicates_owned_target(background, monkeypatch, kind, method, table, suffix):
     client, users, project, volume, chapter = background
     record_id = project if table == 'projects' else volume if table == 'volumes' else chapter
-    suffix = {'outline': 'outline', 'plan': 'chapter-plan', 'draft': 'draft', 'review': 'review'}[kind]
+    if table == 'outlines':
+        record_id = client.get('/api/v1/outlines', headers=users['writer']).json()['items'][0]['id']
     path = f'/api/v1/writing/{table}/{record_id}/{suffix}/tasks'
     entered, release = threading.Event(), threading.Event()
     calls = []

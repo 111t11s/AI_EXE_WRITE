@@ -20,7 +20,7 @@ from agents.mcp.worldbuilding import NovelToolError, call_novel_tool, novel_sess
 from api.novel_crud_api import Database
 from api.novel_schemas import RowId
 from api.novel_writing_store import require_empty_plan, save_chapter_plan, save_draft, save_outline
-from api.novel_writing_store import save_characters
+from api.novel_writing_store import save_characters, save_rewritten_draft
 from api.novel_tables import tables
 from api.database import transaction
 from sqlalchemy import select
@@ -29,6 +29,7 @@ from api.writing_schemas import (
     ReviewReport, WritingInput,
     CoreCharacterRequest, SupportingCharacterRequest, CharacterReceipt,
 )
+from api.character_profiles import validate_profiles
 from core.logging import get_logger
 
 
@@ -58,8 +59,8 @@ async def project_context(session, project_id, include_characters=True):
     return {
         "project": excerpt(project, "id", "title", "genre", "setting", "tone", "target_length", "premise", "protagonist_goal"),
         "world": excerpt(worlds[0], "id", "title", "summary", "era", "history", "rules", "cultures", limit=2400),
-        "characters": [excerpt(item, "id", "name", "role", "summary", "personality", "goal", "motivation",
-                               "weakness", "abilities", "character_arc", limit=300) for item in characters],
+        "characters": [excerpt(item, "id", "name", "role", "summary", "personality", "background", "goal", "motivation",
+                               "weakness", "abilities", "character_arc", "status", limit=600) for item in characters],
     }
 
 
@@ -78,7 +79,9 @@ async def all_context_rows(session, table, **filters):
 async def character_context(session, project_id, outline_id=None):
     context = await project_context(session, project_id, include_characters=False)
     world = await read(session, "world", context["world"]["id"])
-    context["project"] = await read(session, "project", project_id)
+    project = await read(session, "project", project_id)
+    # Owner labels are presentation data, not part of the novel snapshot checked on save.
+    context["project"] = {key: value for key, value in project.items() if key in tables["novel_project"].c}
     context["world"] = world
     sources = [("novel_world", world)]
     context["characters"] = await all_context_rows(session, "character", project_id=project_id)
@@ -110,6 +113,27 @@ async def character_context(session, project_id, outline_id=None):
     # Keep a useful bound rather than silently omitting later characters or plot nodes.
     if len(json.dumps(context, ensure_ascii=False, default=str)) > 150000:
         raise HTTPException(422, "角色生成资料超过单次容量，请精简世界观、角色或大纲")
+    return context, sources
+
+
+async def character_profile_context(session, project_id, outline_id, volume_id=None):
+    context, sources = await character_context(session, project_id, outline_id)
+    volumes = [row for row in context["volumes"] if volume_id is None or row["id"] == volume_id]
+    if not volumes:
+        raise HTTPException(404, "目标分卷不属于当前大纲")
+    context["writing_progress"] = []
+    for volume in volumes:
+        chapters = await all_context_rows(session, "chapter", project_id=project_id, volume_id=volume["id"])
+        sources.extend(("novel_chapter", row) for row in chapters)
+        written = [row for row in chapters if row["content"].strip()]
+        context["writing_progress"].append({
+            "volume_id": volume["id"], "planned_chapters": len(chapters), "written_chapters": len(written),
+            "last_written_chapter": max((row["chapter_number"] for row in written), default=None),
+            "chapters": [{key: row[key] for key in ("id", "chapter_number", "title", "summary", "status")} for row in chapters],
+            "note": "这里只提供写作数量与章节计划，不包含正文；不能据此确认某个角色行动或结局已发生。",
+        })
+    if len(json.dumps(context, ensure_ascii=False, default=str)) > 200000:
+        raise HTTPException(422, "角色档案与进度资料超过单次容量，请减少章节或精简资料")
     return context, sources
 
 
@@ -149,13 +173,18 @@ async def list_reusable_characters(volume_id: RowId, user: CurrentAccount, engin
 
 
 async def create_characters(project_id, outline_id, payload, user, engine):
+    core = isinstance(payload, CoreCharacterRequest)
+    if core:
+        outline_id = payload.outline_id
     await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
     if outline_id is not None:
         await run_in_threadpool(require_resource, engine, "novel_outline", outline_id, user.id)
     emit_generation_event("status", message="正在通过 MCP 读取世界观、已有角色和剧情资料…")
-    context, sources = await load_context(character_context, project_id, outline_id)
-    core = outline_id is None
-    volume_id = None if core else payload.volume_id
+    if outline_id is not None:
+        context, sources = await load_context(character_profile_context, project_id, outline_id, payload.volume_id)
+    else:
+        context, sources = await load_context(character_context, project_id)
+    volume_id = payload.volume_id
     selected = [] if core else payload.reuse_character_ids
     legacy_assignments = []
     if volume_id is not None:
@@ -179,6 +208,10 @@ async def create_characters(project_id, outline_id, payload, user, engine):
     returned = [item.character_id for item in artifact.reused_characters]
     if Counter(returned) != Counter(selected):
         raise HTTPException(502, "模型返回的复用角色与勾选不符，本批次未保存")
+    if outline_id is not None:
+        validate_profiles([*artifact.characters, *artifact.reused_characters], context, volume_id)
+    elif any(item.volume_profiles for item in artifact.characters):
+        raise HTTPException(502, "尚无指定大纲，不能保存虚构的分卷角色档案")
     emit_generation_event("status", message="角色设定校验通过，正在整批保存角色…")
     return await run_in_threadpool(save_characters, engine, project_id, artifact, sources, volume_id, legacy_assignments)
 
@@ -200,8 +233,19 @@ async def write_supporting_characters(outline_id: RowId, payload: SupportingChar
 @router.post("/projects/{project_id}/characters/core/tasks", status_code=202, summary="后台生成主角和重要配角")
 async def start_core_characters(project_id: RowId, payload: CoreCharacterRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    if payload.outline_id is not None:
+        related_project = await run_in_threadpool(task_project, engine, "novel_outline", payload.outline_id, user.id)
+        if related_project != project_id:
+            raise HTTPException(404, "所选大纲不属于当前小说")
+        if payload.volume_id is not None:
+            await run_in_threadpool(require_resource, engine, "novel_outline_volume", payload.volume_id, user.id)
+            with transaction(engine) as connection:
+                relation = tables["novel_outline_volume"]
+                belongs = connection.scalar(select(relation.c.outline_id).where(relation.c.id == payload.volume_id))
+            if belongs != payload.outline_id:
+                raise HTTPException(404, "目标分卷不属于当前大纲")
     return generation_jobs.store.start(account_id=user.id, key=f"characters:core:{project_id}", kind="characters",
-        title="根据世界观生成主角与重要配角", project_id=project_id, resource_id=project_id,
+        title="生成主角与重要配角", project_id=project_id, resource_id=payload.outline_id or project_id,
         operation=lambda: write_core_characters(project_id, payload, user, engine)).summary()
 
 
@@ -244,26 +288,43 @@ async def plan_context(session, volume_id, start):
     return context
 
 
-async def chapter_context(session, chapter_id, review):
+async def chapter_context(session, chapter_id, review, rewrite=False):
     chapter = await read(session, "chapter", chapter_id)
+    if rewrite and not chapter["content"].strip():
+        raise HTTPException(409, "该章节还没有正文，请先生成正文后再重写")
     if review and not chapter["content"].strip():
         raise HTTPException(409, "该章节还没有可审读的正文")
-    if not review:
+    if not review and not rewrite:
         require_empty_plan(chapter)
     if chapter["volume_id"] is not None:
         context = await volume_context(session, chapter["volume_id"])
     else:
         context = await project_context(session, chapter["project_id"])
-    if not review and not context["characters"]:
+    if (not review or rewrite) and not context["characters"]:
         raise HTTPException(409, "尚未生成角色信息，请先在角色页面设置数量并生成角色，再生成正文")
     if len(chapter["summary"]) > 8000:
         raise HTTPException(422, "章节摘要超过单次写作上限 8000 字符")
-    context["chapter"] = {key: chapter[key] for key in ("id", "chapter_number", "title", "summary")}
+    context["chapter"] = {key: chapter[key] for key in ("id", "project_id", "volume_id", "chapter_number", "title", "summary")}
     context["previous_chapter"] = await previous_chapter(session, chapter["project_id"], chapter["chapter_number"])
-    if review:
+    context["character_progress"] = []
+    while True:
+        page = await call_novel_tool(session, "list_novel_character_progress", {
+            "project_id": chapter["project_id"], "before_chapter_number": chapter["chapter_number"],
+            "latest": True, "limit": 100, "offset": len(context["character_progress"]),
+        })
+        context["character_progress"].extend(page["items"])
+        if not page["has_more"]:
+            break
+        if not page["items"] or len(context["character_progress"]) >= 500:
+            raise HTTPException(422, "人物正文进展档案过多，请精简单个项目的角色数量")
+    if review or rewrite:
         if len(chapter["content"]) > 30000:
-            raise HTTPException(422, "正文超过单次审读上限 30000 字符")
+            raise HTTPException(422, "正文超过单次处理上限 30000 字符")
         context["chapter"]["content"] = chapter["content"]
+    if rewrite:
+        context["chapter"].update({key: chapter[key] for key in ("project_id", "volume_id", "status")})
+    if len(json.dumps(context, ensure_ascii=False, default=str)) > 200000:
+        raise HTTPException(422, "章节与人物资料超过单次容量，请精简档案后重试")
     return context
 
 
@@ -342,8 +403,40 @@ async def write_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAcc
     await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     context = await load_context(chapter_context, chapter_id, False)
     artifact = await generate(agents.DRAFT, context, payload)
-    emit_generation_event("status", message="正文校验通过，正在保存初稿…")
-    return await run_in_threadpool(save_draft, engine, chapter_id, artifact.content, context["chapter"])
+    emit_generation_event("status", message="正文生成完成，正在校验原文依据并同步人物进展档案…")
+    return await run_in_threadpool(save_draft, engine, chapter_id, artifact.content, context["chapter"], artifact.character_updates)
+
+
+@router.post("/outlines/{outline_id}/rewrite", response_model=OutlineReceipt, status_code=201, summary="重写大纲并保存为新版本")
+async def rewrite_outline(outline_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
+    project_id = await run_in_threadpool(task_project, engine, "novel_outline", outline_id, user.id)
+    context, sources = await load_context(character_context, project_id, outline_id)
+    artifact = await generate(agents.OUTLINE_REWRITE, context, payload)
+    if len(artifact.volumes) != payload.volume_count:
+        raise HTTPException(502, "模型返回的分卷数量与请求不符，重写结果未保存")
+    emit_generation_event("status", message="重写大纲校验通过，正在保存新版本…")
+    return await run_in_threadpool(save_outline, engine, project_id, artifact, sources)
+
+
+@router.post("/chapters/{chapter_id}/rewrite", response_model=DraftReceipt, summary="重写章节正文并保存为草稿")
+async def rewrite_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
+    context = await load_context(chapter_context, chapter_id, False, True)
+    artifact = await generate(agents.DRAFT_REWRITE, context, payload)
+    emit_generation_event("status", message="重写正文生成完成，正在同步人物档案并替换本章旧进展…")
+    return await run_in_threadpool(save_rewritten_draft, engine, chapter_id, artifact.content, context["chapter"], artifact.character_updates)
+
+
+@router.post("/outlines/{outline_id}/rewrite/stream", summary="实时重写大纲")
+async def stream_rewrite_outline(outline_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_outline", outline_id, user.id)
+    return generation_response(lambda: rewrite_outline(outline_id, payload, user, engine))
+
+
+@router.post("/chapters/{chapter_id}/rewrite/stream", summary="实时重写正文")
+async def stream_rewrite_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
+    return generation_response(lambda: rewrite_draft(chapter_id, payload, user, engine))
 
 
 @router.post("/chapters/{chapter_id}/review", response_model=ReviewReport, summary="审读章节正文并返回修改建议")
@@ -412,6 +505,22 @@ async def start_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAcc
     return generation_jobs.store.start(account_id=user.id, key=f"draft:{chapter_id}", kind="draft",
         title="生成章节正文", project_id=project_id, resource_id=chapter_id,
         operation=lambda: write_draft(chapter_id, payload, user, engine)).summary()
+
+
+@router.post("/outlines/{outline_id}/rewrite/tasks", status_code=202, summary="后台重写大纲")
+async def start_rewrite_outline(outline_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
+    project_id = await run_in_threadpool(task_project, engine, "novel_outline", outline_id, user.id)
+    return generation_jobs.store.start(account_id=user.id, key=f"outline:{project_id}", kind="outline",
+        title="重写小说大纲", project_id=project_id, resource_id=outline_id,
+        operation=lambda: rewrite_outline(outline_id, payload, user, engine)).summary()
+
+
+@router.post("/chapters/{chapter_id}/rewrite/tasks", status_code=202, summary="后台重写正文")
+async def start_rewrite_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    project_id = await run_in_threadpool(task_project, engine, "novel_chapter", chapter_id, user.id)
+    return generation_jobs.store.start(account_id=user.id, key=f"draft:{chapter_id}", kind="draft",
+        title="重写章节正文", project_id=project_id, resource_id=chapter_id,
+        operation=lambda: rewrite_draft(chapter_id, payload, user, engine)).summary()
 
 
 @router.post("/chapters/{chapter_id}/review/tasks", status_code=202, summary="后台审读正文")

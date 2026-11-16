@@ -32,3 +32,5 @@ body{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset
 .reuse-characters legend{font-size:.88rem;font-weight:650;color:var(--green)}
 .reuse-character{display:flex;align-items:flex-start;gap:10px;padding:12px 0;cursor:pointer;border-bottom:1px solid var(--line)}
 .reuse-character:last-child{border-bottom:0}.reuse-character input{flex:none;width:18px;height:18px;margin-top:3px}.reuse-character>span{min-width:0;overflow-wrap:anywhere}.reuse-character .muted{margin-top:4px;font-size:.8rem}
+.export-chapters{min-width:0;margin:0;padding:12px;border:1px solid var(--line);border-radius:8px;display:grid;gap:12px}.export-chapters legend{font-size:.88rem;font-weight:650;color:var(--green)}.export-chapters .mini-list{max-height:38dvh;overflow-y:auto;overscroll-behavior-y:contain}
+.character-fact{border:1px solid var(--line);border-radius:8px;padding:12px}.character-fact summary{cursor:pointer;color:var(--green);font-weight:650}.character-fact .details{margin-top:12px}.character-fact .prose,.character-fact dd{white-space:pre-wrap}

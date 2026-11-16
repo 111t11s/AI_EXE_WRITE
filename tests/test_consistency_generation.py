@@ -13,6 +13,8 @@ from sqlalchemy import text
 from agents import writing_agents as agents
 from agents.llm_streaming import emit_generation_event
 from agents.mcp.server import create_server
+from agents.mcp.worldbuilding import NovelToolError
+from api import novel_writing_api as writing
 from api.writing_schemas import ConsistencyReport
 from core.config import Settings
 from test_character_generation import novel
@@ -77,6 +79,116 @@ def test_review_reads_only_selected_bodies_and_all_reference_material(selection,
     assert any("不连续" in note for note in result["limitations"])
     assert result["references"] == [{"kind": "character", "record_id": data["character"], "label": "林川"}]
     assert len(seen) == 1 and snapshot(data) == before
+    materials = {(row["kind"], row["record_id"]) for row in result["reference_materials"]}
+    assert {("outline", data["outline"]), ("volume", data["volume"]), ("character", data["character"])} <= materials
+    assert {row["kind"] for row in result["reference_materials"]} >= {"plot_beat", "world", "power_system", "power_rank", "faction"}
+    assert not any(row["kind"] == "chapter" for row in result["reference_materials"])
+
+
+def test_full_archives_relationship_pagination_and_other_project_isolation(selection, monkeypatch):
+    data = selection
+    long_background = "原始经历" * 400 + "不能泄露渡口秘密"
+    data["client"].patch(f'/api/v1/characters/{data["character"]}', json={"background": long_background},
+                         headers=data["headers"]["writer"]).raise_for_status()
+    companion = data["create"]("characters", project_id=data["project"], name="舟客", role="向导", summary="渡河的伙伴")
+    for number in range(101):
+        data["create"]("character-relationships", source_character_id=companion, target_character_id=data["character"],
+                       relationship_type=f"关系{number}", description=f"第{number}次同行", changed_at_chapter=1)
+    cast = data["create"]("volume-characters", volume_id=data["volume"], character_id=companion, scenes="引导林川渡河")
+    foreign = data["create"]("projects", title="其他小说", genre="都市", setting="现代", tone="轻松", target_length="短篇", protagonist_goal="生活")
+    foreign_ids = [data["create"]("characters", project_id=foreign, name=name, role="配角", summary="不应读取") for name in ("外部甲", "外部乙")]
+    data["create"]("character-relationships", source_character_id=foreign_ids[0], target_character_id=foreign_ids[1],
+                   relationship_type="秘密关系", description="不应出现在核对资料中")
+
+    def generate(role, context):
+        assert next(row for row in context["characters"] if row["id"] == data["character"])["background"] == long_background
+        assert len(context["character_relationships"]) == 101
+        assert all(row["source_character_id"] == companion for row in context["character_relationships"])
+        assert context["volumes"][0]["cast"][0]["id"] == cast
+        assert "不应出现在核对资料中" not in json.dumps(context, ensure_ascii=False)
+        return report(data)
+
+    monkeypatch.setattr(agents, "generate", generate)
+    response = data["client"].post(data["path"], json=data["payload"], headers=data["headers"]["writer"])
+    assert response.status_code == 200, response.text
+    materials = response.json()["reference_materials"]
+    assert len([row for row in materials if row["kind"] == "character_relationship"]) == 101
+    assert any(row["kind"] == "volume_character" and "舟客" in row["label"] for row in materials)
+
+
+@pytest.mark.parametrize("kind,field,quote", [
+    ("power_system", "limitations", "不可无中生水"),
+    ("power_rank", "capabilities", "感知水流"),
+    ("faction", "summary", "护送旅人"),
+    ("region", "description", "渡口禁止建坝"),
+    ("cheat_system", "costs", "每次耗尽灵气"),
+    ("character_relationship", "description", "两人是同行伙伴"),
+    ("volume_character", "scenes", "本卷负责引路"),
+])
+def test_related_archives_are_validated_as_real_citation_sources(selection, monkeypatch, kind, field, quote):
+    data = selection
+    data["create"]("regions", world_id=data["world"], name="渡口", description="渡口禁止建坝")
+    data["create"]("cheat-systems", world_id=data["world"], name="听水", cheat_type="感知", costs="每次耗尽灵气")
+    companion = data["create"]("characters", project_id=data["project"], name="舟客", role="向导", summary="渡河的伙伴")
+    data["create"]("character-relationships", source_character_id=data["character"], target_character_id=companion,
+                   relationship_type="伙伴", description="两人是同行伙伴")
+    data["create"]("volume-characters", volume_id=data["volume"], character_id=companion, scenes="本卷负责引路")
+
+    def generate(role, context):
+        row = (context["character_relationships"][0] if kind == "character_relationship" else
+               context["volumes"][0]["cast"][0] if kind == "volume_character" else
+               context["power_ranks" if kind == "power_rank" else kind][0])
+        value = report(data).model_dump()
+        value["issues"][0]["basis"] = {"kind": kind, "record_id": row["id"], "field": field, "quote": quote}
+        return ConsistencyReport.model_validate(value)
+
+    monkeypatch.setattr(agents, "generate", generate)
+    response = data["client"].post(data["path"], json=data["payload"], headers=data["headers"]["writer"])
+    assert response.status_code == 200, response.text
+    assert response.json()["references"][0]["kind"] == kind
+
+
+def test_archive_read_failure_stops_before_model_instead_of_guessing(selection, monkeypatch):
+    data, calls = selection, []
+    original = writing.call_novel_tool
+
+    async def unavailable(session, name, arguments):
+        if name == "list_novel_character_relationship":
+            raise NovelToolError(name)
+        return await original(session, name, arguments)
+
+    monkeypatch.setattr(writing, "call_novel_tool", unavailable)
+    monkeypatch.setattr(agents, "generate", lambda *args: calls.append(args))
+    response = data["client"].post(data["path"], json=data["payload"], headers=data["headers"]["writer"])
+    assert response.status_code == 503, response.text
+    assert calls == []
+
+
+@pytest.mark.parametrize("problem", ["same_chapter", "workflow_status", "character_without_archive"])
+def test_self_citations_and_workflow_metadata_cannot_substitute_for_archives(selection, monkeypatch, problem):
+    data = selection
+    value = report(data).model_dump()
+    issue = value["issues"][0]
+    if problem == "workflow_status":
+        issue["basis"] = {"kind": "outline", "record_id": data["outline"], "field": "status", "quote": "draft"}
+    else:
+        issue["category"] = "continuity" if problem == "same_chapter" else "character"
+        chapter_index = 0 if problem == "same_chapter" else 3
+        issue["basis"] = {"kind": "chapter", "record_id": data["chapter_ids"][chapter_index], "field": "content",
+                          "quote": "林川凭空造出河流。" if chapter_index == 0 else "第4章正文"}
+    monkeypatch.setattr(agents, "generate", lambda *args: ConsistencyReport.model_validate(value))
+    response = data["client"].post(data["path"], json=data["payload"], headers=data["headers"]["writer"])
+    assert response.status_code == 502, response.text
+
+
+def test_continuity_can_cite_another_selected_chapter(selection, monkeypatch):
+    data = selection
+    value = report(data).model_dump()
+    value["issues"][0].update(category="continuity", basis={"kind": "chapter", "record_id": data["chapter_ids"][3],
+        "field": "content", "quote": "第4章正文"})
+    monkeypatch.setattr(agents, "generate", lambda *args: ConsistencyReport.model_validate(value))
+    response = data["client"].post(data["path"], json=data["payload"], headers=data["headers"]["writer"])
+    assert response.status_code == 200, response.text
 
 
 @pytest.mark.parametrize("suffix", ["", "/tasks"])
@@ -147,6 +259,19 @@ def test_no_drift_and_insufficient_are_distinct_results(selection, monkeypatch, 
     assert response.status_code == 200 and response.json()["verdict"] == verdict
 
 
+def test_scope_notes_and_model_limitations_are_all_preserved(selection, monkeypatch):
+    data = selection
+    with data["engine"].begin() as connection:
+        connection.execute(text("UPDATE novel_chapter SET volume_id=NULL WHERE id=:id"), {"id": data["chapter_ids"][0]})
+    limitations = [f"待核实资料{number}" for number in range(12)]
+    monkeypatch.setattr(agents, "generate", lambda *args: ConsistencyReport(
+        verdict="insufficient", summary="对应时期资料不足", issues=[], limitations=limitations))
+    response = data["client"].post(data["path"], json=data["payload"], headers=data["headers"]["writer"])
+    assert response.status_code == 200, response.text
+    assert len(response.json()["limitations"]) == 17
+    assert set(limitations) <= set(response.json()["limitations"])
+
+
 def test_background_review_is_explicit_streamed_deduplicated_and_account_scoped(selection, monkeypatch):
     data = selection
     entered, release = threading.Event(), threading.Event()
@@ -212,6 +337,15 @@ def test_consistency_agent_streams_via_sdk_without_browsing_other_chapters(selec
 
     monkeypatch.setattr(agents, "get_settings", lambda: settings)
     monkeypatch.setattr(agents, "OpenAI", lambda **kwargs: OpenAI(**kwargs, http_client=httpx.Client(transport=httpx.MockTransport(respond))))
-    value = generate_agent(agents.CONSISTENCY, {"selected_chapters": [], "request": data["payload"]})
-    assert value.verdict == "drifted" and requests[0]["stream"] is True
+    monkeypatch.setattr(agents, "generate", generate_agent)
+    response = data["client"].post(data["path"], json=data["payload"], headers=data["headers"]["writer"])
+    assert response.status_code == 200, response.text
+    assert response.json()["verdict"] == "drifted" and requests[0]["stream"] is True
     assert "tools" not in requests[0] and len(requests) == 1
+    prompt = requests[0]["messages"][-1]["content"]
+    context = json.loads(prompt.split("资料和用户要求：", 1)[1])
+    assert context["outline"]["id"] == data["outline"]
+    assert context["characters"][0]["abilities"] == "只能感知水脉，不能凭空造水"
+    assert context["power_system"][0]["limitations"] == "不可无中生水"
+    assert [row["chapter_number"] for row in context["selected_chapters"]] == [1, 4]
+    assert "第2章正文" not in prompt and "第3章正文" not in prompt

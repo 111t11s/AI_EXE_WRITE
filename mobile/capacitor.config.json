@@ -2,6 +2,7 @@
   "appId": "com.aitxt.mojian",
   "appName": "墨间",
   "webDir": "www",
+  "loggingBehavior": "none",
   "server": {
     "androidScheme": "https",
     "cleartext": true

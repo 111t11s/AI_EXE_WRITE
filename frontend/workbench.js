@@ -9,9 +9,9 @@ const statusNames = {planning: '规划中', writing: '写作中', completed: '�
 const labels = {genre: '小说类型', setting: '时代与背景', power_system: '力量体系', cheat: '金手指',
   protagonist: '主角设定', goal: '主角目标', tone: '故事基调', length: '篇幅规划'};
 const pageSize = 15;
-const initialState = () => ({projects: [], project: null, worlds: [], outlines: [], tab: 'overview',
+const initialState = () => ({projects: [], project: null, libraryOwner: 'all', worlds: [], outlines: [], tab: 'overview',
   outline: null, volumes: null, volume: null, beats: null, page: null, chapter: null, chapterId: null,
-  characters: null, characterError: null, characterLoading: false, characterOutlineId: null,
+  characters: null, characterProfiles: null, characterProgress: null, characterError: null, characterLoading: false, characterOutlineId: null,
   consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
   consistencyOutlineId: null, consistencyReport: null,
   taskCategory: 'all', taskStatus: 'running', taskMenuOpen: false, tasksLoaded: false, tasksError: null,
@@ -35,6 +35,11 @@ function element(tag, props = {}, ...children) {
 
 const button = (text, click, style = 'secondary', disabled = false) =>
   element('button', {type: 'button', class: `button ${style}`, click, disabled}, text);
+const readOnlyProject = () => Boolean(account?.is_admin && state.project && state.project.account_id !== account.id);
+const mutationButton = (...args) => readOnlyProject() ? null : button(...args);
+const projectOwner = project => project.owner_username ?
+  `${project.owner_display_name || project.owner_username}（${project.owner_username}）` :
+  project.account_id ? `账号 #${project.account_id}` : '未分配账号';
 const pill = (text, warm = false) => element('span', {class: `pill${warm ? ' warm' : ''}`}, text);
 const prose = (text) => element('p', {class: 'prose'}, text || '暂无内容');
 const muted = (text) => element('p', {class: 'muted'}, text);
@@ -137,6 +142,10 @@ async function loadJobs(quiet = true) {
   try {
     const page = await api('/generation-jobs');
     if (account !== requestingAccount || !current('jobs', request)) return;
+    for (const job of page.items) {
+      if (job.kind === 'draft' && job.status === 'completed' &&
+          jobList.find(item => item.id === job.id)?.status !== 'completed') state.reviews.delete(job.resource_id);
+    }
     const changed = !state.tasksLoaded || state.tasksError || JSON.stringify(jobList) !== JSON.stringify(page.items);
     jobList = page.items;
     state.tasksLoaded = true;
@@ -192,6 +201,7 @@ function taskCenterView() {
 }
 
 function renderTaskResult(job, result) {
+  if (job.kind === 'draft') state.reviews.delete(job.resource_id);
   const content = [];
   if (job.kind === 'review') content.push(reviewView(result));
   else if (job.kind === 'consistency') content.push(consistencyReportView(result));
@@ -200,11 +210,13 @@ function renderTaskResult(job, result) {
     if (job.kind === 'worldbuilding') message = result.persistence?.world_id ? '世界观已保存。' : '生成已完成，请核对保存状态。';
     if (job.kind === 'outline') message = `大纲 v${result.version_no} 已保存，共 ${result.volume_ids.length} 卷。`;
     if (job.kind === 'plan') message = `已保存 ${result.chapters.length} 个计划章节。`;
-    if (job.kind === 'draft') message = `正文已保存，共 ${result.word_count} 字。`;
+    if (job.kind === 'draft') message = `正文已保存，共 ${result.word_count} 字，人物正文进展档案已同步。`;
     if (job.kind === 'characters') {
       const counts = [['protagonist', '主角'], ['important', '重要配角'], ['supporting', '配角']]
         .filter(([kind]) => result.counts[kind]).map(([kind, label]) => `${label} ${result.counts[kind]} 位`).join('、');
-      message = `已新增 ${result.character_ids.length} 位角色${counts ? `（${counts}）` : ''}${result.reused_character_ids?.length ? `，复用 ${result.reused_character_ids.length} 位配角并保存本卷新戏份` : ''}。`;
+      message = !result.character_ids.length && result.profile_character_ids?.length ?
+        `已保存 ${result.profile_character_ids.length} 位角色的阶段档案。` :
+        `已新增 ${result.character_ids.length} 位角色${counts ? `（${counts}）` : ''}${result.reused_character_ids?.length ? `，复用 ${result.reused_character_ids.length} 位配角并保存本卷新戏份` : ''}${result.profile_character_ids?.length ? '，阶段档案已一并保存' : ''}。`;
     }
     content.push(panel('生成结果', prose(message)));
   }
@@ -224,9 +236,10 @@ function renderTaskResult(job, result) {
     } else if (job.kind === 'characters') {
       if (result.volume_id) {
         state.tab = 'outline';
-        await loadOutline(job.resource_id, result.volume_id);
+        await loadOutline(result.outline_id || job.resource_id, result.volume_id);
       } else {
         state.tab = 'characters';
+        if (result.outline_id) state.characterOutlineId = result.outline_id;
         await loadCharacters();
       }
     } else if (job.kind === 'outline') {
@@ -318,14 +331,25 @@ function connection(message, status) {
 }
 
 function renderLibrary() {
-  $('projects').replaceChildren(...(state.projects.length ? state.projects.map((project) =>
+  $('library-title').textContent = account?.is_admin ? '全部账号的小说' : '项目书架';
+  $('library-owner-control').hidden = !account?.is_admin;
+  const owners = new Map(state.projects.map(project => [String(project.account_id ?? 'unassigned'), projectOwner(project)]));
+  $('library-owner').replaceChildren(element('option', {value: 'all'}, '全部账号'),
+    ...[...owners].map(([id, name]) => element('option', {value: id}, name)));
+  if (state.libraryOwner !== 'all' && !owners.has(state.libraryOwner)) state.libraryOwner = 'all';
+  $('library-owner').value = state.libraryOwner;
+  const projects = state.projects.filter(project => !account?.is_admin || state.libraryOwner === 'all' ||
+    String(project.account_id ?? 'unassigned') === state.libraryOwner);
+  $('projects').replaceChildren(...(projects.length ? projects.map((project) =>
     element('button', {type: 'button', class: 'project-link', 'aria-current': String(state.project?.id === project.id),
       disabled: state.busy, click: () => openProject(project.id)},
     element('span', {class: 'project-badge', 'aria-hidden': 'true'}, Array.from(project.title || '未')[0]),
     element('span', {}, element('strong', {}, project.title || '未命名小说'),
-      element('small', {}, project.genre || '小说')))) :
+      element('small', {}, account?.is_admin ? `${project.genre || '小说'} · ${projectOwner(project)}` : project.genre || '小说')))) :
     [element('p', {class: 'rail-note'}, state.libraryError ? '书架读取失败，点击刷新重试。' : '还没有小说项目。')]));
 }
+
+$('library-owner').onchange = event => { state.libraryOwner = event.target.value; renderLibrary(); };
 
 function rememberedProject() {
   try { return Number(localStorage.getItem(`mojian-project-${account.id}`)); } catch { return null; }
@@ -363,7 +387,7 @@ async function openProject(projectId) {
     tab: 'overview', outline: null, volumes: null, volume: null, beats: null, page: null,
     chapter: null, chapterId: null, chapterLoading: false, chapterListError: null, outlineError: null,
     volumeError: null, projectLoading: true, projectError: null,
-    characters: null, characterError: null, characterLoading: false, characterOutlineId: null,
+    characters: null, characterProfiles: null, characterProgress: null, characterError: null, characterLoading: false, characterOutlineId: null,
     consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
     consistencyOutlineId: null, consistencyReport: null});
   notify();
@@ -411,7 +435,10 @@ function hero(project) {
   return element('section', {class: 'hero'}, element('p', {class: 'eyebrow'}, '小说项目'),
     element('h1', {}, project.title || '未命名小说'), project.premise ? element('p', {}, project.premise) : null,
     element('div', {class: 'hero-meta'}, pill(project.genre || '小说'), pill(statusNames[project.status] ?? project.status),
-      project.tone ? pill(project.tone) : null));
+      project.tone ? pill(project.tone) : null,
+      account?.is_admin ? pill(`所属账号：${projectOwner(project)}`) : null),
+    readOnlyProject() ? muted('管理员只读查看：可阅读和导出，编辑与生成由所属账号操作。') : null,
+    button('导出小说', exportDialog, 'secondary', state.busy || state.projectLoading || Boolean(state.projectError)));
 }
 
 function overview() {
@@ -449,7 +476,8 @@ function render() {
     return;
   }
   const tabs = element('nav', {class: 'tabs', 'aria-label': '项目页面'},
-    [['overview', '概览'], ['characters', '角色'], ['outline', '大纲与分卷'], ['chapters', '章节与正文'], ['consistency', '一致性核对']].map(([tab, title]) =>
+    [['overview', '概览'], ['characters', '角色'], ['outline', '大纲与分卷'], ['chapters', '章节与正文'], ['consistency', '一致性核对']]
+      .filter(([tab]) => tab !== 'consistency' || !readOnlyProject()).map(([tab, title]) =>
       element('button', {type: 'button', class: 'tab', 'aria-current': state.tab === tab ? 'page' : null,
         click: () => activate(tab)}, title)));
   let content;
@@ -470,7 +498,7 @@ async function activate(tab) {
   if (state.projectLoading || state.projectError) return;
   if (tab === 'outline' && !state.outline && state.outlines[0]) await loadOutline(state.outlines[0].id);
   if (tab === 'chapters' && !state.page && !state.chapterLoading) await loadChapters();
-  if (tab === 'characters' && state.characters === null && !state.characterLoading) await loadCharacters();
+  if (tab === 'characters' && !state.characterLoading) await loadCharacters();
   if (tab === 'consistency' && !state.consistencyPage && !state.consistencyLoading) await loadConsistencyChapters();
 }
 
@@ -505,7 +533,7 @@ function consistencyView() {
     change: (event) => { state.consistencyOutlineId = Number(event.target.value); }},
     state.outlines.map(row => element('option', {value: row.id, selected: row.id === outlineId}, `大纲 v${row.version_no}`)));
   const controls = panel('一致性核对智能体', stack(
-    muted('多选章节，结合指定大纲、人物档案和世界规则检查情节与人物是否偏移。仅在点击开始后运行，报告包含章节原文、对照依据和修改建议。'),
+    muted('多选章节，先读取指定大纲、人物档案、人物关系及相关设定，再逐项对照正文。每个问题必须有档案与正文原文依据，资料不足时说明限制。'),
     actions(element('label', {class: 'control'}, '对照大纲', version),
       button(`核对所选章节（${selected.length}）`, consistencyDialog, 'primary', state.busy || !selected.length || !outlineId || state.worlds.length !== 1),
       button('清空选择', () => { state.consistencySelection.clear(); render(); }, 'secondary', !selected.length),
@@ -541,13 +569,20 @@ function consistencyView() {
 function consistencyReportView(report) {
   const verdicts = {consistent: '所选范围未发现明确偏移', drifted: '发现偏移，建议修正', insufficient: '资料不足，暂无法完整判断'};
   const categories = {plot: '剧情偏移', character: '人物偏移', world: '设定冲突', continuity: '章节衔接'};
-  const kinds = {outline: '大纲', volume: '分卷', plot_beat: '剧情节点', character: '人物档案', world: '世界观', chapter: '章节'};
+  const kinds = {project: '小说设定', outline: '大纲', volume: '分卷', plot_beat: '剧情节点', character: '人物档案',
+    character_relationship: '人物关系', volume_character: '本卷戏份', world: '世界观', region: '地域档案',
+    power_system: '力量体系', power_rank: '力量等级', cheat_system: '金手指设定', faction: '势力档案', chapter: '章节'};
   const fieldLabels = {content: '正文', summary: '概要', personality: '性格', background: '背景', goal: '目标', motivation: '动机',
     weakness: '弱点', character_arc: '成长弧线', abilities: '能力', rules: '规则', history: '历史', cultures: '文化',
-    central_conflict: '核心冲突', themes: '主题', protagonist_goal: '主角目标', main_conflict: '主要冲突', climax: '高潮', ending_hook: '结尾悬念', foreshadowing: '伏笔'};
+    central_conflict: '核心冲突', themes: '主题', protagonist_goal: '主角目标', main_conflict: '主要冲突', climax: '高潮', ending_hook: '结尾悬念', foreshadowing: '伏笔',
+    scenes: '戏份安排', relationship_type: '关系类型', description: '描述', limitations: '限制', capabilities: '能力范围',
+    growth_rules: '成长规则', breakthrough_condition: '突破条件', source: '力量来源', functions: '功能', costs: '代价',
+    growth_path: '成长路径', story_secret: '剧情秘密', relationships: '势力关系', territory: '领地', status: '人物状态'};
   return panel('一致性核对报告', stack(prose(report.summary),
     muted(`对照大纲 v${report.outline_version} · 读取时间：${new Date(report.checked_at).toLocaleString()}`),
     muted(`核对范围：${report.chapters.map(row => `第 ${row.chapter_number} 章 · ${row.title}`).join('、')}`),
+    report.reference_materials?.length ? details(['已读取的对照档案', report.reference_materials
+      .map(row => `${kinds[row.kind] || row.kind} · ${row.label}`).join('\n')]) : null,
     ...report.issues.map(issue => {
       const reference = report.references.find(row => row.kind === issue.basis.kind && row.record_id === issue.basis.record_id);
       return element('section', {class: 'report-issue'}, actions(pill(categories[issue.category]), pill(issue.severity === 'major' ? '主要问题' : '细节建议', true)),
@@ -571,8 +606,13 @@ async function loadCharacters() {
   state.characterError = null;
   render();
   try {
-    const rows = await allRows('/characters', {project_id: projectId});
-    if (current('characters', token)) state.characters = rows;
+    const outlineId = state.characterOutlineId || state.outlines[0]?.id;
+    const [rows, profiles, progress] = await Promise.all([
+      allRows('/characters', {project_id: projectId}),
+      outlineId ? api(`/writing/projects/${projectId}/character-profiles`, {filters: {outline_id: outlineId}}) : Promise.resolve({items: []}),
+      api(`/writing/projects/${projectId}/character-progress`),
+    ]);
+    if (current('characters', token)) { state.characters = rows; state.characterProfiles = profiles; state.characterProgress = progress; }
   } catch (error) {
     if (current('characters', token)) state.characterError = error.message;
   } finally {
@@ -580,18 +620,43 @@ async function loadCharacters() {
   }
 }
 
+async function moreCharacterProgress() {
+  const projectId = state.project.id;
+  const previous = state.characterProgress;
+  if (!previous?.has_more || state.characterLoading) return;
+  const request = key('characters');
+  state.characterLoading = true;
+  render();
+  try {
+    const page = await api(`/writing/projects/${projectId}/character-progress`, {filters: {offset: previous.items.length}});
+    if (current('characters', request)) state.characterProgress = {...page, items: [...previous.items, ...page.items]};
+  } catch (error) { if (current('characters', request)) notify(`正文进展读取失败：${error.message}`, 'error'); }
+  finally { if (current('characters', request)) { state.characterLoading = false; render(); } }
+}
+
+function characterProgressView(id) {
+  const entries = (state.characterProgress?.items || []).filter(row => row.character_id === id);
+  return stack(rule(), element('h3', {}, '正文进展（已发生）'),
+    ...entries.map(row => element('details', {class: 'character-fact'},
+      element('summary', {}, `第 ${row.chapter_number} 章 · ${row.title || '未命名章节'}`),
+      details(['本章行动与结果', row.actions], ['截至本章状态', row.current_state], ['人物关系', row.relationships]),
+      element('details', {}, element('summary', {}, '正文依据'),
+        ...row.evidence.map(quote => element('blockquote', {class: 'consistency-quote'}, quote))))),
+    entries.length ? null : muted('尚无已同步的正文进展；新生成或重写正文时自动更新。'));
+}
+
 function characterView() {
   const outlineId = state.characterOutlineId || state.outlines[0]?.id;
   const version = element('select', {'aria-label': '配角生成使用的大纲版本',
-    change: (event) => { state.characterOutlineId = Number(event.target.value); }},
+    change: (event) => { state.characterOutlineId = Number(event.target.value); state.characterProfiles = null; void loadCharacters(); }},
     state.outlines.map(row => element('option', {value: row.id, selected: row.id === outlineId}, `大纲 v${row.version_no}`)));
-  const controls = panel('角色生成智能体', stack(
-    muted('根据当前世界观建立主角与重要配角；大纲完成后，再补充推动剧情的其他配角。任务在后台生成，可通过「查看进度」查看实时内容。'),
-    actions(button('生成主角与重要配角', coreCharacterDialog, 'primary', state.busy || state.worlds.length !== 1),
+  const controls = panel(readOnlyProject() ? '角色档案浏览' : '角色生成智能体', stack(
+    muted(readOnlyProject() ? '选择大纲版本查看各卷角色档案及正文进度。' : '根据当前世界观建立主角与重要配角；大纲完成后，再补充推动剧情的其他配角。任务在后台生成，可通过「查看进度」查看实时内容。'),
+    actions(mutationButton('生成主角与重要配角', coreCharacterDialog, 'primary', state.busy || state.worlds.length !== 1),
       state.outlines.length ? version : null,
-      button('根据大纲补充配角', () => supportingCharacterDialog(), 'secondary', state.busy || !state.outlines.length || state.worlds.length !== 1),
+      mutationButton('根据大纲补充配角', () => supportingCharacterDialog(), 'secondary', state.busy || !state.outlines.length || state.worlds.length !== 1),
       button('刷新角色', loadCharacters, 'secondary', state.characterLoading)),
-    muted('按分卷设置新增配角数量；后续卷可勾选前卷配角，为他们安排新戏份。已有角色档案会保留。'),
+    muted('正文生成和重写后，自动同步人物已发生的行动、当前状态及关系变化，并保留正文原句依据。基础设定、大纲计划与正文进展分开展示；手动修改正文会清除该章旧进展，需重写后重新同步。'),
     state.worlds.length !== 1 ? muted('请先设置唯一的当前世界观。') : null,
     !state.outlines.length ? muted('生成大纲后即可补充剧情配角。') : null));
   if (state.characterError) return stack(controls, empty('角色读取失败', state.characterError, button('重试', loadCharacters)));
@@ -601,7 +666,20 @@ function characterView() {
     element('details', {class: 'character-card'}, element('summary', {}, element('strong', {}, row.name), ' ', pill(row.role)),
       details(['简介与剧情作用', row.summary], ['性格', row.personality], ['背景经历', row.background],
         ['目标', row.goal], ['动机', row.motivation], ['弱点', row.weakness], ['成长弧线', row.character_arc],
-        ['能力', row.abilities], ['首次出场章节', row.first_appearance_chapter ? String(row.first_appearance_chapter) : null]))))));
+        ['能力', row.abilities], ['首次出场章节', row.first_appearance_chapter ? String(row.first_appearance_chapter) : null]),
+      characterProgressView(row.id),
+      ...(state.characterProfiles?.items || []).filter(profile => profile.character_id === row.id).map(profile =>
+        stack(rule(), element('h3', {}, `第 ${profile.volume_number} 卷 · ${profile.volume_title}`),
+          prose(profile.scenes), muted(profileProgress(profile.progress)))),
+      mutationButton('生成阶段档案', () => characterProfileDialog(null, row.id), 'secondary',
+        state.busy || !outlineId || state.worlds.length !== 1)))),
+    state.characterProgress?.has_more ? button('加载更多正文进展', moreCharacterProgress, 'secondary', state.characterLoading) : null));
+}
+
+function profileProgress(progress) {
+  if (!progress?.planned_chapters) return '当前写作进度：本卷尚未规划章节；档案内容为大纲计划。';
+  return `当前写作进度：本卷 ${progress.planned_chapters} 章中有 ${progress.written_chapters} 章已保存正文` +
+    `${progress.last_written_chapter ? `，最近写到第 ${progress.last_written_chapter} 章` : ''}。正文数量不代表角色阶段结果已发生。`;
 }
 
 async function loadOutline(id, preferredVolume) {
@@ -640,7 +718,7 @@ async function loadVolume(id) {
 }
 
 function outlineView() {
-  const create = button('生成新大纲', outlineDialog, 'primary', state.busy || state.worlds.length !== 1);
+  const create = mutationButton('生成新大纲', outlineDialog, 'primary', state.busy || state.worlds.length !== 1);
   if (!state.outlines.length) return empty('还没有大纲', state.worlds.length === 1 ?
     '以当前世界观生成第一版大纲，分卷和剧情节点会一并保存。' : '需要先为项目设置唯一的当前世界观。', create);
   const versionSelect = element('select', {'aria-label': '大纲版本', change: (event) => loadOutline(Number(event.target.value))},
@@ -648,7 +726,8 @@ function outlineView() {
       `版本 ${row.version_no} · ${statusNames[row.status] ?? row.status}`)));
   const header = panel('大纲版本', state.outline ? details(['全书摘要', state.outline.summary],
     ['核心冲突', state.outline.central_conflict], ['主题', state.outline.themes]) : muted('正在读取大纲…'), null,
-  actions(versionSelect, create));
+  actions(versionSelect, state.outline ? mutationButton('重写大纲', () => outlineRewriteDialog(state.outline), 'secondary',
+    state.busy || state.worlds.length !== 1 || !state.volumes?.length) : null, create));
   if (state.outlineError) return stack(header, empty('分卷读取失败', state.outlineError, button('重试', () => loadOutline(state.outline.id))));
   if (!state.volumes) return stack(header, empty('正在读取分卷', '请稍候。'));
   if (!state.volumes.length) return stack(header, empty('这一版没有分卷', '可生成新大纲，或通过接口补充分卷。'));
@@ -660,10 +739,11 @@ function outlineView() {
       element('li', {}, element('strong', {}, beat.title), prose(beat.summary), beat.foreshadowing ? prose(`伏笔：${beat.foreshadowing}`) : null))) : muted('这一卷暂无剧情节点。');
   const detail = v ? panel(v.title, stack(details(['分卷摘要', v.summary], ['主角目标', v.protagonist_goal], ['主要冲突', v.main_conflict],
     ['高潮', v.climax], ['结尾悬念', v.ending_hook]), rule(), element('h3', {}, '剧情节点'), beats,
-    state.volumeCast?.length ? stack(rule(), element('h3', {}, '本卷配角戏份'),
+    state.volumeCast?.length ? stack(rule(), element('h3', {}, '本卷角色阶段档案'),
       ...state.volumeCast.map(row => stack(element('strong', {}, row.name), prose(row.scenes)))) : null), `第 ${v.volume_number} 卷`,
-  actions(button('生成本卷配角', () => supportingCharacterDialog(v), 'secondary', state.busy || state.worlds.length !== 1),
-    button('规划章节 →', () => planDialog(v), 'primary', state.busy || state.worlds.length !== 1))) : empty('请选择分卷', '打开一卷查看剧情节点。');
+  actions(mutationButton('生成本卷配角', () => supportingCharacterDialog(v), 'secondary', state.busy || state.worlds.length !== 1),
+    mutationButton('生成已有角色阶段档案', () => characterProfileDialog(v), 'secondary', state.busy || state.worlds.length !== 1),
+    mutationButton('规划章节 →', () => planDialog(v), 'primary', state.busy || state.worlds.length !== 1))) : empty('请选择分卷', '打开一卷查看剧情节点。');
   return stack(header, element('div', {class: 'layout reading'}, volumeList, detail));
 }
 
@@ -676,7 +756,7 @@ async function loadChapters(offset = 0, selectedId = state.chapterId) {
     if (!current('chapters', token)) return;
     state.page = page;
     const next = selectedId ?? page.items[0]?.id;
-    if (next && state.chapter?.id !== next) await loadChapter(next);
+    if (next) await loadChapter(next);
   } catch (error) {
     if (current('chapters', token)) state.chapterListError = error.message;
   } finally { if (current('chapters', token)) { state.chapterLoading = false; render(); } }
@@ -722,9 +802,10 @@ function chapterView() {
   const section = panel(chapter.title || '未命名章节', stack(details(['章节规划', chapter.summary]), rule(),
     hasContent ? element('article', {class: 'reader', tabindex: 0, 'aria-label': '章节正文'}, chapter.content) : muted('正文还没开始。可以生成初稿，也可以手动写。')),
   `第 ${chapter.chapter_number} 章 · ${statusNames[chapter.status] ?? chapter.status} · ${chapter.word_count ?? 0} 字`, actions(
-    !hasContent && chapter.status === 'planned' ? button('生成正文', () => draftDialog(chapter), 'primary', state.busy || state.worlds.length !== 1) : null,
-    canEdit ? button('编辑章节', () => editDialog(chapter), 'secondary', state.busy) : null,
-    hasContent ? button('审读本章', () => reviewDialog(chapter), 'secondary', state.busy || state.worlds.length !== 1) : null));
+    !hasContent && chapter.status === 'planned' ? mutationButton('生成正文', () => draftDialog(chapter), 'primary', state.busy || state.worlds.length !== 1) : null,
+    hasContent ? mutationButton('重写正文', () => draftDialog(chapter, true), 'primary', state.busy || state.worlds.length !== 1) : null,
+    canEdit ? mutationButton('编辑章节', () => editDialog(chapter), 'secondary', state.busy) : null,
+    hasContent ? mutationButton('审读本章', () => reviewDialog(chapter), 'secondary', state.busy || state.worlds.length !== 1) : null));
   const report = state.reviews.get(chapter.id);
   return element('div', {class: 'layout reading'}, list, stack(section, report ? reviewView(report) : null));
 }
@@ -821,10 +902,142 @@ async function outlineDialog() {
   });
 }
 
+function exportDialog() {
+  const projectId = state.project.id;
+  const requestingAccount = account;
+  const selection = new Set();
+  let chapterPage = null;
+  let loading = false;
+  const picker = element('fieldset', {class: 'export-chapters', hidden: true},
+    element('legend', {}, '选择导出章节'));
+  const count = muted('已选择 0 章（可跨页选择）');
+  const chapterList = element('div', {class: 'mini-list'});
+  const paging = element('div', {class: 'paging'});
+  function updateCount() { count.textContent = `已选择 ${selection.size} 章（可跨页选择）`; }
+  function renderChoices() {
+    updateCount();
+    chapterList.replaceChildren(...chapterPage.items.map(row => {
+      const hasContent = Boolean(row.content?.trim());
+      return element('label', {class: 'reuse-character'},
+        element('input', {type: 'checkbox', value: row.id, checked: selection.has(row.id),
+          disabled: !hasContent, 'aria-label': `导出第 ${row.chapter_number} 章`, change: event => {
+            if (event.target.checked) selection.add(row.id);
+            else selection.delete(row.id);
+            updateCount();
+          }}),
+        element('span', {}, element('strong', {}, `第 ${row.chapter_number} 章 · ${row.title || '未命名'}`),
+          muted(hasContent ? `${row.word_count ?? 0} 字` : '暂无正文，无法导出')));
+    }));
+    if (!chapterPage.items.length) chapterList.append(muted('暂无章节。'));
+    paging.replaceChildren(
+      button('上一页', () => loadChoices(chapterPage.offset - pageSize), 'secondary', !chapterPage.offset),
+      `第 ${Math.floor(chapterPage.offset / pageSize) + 1} 页`,
+      button('下一页', () => loadChoices(chapterPage.offset + pageSize), 'secondary', !chapterPage.has_more));
+  }
+  async function loadChoices(offset = 0) {
+    if (loading) return;
+    loading = true;
+    chapterList.replaceChildren(muted('正在读取章节…'));
+    paging.replaceChildren();
+    try {
+      const page = await api('/chapters', {filters: {project_id: projectId, limit: pageSize, offset}});
+      if (task !== options || !action.open || account !== requestingAccount) return;
+      chapterPage = page;
+      renderChoices();
+    } catch (error) {
+      if (task === options && action.open && account === requestingAccount) {
+        chapterList.replaceChildren(muted(`章节读取失败：${error.message}`), button('重试读取章节', () => loadChoices(offset)));
+      }
+    } finally { loading = false; }
+  }
+  picker.append(count, actions(
+    button('全选本页', () => {
+      if (loading || !chapterPage) return;
+      for (const row of chapterPage.items) if (row.content?.trim()) selection.add(row.id);
+      renderChoices();
+    }),
+    button('清空选择', () => { selection.clear(); updateCount(); if (!loading && chapterPage) renderChoices(); })
+  ), chapterList, paging);
+  const capacitor = window.Capacitor;
+  const nativeExport = capacitor?.isNativePlatform?.() && capacitor.isPluginAvailable?.('NovelExport') ?
+    (capacitor.Plugins?.NovelExport || capacitor.registerPlugin('NovelExport')) : null;
+  const options = {title: '导出小说', description: '下载 ZIP 压缩包，每章一个文件，按全书章号排序。可导出全部正文或跨页勾选章节，自动跳过空正文；附带的大纲单独保存为文件。正在生成但尚未保存的内容不包含在压缩包中。',
+    submit: nativeExport ? '导出并选择保存位置' : '导出并下载', pending: '正在准备导出文件…', fields: [
+      {name: 'format', label: '章节文件格式', type: 'select', value: 'txt', choices: [
+        {value: 'txt', label: 'TXT 文本（适合阅读）'}, {value: 'md', label: 'Markdown（保留标题层级）'}]},
+      {name: 'scope', label: '导出范围', type: 'select', value: 'all', choices: [
+        {value: 'all', label: '全部章节'}, {value: 'selected', label: '选择章节'}], change: event => {
+        picker.hidden = event.target.value !== 'selected';
+        if (!picker.hidden && !chapterPage) void loadChoices();
+      }},
+      {name: 'outline_id', label: '附带大纲', type: 'select', value: '', choices: [
+        {value: '', label: '不附带大纲，只导出正文'},
+        ...state.outlines.map(row => ({value: row.id, label: `大纲 v${row.version_no}`}))]},
+    ], extra: picker,
+    send: async ({format, outline_id, scope}) => {
+      if (scope === 'selected' && !selection.size) throw new Error('请至少选择一个有正文的章节。');
+      const data = scope === 'selected' ? {format, ...(outline_id ? {outline_id: Number(outline_id)} : {}),
+        chapter_ids: [...selection]} : null;
+      const query = new URLSearchParams({format, ...(outline_id ? {outline_id} : {})});
+      const url = `${API_BASE_URL}/projects/${projectId}/export${data ? '' : `?${query}`}`;
+      if (nativeExport) {
+        const token = getAuthToken();
+        try { return {...await nativeExport.saveNovel({url, token, format, ...(data ? {data} : {})}), native: true}; }
+        catch (error) {
+          if (String(error.code) === '401' && getAuthToken() === token) {
+            setAuthToken();
+            window.dispatchEvent(new Event('aitxt:unauthorized'));
+          }
+          throw error;
+        }
+      }
+      const response = await authenticatedFetch(url, {cache: 'no-store', ...(data ? {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data),
+      } : {})});
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(typeof body?.detail === 'string' ? body.detail : `导出失败（${response.status}）`);
+      }
+      let filename = `novel-${projectId}.zip`;
+      const encoded = response.headers.get('Content-Disposition')?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      if (encoded) {
+        try { filename = decodeURIComponent(encoded); } catch { /* Use the fallback filename. */ }
+      }
+      return {blob: await response.blob(), filename};
+    },
+    success: result => result.cancelled ? '已取消导出保存。' : result.native ?
+      `小说已保存：${result.filename}` : '小说文件已准备好，已发起下载。',
+    after: ({blob, filename, native}) => {
+      if (native) return;
+      const url = URL.createObjectURL(blob);
+      const link = element('a', {href: url, download: filename, hidden: true});
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    },
+  };
+  openAction(options);
+}
+
+function outlineRewriteDialog(outline) {
+  openAction({title: '重写大纲', description: `基于大纲 v${outline.version_no}、现有角色和世界观重写全书结构，结果保存为新版本。原大纲、已有章节和原卷戏份保留在原版本中。`,
+    submit: '重写并保存新版本', fields: [numberField('volume_count', '重写后的分卷数', Math.min(5, state.volumes.length), 1, 5),
+      {...noteField, label: '重写要求（可选）', placeholder: '例如：保留主线，加强第二卷冲突，调整结尾伏笔'}],
+    taskPath: `/writing/outlines/${outline.id}/rewrite/tasks`});
+}
+
 function coreCharacterDialog() {
-  openAction({title: '生成主角与重要配角', description: '根据当前世界观、力量规则、势力和已有角色创作核心人物。数量表示本次新增人数。',
+  openAction({title: '生成主角与重要配角', description: '根据当前世界观创作核心人物。已有大纲时可同时生成角色在各卷的行动、阶段结果和进度关系。数量表示本次新增人数。',
     submit: '后台生成并保存', fields: [numberField('protagonist_count', '新增主角数', 1, 1, 2),
-      numberField('important_count', '新增重要配角数', 3, 0, 8), noteField],
+      numberField('important_count', '新增重要配角数', 3, 0, 8),
+      {name: 'outline_id', label: '依据大纲', type: 'select', value: state.characterOutlineId || state.outlines[0]?.id || '',
+        choices: [{value: '', label: '仅生成基础档案（尚无大纲时）'},
+          ...state.outlines.map(row => ({value: row.id, label: `大纲 v${row.version_no} · 同时生成阶段档案`}))]}, noteField],
+    payload: data => {
+      const {outline_id, ...values} = data;
+      return outline_id ? {...values, outline_id: Number(outline_id)} : values;
+    },
     taskPath: `/writing/projects/${state.project.id}/characters/core/tasks`});
 }
 
@@ -843,7 +1056,7 @@ async function supportingCharacterDialog(preferredVolume) {
   const reuse = element('fieldset', {class: 'reuse-characters', hidden: true});
   let requestSequence = 0;
   let selectionReady = false;
-  const options = {title: '根据分卷大纲生成配角', description: `使用大纲 v${outline.version_no} 的目标分卷安排配角。第二卷起可复用前卷配角；新增数可设为 0，仅生成勾选角色的新戏份。`,
+  const options = {title: '根据分卷大纲生成配角', description: `使用大纲 v${outline.version_no} 生成角色和阶段档案，写清本部分行动、阶段结果及进度关系。第二卷起可复用前卷配角；新增数可设为 0。`,
     submit: '后台生成并保存', fields: [
       {name: 'volume_id', label: '目标分卷', type: 'select', value: selectedVolume.id,
         choices: volumes.map(row => ({value: row.id, label: `第 ${row.volume_number} 卷 · ${row.title}`})),
@@ -884,6 +1097,37 @@ async function supportingCharacterDialog(preferredVolume) {
   if (task === options) await loadReuse(selectedVolume.id);
 }
 
+async function characterProfileDialog(preferredVolume = null, characterId = null) {
+  const outlineId = preferredVolume?.outline_id || state.characterOutlineId || state.outlines[0]?.id;
+  if (!outlineId) return;
+  const projectId = state.project.id;
+  const requestingAccount = account;
+  let volumes, characters;
+  try { [volumes, characters] = await Promise.all([
+    allRows('/outline-volumes', {outline_id: outlineId}), allRows('/characters', {project_id: projectId}),
+  ]); }
+  catch (error) { if (account === requestingAccount) notify(`档案资料读取失败：${error.message}`, 'error'); return; }
+  if (account !== requestingAccount || state.project?.id !== projectId) return;
+  if (!volumes.length || !characters.length) { notify('请先生成分卷大纲和角色基础档案。', 'error'); return; }
+  const selected = volumes.find(row => row.id === preferredVolume?.id) || volumes[0];
+  const choices = element('fieldset', {class: 'reuse-characters'}, element('legend', {}, '选择角色'),
+    ...characters.map(row => element('label', {class: 'reuse-character'},
+      element('input', {type: 'checkbox', name: 'profile_character_ids', value: row.id, checked: row.id === characterId}),
+      element('span', {}, element('strong', {}, row.name), ' ', pill(row.role)))));
+  const options = {title: '生成角色阶段档案', description: '根据大纲生成本部分行动、阶段结果和进度关系。基础人物档案保留；所选角色在目标分卷的阶段档案会更新。未来结局仅作为计划保存。',
+    submit: '后台生成并保存', fields: [
+      {name: 'volume_id', label: '目标分卷', type: 'select', value: selected.id,
+        choices: volumes.map(row => ({value: row.id, label: `第 ${row.volume_number} 卷 · ${row.title}`})),
+        change: event => { options.taskPath = `/writing/volumes/${Number(event.target.value)}/character-profiles/tasks`; }}, noteField], extra: choices,
+    taskPath: `/writing/volumes/${selected.id}/character-profiles/tasks`,
+    payload: (data, form) => {
+      const ids = form.getAll('profile_character_ids').map(Number);
+      if (!ids.length || ids.length > 20) throw new Error('请选择 1—20 位角色。');
+      return {character_ids: ids, instruction: data.instruction || ''};
+    }};
+  openAction(options);
+}
+
 function planDialog(volume) {
   const page = state.page;
   const start = page && !page.has_more ? Math.min((page.items.at(-1)?.chapter_number ?? 0) + 1, 4294967295) : 1;
@@ -894,7 +1138,7 @@ function planDialog(volume) {
   });
 }
 
-async function draftDialog(chapter) {
+async function draftDialog(chapter, rewrite = false) {
   const projectId = state.project.id;
   const requestingAccount = account;
   let characters;
@@ -908,7 +1152,15 @@ async function draftDialog(chapter) {
     coreCharacterDialog();
     return;
   }
-  openAction({title: '生成正文', description: `角色信息已就绪，为第 ${chapter.chapter_number} 章生成初稿，正文会直接保存到当前章节。`,
+  if (rewrite) {
+    openAction({title: '重写正文', description: `基于第 ${chapter.chapter_number} 章原文、角色和剧情资料重写。成功后替换当前正文并设为草稿，原审读建议清除；失败或期间章节被修改时保留原文。`,
+      submit: '重写并替换正文', fields: [numberField('target_characters', '目标篇幅（字符）',
+        Math.min(6000, Math.max(300, chapter.word_count || 2000)), 300, 6000),
+        {...noteField, label: '重写要求（可选）', placeholder: '例如：保留情节，加强人物对话，减少重复描写'}],
+      taskPath: `/writing/chapters/${chapter.id}/rewrite/tasks`});
+    return;
+  }
+  openAction({title: '生成正文', description: `角色信息已就绪，为第 ${chapter.chapter_number} 章生成初稿，正文和人物进展档案会一起保存。`,
     submit: '写作并保存', fields: [numberField('target_characters', '目标篇幅（字符）', 2000, 300, 6000), noteField],
     taskPath: `/writing/chapters/${chapter.id}/draft/tasks`,
   });
@@ -1119,7 +1371,7 @@ function resetAccount(message = '') {
 
 async function enterAccount(user) {
   account = user;
-  $('account-name').textContent = user.display_name || user.username;
+  $('account-name').textContent = `${user.display_name || user.username}${user.is_admin ? ' · 管理员' : ''}`;
   $('account-password').value = '';
   accountDialog.close();
   $('app-shell').hidden = false;

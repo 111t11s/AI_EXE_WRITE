@@ -25,6 +25,7 @@ class Account(BaseModel):
     id: int
     username: str
     display_name: str
+    is_admin: bool = False
 
 
 class Credentials(BaseModel):
@@ -70,7 +71,7 @@ BearerToken = Annotated[str, Depends(require_token)]
 
 def authenticate(engine, token):
     with transaction(engine) as connection:
-        row = connection.execute(select(account.c.id, account.c.username, account.c.display_name).select_from(
+        row = connection.execute(select(account.c.id, account.c.username, account.c.display_name, account.c.is_admin).select_from(
             account.join(auth_session, account.c.id == auth_session.c.account_id)
         ).where(auth_session.c.token_hash == token_hash(token), auth_session.c.expires_at > utcnow(),
                 account.c.is_active.is_(True))).mappings().one_or_none()
@@ -111,7 +112,7 @@ def register(payload: Registration, engine: Database, response: Response):
             raise HTTPException(409, "用户名已被使用")
         result = connection.execute(insert(account).values(username=payload.username,
             display_name=payload.display_name.strip() or payload.username, password_hash=password_hash))
-        row = connection.execute(select(account.c.id, account.c.username, account.c.display_name).where(
+        row = connection.execute(select(account.c.id, account.c.username, account.c.display_name, account.c.is_admin).where(
             account.c.id == result.lastrowid)).mappings().one()
         receipt = start_session(connection, row)
     response.headers["Cache-Control"] = "no-store"

@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "https://localhost,capacitor://localhost"
     ENABLE_API_DOCS: bool = True
     AUTH_REGISTRATION_ENABLED: bool = True
-    AUTH_SESSION_HOURS: int = Field(default=168, ge=1, le=8760)
+    AUTH_SESSION_HOURS: int = Field(default=720, ge=1, le=8760)
 
     # MySQL 配置；未配置时仅数据库接口不可用。
     DB_HOST: str = ""

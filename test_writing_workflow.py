@@ -10,7 +10,7 @@ import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 from openai import APIStatusError, OpenAI
 from sqlalchemy import create_engine, text
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import QueuePool
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -23,7 +23,10 @@ from api.writing_schemas import OutlineDraft, ChapterPlanDraft, ChapterDraft, Re
 from main import app
 
 def create_test_db():
-    engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    # A single queued connection keeps the memory DB alive and prevents concurrent
+    # requests from sharing an active transaction (StaticPool allows that).
+    engine = create_engine("sqlite://", poolclass=QueuePool, pool_size=1, max_overflow=0,
+                           connect_args={"check_same_thread": False})
     schema = Path(__file__).with_name("db").joinpath("schema.sql").read_text(encoding="utf-8")
     with engine.begin() as connection:
         connection.exec_driver_sql("PRAGMA foreign_keys=ON")
@@ -54,12 +57,14 @@ def outline():
 
 def fake(role,ctx):
     assert ctx['project']['id']>0 and ctx['world']['id']>0
-    if role==a.OUTLINE:
+    if role in (a.OUTLINE, a.OUTLINE_REWRITE):
         return outline()
     if role==a.PLAN:
         return ChapterPlanDraft(chapters=[dict(title='Ticket',summary='Find it'),dict(title='Bell',summary='Hear it')])
     if role==a.DRAFT:
-        return ChapterDraft(content='The apprentice walked toward the lighthouse. '*10)
+        return ChapterDraft(character_updates=[], content='The apprentice walked toward the lighthouse. '*10)
+    if role==a.DRAFT_REWRITE:
+        return ChapterDraft(character_updates=[], content='The apprentice asked the keeper about the missing bell. '*10)
     return ReviewReport(verdict='ready',summary='Matches the world rules.',issues=[])
 
 async def run(engine, token):
@@ -73,7 +78,7 @@ async def run(engine, token):
     with patch('api.novel_writing_api.novel_session',session),patch('agents.writing_agents.generate',side_effect=fake):
         async with session() as c:
             tools=(await c.list_tools()).tools
-            assert len(tools)==5 * len(CRUD_RESOURCES) + 7 and all(t.outputSchema for t in tools)
+            assert len(tools)==5 * len(CRUD_RESOURCES) + 10 and all(t.outputSchema for t in tools)
             async def call(name,code=None,**args):
                 result=await c.call_tool(name,args)
                 if code:
@@ -115,6 +120,11 @@ async def run(engine, token):
             with engine.connect() as conn:
                 assert conn.scalar(text('SELECT COUNT(*) FROM novel_outline'))==2
                 assert conn.scalar(text('SELECT COUNT(*) FROM novel_chapter'))==2
+            rewritten=await call('rewrite_novel_outline',outline_id=one['outline_id'],payload={'volume_count':1,'instruction':'加强冲突'})
+            assert rewritten['version_no']==3 and rewritten['outline_id']!=one['outline_id']
+            assert (await call('read_novel_outline',record_id=one['outline_id']))['version_no']==1
+            await call('rewrite_novel_chapter',chapter_id=cid,payload={'instruction':'加强对话'})
+            assert (await call('read_novel_chapter',record_id=cid))['content'].startswith('The apprentice asked')
 def test_writing_workflow():
     engine = create_test_db()
     try:

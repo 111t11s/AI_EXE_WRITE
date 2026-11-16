@@ -16,10 +16,12 @@ from api.account_api import Registration
 from api.novel_tables import tables
 from db.accounts import account, hash_password, metadata
 from db.connection import get_engine
+from db.migrate_admin import migrate_schema as migrate_admin_schema
 
 
 def migrate_schema(engine):
     metadata.create_all(engine)
+    migrate_admin_schema(engine)
     for name, index, constraint in (
         ("novel_project", "idx_project_account", "fk_project_account"),
         ("novel_design_session", "idx_design_account", "fk_design_account"),

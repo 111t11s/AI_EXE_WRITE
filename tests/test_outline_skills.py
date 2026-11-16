@@ -105,13 +105,14 @@ def mock_model(monkeypatch, module, output):
 
 @pytest.mark.parametrize("genre,skill_id,excluded", [("玄幻", "outline-xuanhuan", "outline-urban"),
     ("都市", "outline-urban", "outline-xianxia"), ("修真", "outline-xianxia", "outline-urban")])
-def test_existing_novel_outline_sends_skill_body_to_streaming_model(monkeypatch, genre, skill_id, excluded):
+@pytest.mark.parametrize("role", [writing.OUTLINE, writing.OUTLINE_REWRITE])
+def test_existing_novel_outline_sends_skill_body_to_streaming_model(monkeypatch, genre, skill_id, excluded, role):
     output = {"summary": "主线", "central_conflict": "冲突", "themes": "主题", "volumes": [{
         "title": "第一卷", "summary": "摘要", "protagonist_goal": "目标", "main_conflict": "冲突",
         "climax": "高潮", "ending_hook": "后果", "beats": [{"title": "行动", "summary": "因果"}]}]}
     requests = mock_model(monkeypatch, writing, output)
     context = {"project": {"genre": genre}, "request": {"volume_count": 1, "instruction": "第一人称，无金手指"}}
-    assert writing.generate(writing.OUTLINE, context).model_dump()["summary"] == "主线"
+    assert writing.generate(role, context).model_dump()["summary"] == "主线"
     prompt = requests[0]["messages"][-1]["content"]
     wanted = next(item for item in skills.SPECIALISTS if item.id == skill_id)
     other = next(item for item in skills.SPECIALISTS if item.id == excluded)

@@ -8,10 +8,16 @@ export function resolveApiBaseUrl(value = '') {
 }
 
 let sessionToken;
+const sessionKey = 'mojian-session';
 export function getAuthToken() {
   if (sessionToken === undefined) {
-    try { sessionToken = sessionStorage.getItem('mojian-session') || ''; }
+    try { sessionToken = localStorage.getItem(sessionKey) || ''; }
     catch { sessionToken = ''; }
+    if (!sessionToken) {
+      try { sessionToken = sessionStorage.getItem(sessionKey) || ''; }
+      catch { /* No previous tab session to migrate. */ }
+    }
+    if (sessionToken) setAuthToken(sessionToken);
   }
   return sessionToken;
 }
@@ -19,9 +25,11 @@ export function getAuthToken() {
 export function setAuthToken(token = '') {
   sessionToken = token;
   try {
-    if (token) sessionStorage.setItem('mojian-session', token);
-    else sessionStorage.removeItem('mojian-session');
+    if (token) localStorage.setItem(sessionKey, token);
+    else localStorage.removeItem(sessionKey);
   } catch { /* Keep this tab usable when browser storage is unavailable. */ }
+  try { sessionStorage.removeItem(sessionKey); }
+  catch { /* Legacy tab storage may be unavailable too. */ }
 }
 
 export async function authenticatedFetch(url, options = {}) {

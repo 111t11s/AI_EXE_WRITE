@@ -9,6 +9,8 @@ from api.novel_crud_api import get_row, response_row, storage_values, tables, tr
 from api.writing_schemas import ChapterPlanDraft, DraftReceipt, OutlineDraft, OutlineReceipt, ChapterPlanReceipt
 from db.connection import legacy_json_columns
 from api.writing_schemas import CharacterReceipt
+from api.character_profiles import format_profile
+from api.character_progress import replace_progress
 
 
 CHARACTER_LABELS = {"protagonist": "主角", "important": "重要配角", "supporting": "配角"}
@@ -32,7 +34,7 @@ def save_characters(engine, project_id, artifact, sources, volume_id=None, legac
             saved = response_row(get_row(connection, tables[table_name], source["id"], lock=True),
                                  legacy_json_columns(connection, table_name))
             if any(saved.get(key) != value for key, value in source.items() if key not in {"created_at", "updated_at"}):
-                raise HTTPException(409, "生成期间世界观或大纲资料发生变化，请重新生成角色")
+                raise HTTPException(409, "生成期间世界观、大纲、角色或正文进度发生变化，请重新生成")
         names = {character_name_key(name) for name in connection.scalars(
             select(relation.c.name).where(relation.c.project_id == project_id))}
         new_names = [character_name_key(item.name) for item in artifact.characters]
@@ -43,13 +45,17 @@ def save_characters(engine, project_id, artifact, sources, volume_id=None, legac
         ids = []
         assignments = []
         for item in artifact.characters:
-            values = item.model_dump(exclude={"category", "role"})
+            values = item.model_dump(exclude={"category", "role", "volume_profiles"})
             ids.append(insert_row(connection, relation, project_id=project_id, faction_id=None,
                                   role=f"{CHARACTER_LABELS[item.category]} · {item.role}",
                                   first_appearance_chapter=None, status="active", **values))
-            if volume_id is not None:
-                assignments.append((ids[-1], item.summary))
-        assignments.extend((item.character_id, item.scenes) for item in artifact.reused_characters)
+            assignments.extend((profile.volume_id, ids[-1], format_profile(profile, sources)) for profile in item.volume_profiles)
+            if volume_id is not None and not item.volume_profiles:
+                assignments.append((volume_id, ids[-1], item.summary))
+        for item in artifact.reused_characters:
+            assignments.extend((profile.volume_id, item.character_id, format_profile(profile, sources)) for profile in item.volume_profiles)
+            if volume_id is not None and not item.volume_profiles:
+                assignments.append((volume_id, item.character_id, item.scenes))
         cast = tables["novel_volume_character"]
         # Materialize explicitly matched legacy history on first reuse, so the
         # original volume remains part of this character's history in later volumes.
@@ -58,16 +64,18 @@ def save_characters(engine, project_id, artifact, sources, volume_id=None, legac
                 cast.c.volume_id == previous_id, cast.c.character_id == character_id))
             if existing is None:
                 insert_row(connection, cast, volume_id=previous_id, character_id=character_id, scenes=scenes)
-        for character_id, scenes in assignments:
+        for assignment_volume_id, character_id, scenes in assignments:
             existing = connection.scalar(select(cast.c.id).where(
-                cast.c.volume_id == volume_id, cast.c.character_id == character_id))
+                cast.c.volume_id == assignment_volume_id, cast.c.character_id == character_id))
             if existing is None:
-                insert_row(connection, cast, volume_id=volume_id, character_id=character_id, scenes=scenes)
+                insert_row(connection, cast, volume_id=assignment_volume_id, character_id=character_id, scenes=scenes)
             else:
                 connection.execute(update(cast).where(cast.c.id == existing).values(scenes=scenes))
         return CharacterReceipt(project_id=project_id, character_ids=ids,
+                                outline_id=next((row["id"] for name, row in sources if name == "novel_outline"), None),
                                 counts=dict(Counter(item.category for item in artifact.characters)), volume_id=volume_id,
-                                reused_character_ids=[item.character_id for item in artifact.reused_characters])
+                                reused_character_ids=[item.character_id for item in artifact.reused_characters],
+                                profile_character_ids=list(dict.fromkeys(character_id for _, character_id, _ in assignments)))
 
 
 def insert_row(connection, relation, **values):
@@ -75,11 +83,16 @@ def insert_row(connection, relation, **values):
     return connection.execute(insert(relation).values(**values)).lastrowid
 
 
-def save_outline(engine, project_id: int, artifact: OutlineDraft) -> OutlineReceipt:
+def save_outline(engine, project_id: int, artifact: OutlineDraft, sources=()) -> OutlineReceipt:
     project, outline = tables["novel_project"], tables["novel_outline"]
     volume, beat = tables["novel_outline_volume"], tables["novel_plot_beat"]
     with transaction(engine) as connection:
         get_row(connection, project, project_id, lock=True)
+        for table_name, source in sources:
+            saved = response_row(get_row(connection, tables[table_name], source["id"], lock=True),
+                                 legacy_json_columns(connection, table_name))
+            if any(saved.get(key) != value for key, value in source.items() if key not in {"created_at", "updated_at"}):
+                raise HTTPException(409, "重写期间原大纲或设定发生变化，请重新重写")
         version = (connection.scalar(select(func.max(outline.c.version_no)).where(outline.c.project_id == project_id)) or 0) + 1
         outline_id = insert_row(connection, outline, project_id=project_id, version_no=version, status="draft",
                                 **artifact.model_dump(exclude={"volumes"}))
@@ -121,15 +134,31 @@ def require_empty_plan(chapter):
         raise HTTPException(409, "只能给尚无正文的计划章节生成初稿")
 
 
-def save_draft(engine, chapter_id: int, content: str, original: dict) -> DraftReceipt:
+def save_draft(engine, chapter_id: int, content: str, original: dict, character_updates=()) -> DraftReceipt:
     chapter = tables["novel_chapter"]
     count = sum(not character.isspace() for character in content)
     with transaction(engine) as connection:
-        current = get_row(connection, chapter, chapter_id, lock=True)
+        json_columns = legacy_json_columns(connection, chapter.name)
+        current = response_row(get_row(connection, chapter, chapter_id, lock=True), json_columns)
         require_empty_plan(current)
-        if any(current[key] != original[key] for key in ("chapter_number", "title", "summary")):
+        if any(current[key] != original[key] for key in ("project_id", "volume_id", "chapter_number", "title", "summary")):
             raise HTTPException(409, "生成期间章节计划发生变化，请重新生成")
-        connection.execute(update(chapter).where(chapter.c.id == chapter_id).values(
-            content=content, word_count=count, status="draft",
-        ))
+        replace_progress(connection, current, content, character_updates)
+        connection.execute(update(chapter).where(chapter.c.id == chapter_id).values(**storage_values(
+            {"content": content, "word_count": count, "status": "draft"}, json_columns)))
+        return DraftReceipt(chapter_id=chapter_id, word_count=count)
+
+
+def save_rewritten_draft(engine, chapter_id: int, content: str, original: dict, character_updates=()) -> DraftReceipt:
+    chapter = tables["novel_chapter"]
+    count = sum(not character.isspace() for character in content)
+    with transaction(engine) as connection:
+        json_columns = legacy_json_columns(connection, chapter.name)
+        current = response_row(get_row(connection, chapter, chapter_id, lock=True), json_columns)
+        if any(current[key] != original[key] for key in (
+                "project_id", "volume_id", "chapter_number", "title", "summary", "content", "status")):
+            raise HTTPException(409, "重写期间章节发生变化，未覆盖原文，请刷新后重新重写")
+        values = storage_values({"content": content, "word_count": count, "status": "draft"}, json_columns)
+        replace_progress(connection, current, content, character_updates)
+        connection.execute(update(chapter).where(chapter.c.id == chapter_id).values(**values))
         return DraftReceipt(chapter_id=chapter_id, word_count=count)

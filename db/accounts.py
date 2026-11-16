@@ -18,6 +18,7 @@ account = Table(
     Column("display_name", String(80), nullable=False),
     Column("password_hash", String(255), nullable=False),
     Column("is_active", Boolean, nullable=False, server_default="1"),
+    Column("is_admin", Boolean, nullable=False, server_default="0"),
     Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
 )
 auth_session = Table(

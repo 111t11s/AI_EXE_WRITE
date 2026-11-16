@@ -1,7 +1,7 @@
 {
   "name": "mojian-android",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.3",
   "description": "Android shell for the Mojian novel workbench",
   "scripts": {
     "prepare:web": "node scripts/prepare-web.mjs",

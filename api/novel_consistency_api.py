@@ -15,7 +15,7 @@ from api.account_api import CurrentAccount
 from api.database import Database, transaction
 from api.novel_schemas import RowId
 from api.novel_tables import tables
-from api.novel_writing_api import character_context, generate, load_context, read
+from api.novel_writing_api import all_context_rows, character_context, generate, load_context, read
 from api.ownership import require_resource
 from api.writing_schemas import ConsistencyReceipt, ConsistencyRequest
 
@@ -23,6 +23,25 @@ from api.writing_schemas import ConsistencyReceipt, ConsistencyRequest
 router = APIRouter(prefix="/writing", tags=["小说一致性核对"])
 MAX_CHAPTER_TEXT = 120000
 MAX_CONTEXT = 200000
+
+# Only story fields can establish a discrepancy; IDs, timestamps and workflow
+# status strings are not evidence of a narrative contradiction.
+BASIS_FIELDS = {
+    "project": {"setting", "tone", "premise", "protagonist_goal"},
+    "outline": {"summary", "central_conflict", "themes"},
+    "volume": {"summary", "protagonist_goal", "main_conflict", "climax", "ending_hook"},
+    "plot_beat": {"title", "summary", "foreshadowing"},
+    "character": {"name", "role", "summary", "personality", "background", "goal", "motivation", "weakness", "character_arc", "abilities", "status"},
+    "character_relationship": {"relationship_type", "description"},
+    "volume_character": {"scenes"},
+    "world": {"summary", "era", "history", "rules", "cultures"},
+    "region": {"name", "description", "climate", "resources", "locations"},
+    "power_system": {"name", "source", "rules", "limitations", "growth_rules"},
+    "power_rank": {"name", "description", "breakthrough_condition", "capabilities"},
+    "cheat_system": {"name", "cheat_type", "origin", "functions", "limitations", "costs", "growth_path", "story_secret"},
+    "faction": {"name", "faction_type", "summary", "goal", "leader", "territory", "strengths", "weaknesses", "relationships"},
+    "chapter": {"summary", "content"},
+}
 
 
 def require_selection(engine, project_id, payload, account_id):
@@ -49,6 +68,12 @@ async def consistency_context(session, project_id, payload):
     context, _ = await character_context(session, project_id, payload.outline_id)
     if not context["characters"]:
         raise HTTPException(409, "请先建立人物档案，再进行一致性核对")
+    character_ids = {row["id"] for row in context["characters"]}
+    context["character_relationships"] = []
+    for character_id in sorted(character_ids):
+        relationships = await all_context_rows(session, "character_relationship", source_character_id=character_id)
+        context["character_relationships"].extend(
+            row for row in relationships if row["target_character_id"] in character_ids)
     chapters = []
     for chapter_id in payload.chapter_ids:
         row = await read(session, "chapter", chapter_id)
@@ -57,7 +82,10 @@ async def consistency_context(session, project_id, payload):
         chapters.append({key: row[key] for key in ("id", "chapter_number", "title", "summary", "content", "volume_id")})
     chapters.sort(key=lambda row: row["chapter_number"])
     validate_bodies(chapters)
-    notes = ["只核对所选章节，未选章节未读取正文；结论基于任务读取时的资料快照，不代表全书评价。"]
+    notes = ["只核对所选章节，未选章节未读取正文；结论基于任务读取时的资料快照，不代表全书评价。",
+             "以已保存的大纲、人物及相关档案为准；资料没有明确约束或缺少对应时期信息时，不凭常识、类型套路或个人偏好认定偏移。"]
+    if not context["character_relationships"]:
+        notes.append("尚无人物关系档案；人物关系仅依据已提供的档案和正文，未记载的关系不作推断。")
     if any(right["chapter_number"] != left["chapter_number"] + 1 for left, right in zip(chapters, chapters[1:])):
         notes.append("选择的章号不连续，间隔章节中的事件未知，不据此认定因果缺失或人物突变。")
     volumes = {row["id"] for row in context["volumes"]}
@@ -69,14 +97,35 @@ async def consistency_context(session, project_id, payload):
     return context
 
 
-def validate_report(report, context):
-    chapters = {row["id"]: row for row in context["selected_chapters"]}
+def reference_records(context):
+    """Use exactly the MCP snapshot passed to the model for citation checks."""
     references = {}
-    for kind, rows in (("outline", [context["outline"]]), ("world", [context["world"]]),
+    for kind, rows in (("project", [context["project"]]), ("outline", [context["outline"]]), ("world", [context["world"]]),
                        ("character", context["characters"]), ("volume", context["volumes"]),
+                       ("character_relationship", context["character_relationships"]),
+                       ("volume_character", [row for volume in context["volumes"] for row in volume["cast"]]),
                        ("plot_beat", [beat for volume in context["volumes"] for beat in volume["beats"]]),
+                       *((kind, context.get(key, [])) for kind, key in (
+                           ("region", "region"), ("power_system", "power_system"), ("power_rank", "power_ranks"),
+                           ("cheat_system", "cheat_system"), ("faction", "faction"))),
                        ("chapter", context["selected_chapters"])):
         references.update({(kind, row["id"]): row for row in rows})
+    return references
+
+
+def reference_label(kind, row, context):
+    characters = {person["id"]: person["name"] for person in context["characters"]}
+    if kind == "character_relationship":
+        return f"{characters[row['source_character_id']]} → {characters[row['target_character_id']]}"
+    if kind == "volume_character":
+        volume = next(volume for volume in context["volumes"] if volume["id"] == row["volume_id"])
+        return f"{characters.get(row['character_id'], '未找到人物')} · 第 {volume['volume_number']} 卷 · {volume['title']}"
+    return row.get("name") or row.get("title") or f"大纲 v{context['outline']['version_no']}"
+
+
+def validate_report(report, context):
+    chapters = {row["id"]: row for row in context["selected_chapters"]}
+    references = reference_records(context)
     error = HTTPException(502, "核对结果包含无效的章节引用、对照依据或结论，请重试核对")
     if (report.verdict == "consistent" and report.issues) or (report.verdict == "drifted" and not report.issues):
         raise error
@@ -89,9 +138,12 @@ def validate_report(report, context):
         basis = issue.basis
         row = references.get((basis.kind, basis.record_id))
         value = row.get(basis.field) if row is not None else None
-        if not isinstance(value, str) or basis.quote not in value:
+        if basis.field not in BASIS_FIELDS[basis.kind] or not isinstance(value, str) or basis.quote not in value:
             raise error
-        label = row.get("name") or row.get("title") or f"大纲 v{context['outline']['version_no']}"
+        if basis.kind == "chapter" and (
+                issue.category != "continuity" or any(evidence.chapter_id == basis.record_id for evidence in issue.evidence)):
+            raise error
+        label = reference_label(basis.kind, row, context)
         used[(basis.kind, basis.record_id)] = dict(kind=basis.kind, record_id=basis.record_id, label=label)
     return list(used.values())
 
@@ -101,6 +153,10 @@ async def check_consistency(project_id: RowId, payload: ConsistencyRequest, user
     await run_in_threadpool(require_selection, engine, project_id, payload, user.id)
     emit_generation_event("status", message="正在通过 MCP 读取所选章节、大纲与人物档案…")
     context = await load_context(consistency_context, project_id, payload)
+    materials = [dict(kind=kind, record_id=record_id, label=reference_label(kind, row, context))
+                 for (kind, record_id), row in reference_records(context).items() if kind != "chapter"]
+    emit_generation_event("status", message=f"已读取大纲 v{context['outline']['version_no']}、{len(context['volumes'])} 卷、"
+        f"{len(context['characters'])} 份人物档案、{len(context['character_relationships'])} 份关系档案及相关设定，正在逐项对照原文…")
     checked_at = datetime.now(timezone.utc).isoformat()
     report = await generate(agents.CONSISTENCY, context, payload)
     emit_generation_event("status", message="核对完成，正在校验章节原文及对照依据…")
@@ -110,7 +166,7 @@ async def check_consistency(project_id: RowId, payload: ConsistencyRequest, user
     return ConsistencyReceipt(**values, project_id=project_id, outline_id=payload.outline_id,
         outline_version=context["outline"]["version_no"], checked_at=checked_at,
         chapters=[dict(chapter_id=row["id"], chapter_number=row["chapter_number"], title=row["title"])
-                  for row in context["selected_chapters"]], references=references)
+                  for row in context["selected_chapters"]], references=references, reference_materials=materials)
 
 
 @router.post("/projects/{project_id}/consistency/tasks", status_code=202, summary="后台核对所选章节的一致性")

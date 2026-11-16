@@ -29,12 +29,15 @@ from api.novel_contracts import CRUD_PREFIX
 from api.novel_crud_api import router as crud_router
 from api.novel_writing_api import router as writing_router
 from api.novel_consistency_api import router as consistency_router
+from api.novel_character_profile_api import router as character_profile_router
+from api.novel_character_progress_api import router as character_progress_router
+from api.novel_export_api import router as export_router
 from api.account_api import CurrentAccount, router as account_router
 from api.generation_jobs import router as jobs_router
 
 app = FastAPI(
     title="AI 小说工程 API",
-    description="账号登录、个人小说书架、小说设定助手、写作智能体与 16 类小说数据的 CRUD 接口",
+    description="账号登录、个人小说书架、小说设定助手、写作智能体、小说导出与 16 类小说数据的 CRUD 接口",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs" if get_settings().ENABLE_API_DOCS else None,
@@ -48,6 +51,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 app.add_middleware(RequestLoggingMiddleware)
 
@@ -70,6 +74,9 @@ app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(crud_router, prefix=CRUD_PREFIX)
 app.include_router(writing_router, prefix=CRUD_PREFIX)
 app.include_router(consistency_router, prefix=CRUD_PREFIX)
+app.include_router(character_profile_router, prefix=CRUD_PREFIX)
+app.include_router(character_progress_router, prefix=CRUD_PREFIX)
+app.include_router(export_router, prefix=CRUD_PREFIX)
 app.mount("/", FrontendFiles(directory=PROJECT_ROOT / "frontend", html=True), name="frontend")
 
 

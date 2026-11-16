@@ -9,6 +9,7 @@ This is the new canonical structure for the novel-design workflow. The legacy XM
 - `accounts.py`: account/session tables and salted password hashing.
 - `migrate_accounts.py`: idempotent ownership migration for existing databases.
 - `migrate_volume_characters.py`: additive, idempotent migration for per-volume character scenes. Run `python -m db.migrate_volume_characters` when upgrading an existing MySQL database.
+- `character_progress.py` / `migrate_character_progress.py`: chapter-scoped, evidence-backed character facts. Run `python -m db.migrate_character_progress` before enabling automatic body-to-profile synchronization; `deployment/character-progress.sql` is the equivalent schema-admin migration.
 - `reset_password.py`: interactive administrator password reset that revokes all sessions.
 
 小说和问答会话使用 `account_id` 绑定账号，所有子资源沿外键链继承小说归属。API 自动填写账号 ID，不接受客户端指定或修改归属。已有小说统一绑定 `admin` 的命令见 [部署说明](../deployment/README.md#账号与旧小说迁移)。
@@ -54,6 +55,7 @@ Primary keys, foreign keys, ordering/version fields, status values, timestamps, 
 | `novel_plot_beat` | 剧情节点表 |
 | `novel_volume_character` | 分卷角色戏份表 |
 | `novel_chapter` | 小说章节表 |
+| `novel_character_progress` | 正文人物进展档案表 |
 
 ## CRUD 接口
 

@@ -27,6 +27,12 @@ def person(name, category="protagonist"):
                 weakness="不愿求助", character_arc="学会信任伙伴", abilities="感知水脉，消耗灵气")
 
 
+def volume_profile(context, actions="协助主角寻找渡口并渡河"):
+    volume = context.get("target_volume") or context["volumes"][0]
+    return dict(volume_id=volume["id"], plot_beat_ids=[row["id"] for row in volume["beats"]],
+                actions=actions, outcome="成功引路并取得主角信任", progress_relation="推动渡河节点，为后续寻脉留下线索；未写部分仍为计划")
+
+
 def cast(role, context):
     request = context["request"]
     if role == agents.CORE_CHARACTERS:
@@ -35,6 +41,9 @@ def cast(role, context):
     else:
         assert role == agents.SUPPORTING_CHARACTERS
         people = [person(f"舟客{i}", "supporting") for i in range(request["supporting_count"])]
+    if "outline" in context:
+        for item in people:
+            item["volume_profiles"] = [volume_profile(context)]
     return CharacterDraftList(characters=people)
 
 
@@ -295,20 +304,21 @@ def test_reuse_keeps_profile_and_previous_scenes_and_reaches_draft(novel, monkey
     choices = client.get(f"/api/v1/writing/volumes/{second}/reusable-characters", headers=headers)
     assert choices.status_code == 200, choices.text
     assert [row["id"] for row in choices.json()["items"]] == [character_id]
-    assert choices.json()["items"][0]["previous_scenes"][0]["scenes"] == original["summary"]
+    assert choices.json()["items"][0]["previous_scenes"][0]["scenes"] == original_scenes[0]["scenes"]
     scenes = "舟客再次出场，带主角潜入渡舟盟，因立场变化引发争执。"
 
     def generate(role, context):
         if role == agents.DRAFT:
             assignment = next(row for row in context["volume_characters"] if row["character_id"] == character_id)
-            assert assignment["scenes"] == scenes
+            assert scenes in assignment["scenes"] and "阶段结果（计划）" in assignment["scenes"]
             assert any(row["id"] == character_id for row in context["characters"])
-            return ChapterDraft(content="舟客引领主角潜入渡舟盟，雨水沿旧船的木板流下。" * 10)
+            return ChapterDraft(character_updates=[], content="舟客引领主角潜入渡舟盟，雨水沿旧船的木板流下。" * 10)
         assert context["target_volume"]["id"] == second
         assert context["reuse_characters"][0]["id"] == character_id
         assert context["reuse_characters"][0]["previous_scenes"][0]["volume_id"] == novel["volume"]
-        return CharacterDraftList(characters=[person("驿使", "supporting")] if new_count else [],
-            reused_characters=[{"character_id": character_id, "scenes": scenes}])
+        newcomers = [dict(**person("驿使", "supporting"), volume_profiles=[volume_profile(context)])] if new_count else []
+        return CharacterDraftList(characters=newcomers,
+            reused_characters=[{"character_id": character_id, "scenes": scenes, "volume_profiles": [volume_profile(context, scenes)]}])
 
     monkeypatch.setattr(agents, "generate", generate)
     response = client.post(novel["supporting"], headers=headers,
@@ -320,7 +330,7 @@ def test_reuse_keeps_profile_and_previous_scenes_and_reaches_draft(novel, monkey
     assert len(rows(novel)) == 1 + new_count
     assert next(row for row in rows(novel) if row["id"] == character_id) == original
     assert volume_cast(novel, novel["volume"]) == original_scenes
-    assert next(row for row in volume_cast(novel, second) if row["character_id"] == character_id)["scenes"] == scenes
+    assert scenes in next(row for row in volume_cast(novel, second) if row["character_id"] == character_id)["scenes"]
     third = next_volume(novel, 3)
     choices = client.get(f"/api/v1/writing/volumes/{third}/reusable-characters", headers=headers).json()["items"]
     history = next(row for row in choices if row["id"] == character_id)["previous_scenes"]
@@ -409,8 +419,9 @@ def test_reuse_list_is_account_scoped_and_supports_legacy_volume_summaries(novel
     response = client.get(path, headers=novel["headers"]["writer"])
     assert response.status_code == 200, response.text
     assert [row["id"] for row in response.json()["items"]] == [legacy]
-    monkeypatch.setattr(agents, "generate", lambda *args: CharacterDraftList(characters=[],
-        reused_characters=[{"character_id": legacy, "scenes": "旧渡客在远行卷再次引路"}]))
+    monkeypatch.setattr(agents, "generate", lambda role, context: CharacterDraftList(characters=[],
+        reused_characters=[{"character_id": legacy, "scenes": "旧渡客在远行卷再次引路",
+            "volume_profiles": [volume_profile(context, "旧渡客在远行卷再次引路")]}]))
     saved = client.post(novel["supporting"], headers=novel["headers"]["writer"],
         json={"volume_id": second, "supporting_count": 0, "reuse_character_ids": [legacy]})
     assert saved.status_code == 201, saved.text
@@ -443,7 +454,7 @@ def test_draft_without_characters_is_blocked_until_user_generates_them(novel, mo
         if role == agents.CORE_CHARACTERS:
             return cast(role, context)
         assert role == agents.DRAFT and context["characters"]
-        return ChapterDraft(content="舟客将小船撑离河岸，主角望向被雾气遮住的渡口。" * 10)
+        return ChapterDraft(character_updates=[], content="舟客将小船撑离河岸，主角望向被雾气遮住的渡口。" * 10)
 
     monkeypatch.setattr(agents, "generate", generate)
 

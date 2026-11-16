@@ -3,6 +3,8 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from io import BytesIO
+from zipfile import ZipFile
 
 import httpx
 import pytest
@@ -23,6 +25,8 @@ from core.identity import AUTH_TOKEN
 from db.accounts import account, auth_session, token_hash, utcnow, verify_password
 from db.migrate_accounts import bind_legacy, create_account, migrate_schema
 from db.reset_password import reset_password
+from db.manage_admin import set_admin
+from db.migrate_admin import migrate_schema as migrate_admin
 from main import app
 from test_writing_workflow import create_test_db
 
@@ -106,6 +110,31 @@ def test_login_logout_expiry_disabled_account_and_password_storage(setup_account
         connection.execute(update(account).where(account.c.username == "writer").values(is_active=False))
     assert client.get("/api/v1/auth/me", headers=headers(users["writer"])).status_code == 401
     assert client.post("/api/v1/auth/login", json={"username": "writer", "password": "test-password"}).status_code == 401
+
+
+@pytest.mark.parametrize("route,username", [("login", "admin"), ("register", "newwriter")])
+def test_sessions_remain_valid_for_thirty_days_without_extending_on_use(setup_accounts, monkeypatch, route, username):
+    from core.config import Settings
+
+    engine, client, _ = setup_accounts
+    monkeypatch.delenv("AUTH_SESSION_HOURS", raising=False)
+    settings = Settings(_env_file=None)
+    monkeypatch.setattr(account_api, "get_settings", lambda: settings)
+    issued_at = utcnow()
+    monkeypatch.setattr(account_api, "utcnow", lambda: issued_at)
+    receipt = client.post(f"/api/v1/auth/{route}", json={
+        "username": username, "password": "test-password"}).json()
+    assert receipt["expires_in"] == 30 * 24 * 3600
+
+    monkeypatch.setattr(account_api, "utcnow", lambda: issued_at + timedelta(days=30, seconds=-1))
+    assert client.get("/api/v1/auth/me", headers=headers(receipt)).status_code == 200
+    with engine.connect() as connection:
+        expires_at = connection.scalar(select(auth_session.c.expires_at).where(
+            auth_session.c.token_hash == token_hash(receipt["access_token"])))
+    assert expires_at == issued_at + timedelta(days=30)
+
+    monkeypatch.setattr(account_api, "utcnow", lambda: issued_at + timedelta(days=30))
+    assert client.get("/api/v1/auth/me", headers=headers(receipt)).status_code == 401
 
 
 def test_unauthenticated_endpoints_reject_requests_before_database_lookup(setup_accounts):
@@ -194,6 +223,119 @@ def test_admin_reset_confirmation_failure_does_not_touch_database(monkeypatch, c
     output = capsys.readouterr()
     assert '两次密码不一致' in output.err
     assert 'recovered-password' not in output.out + output.err
+
+
+def test_admin_reads_all_novel_resources_but_cannot_modify_others(setup_accounts):
+    engine, client, users = setup_accounts
+    own, other = graph(client, users['admin']), graph(client, users['writer'])
+    assert users['admin']['account']['is_admin'] is False
+    set_admin(engine, ' ADMIN ')
+    assert client.get('/api/v1/auth/me', headers=headers(users['admin'])).json()['is_admin'] is True
+    for resource in CRUD_RESOURCES:
+        path = resource.path
+        theirs = other[path.lstrip('/')]
+        response = client.get('/api/v1' + path, headers=headers(users['admin']))
+        assert response.status_code == 200, response.text
+        ids = [row['id'] for row in response.json()['items']]
+        private = resource.table_name in {'novel_design_session', 'novel_design_message'}
+        assert (theirs['id'] in ids) is not private, path
+        url = '/api/v1' + path + '/' + str(theirs['id'])
+        assert client.get(url, headers=headers(users['admin'])).status_code == (404 if private else 200), path
+        field = next(key for key in resource.create_schema.model_fields if key != resource.owner)
+        assert client.patch(url, headers=headers(users['admin']), json={field: theirs[field]}).status_code == 404
+        assert client.delete(url, headers=headers(users['admin'])).status_code == 404
+    projects = client.get('/api/v1/projects', headers=headers(users['admin'])).json()['items']
+    assert {row['owner_username'] for row in projects} == {'admin', 'writer'}
+    assert all('password_hash' not in row for row in projects)
+    page = client.get('/api/v1/projects?limit=1&offset=0', headers=headers(users['admin'])).json()
+    assert len(page['items']) == 1 and page['has_more']
+    chapters = client.get('/api/v1/chapters', params={'project_id': other['projects']['id']}, headers=headers(users['admin'])).json()
+    assert [row['id'] for row in chapters['items']] == [other['chapters']['id']]
+    assert client.patch('/api/v1/projects/' + str(own['projects']['id']), headers=headers(users['admin']),
+                        json={'title': '自己的小说仍可修改'}).status_code == 200
+    assert client.post('/api/v1/chapters', headers=headers(users['admin']), json={
+        'project_id': other['projects']['id'], 'chapter_number': 2}).status_code == 404
+    for path in [f"projects/{other['projects']['id']}/outline/tasks",
+                 f"chapters/{other['chapters']['id']}/draft/tasks",
+                 f"volumes/{other['outline-volumes']['id']}/character-profiles/tasks"]:
+        data = {'character_ids': [other['characters']['id']]} if 'character-profiles' in path else {}
+        assert client.post('/api/v1/writing/' + path, json=data, headers=headers(users['admin'])).status_code == 404
+    set_admin(engine, 'admin', False)
+    assert client.get('/api/v1/auth/me', headers=headers(users['admin'])).json()['is_admin'] is False
+    assert client.get('/api/v1/projects/' + str(other['projects']['id']), headers=headers(users['admin'])).status_code == 404
+
+
+def test_admin_can_read_profiles_export_and_unassigned_legacy_novels(setup_accounts):
+    engine, client, users = setup_accounts
+    other = graph(client, users['writer'])
+    project_id, outline_id = other['projects']['id'], other['outlines']['id']
+    url = f'/api/v1/writing/projects/{project_id}/character-profiles?outline_id={outline_id}'
+    assert client.get(url, headers=headers(users['admin'])).status_code == 404
+    set_admin(engine, 'admin')
+    result = client.get(url, headers=headers(users['admin']))
+    assert result.status_code == 200 and len(result.json()['items']) == 1
+    export = client.get(f'/api/v1/projects/{project_id}/export?outline_id={outline_id}', headers=headers(users['admin']))
+    assert export.status_code == 200
+    with ZipFile(BytesIO(export.content)) as archive:
+        assert other['outlines']['summary'] in archive.read('大纲-v1.txt').decode('utf-8-sig')
+    with engine.begin() as connection:
+        legacy_id = connection.execute(insert(tables['novel_project']).values(**PROJECT)).lastrowid
+    legacy = client.get(f'/api/v1/projects/{legacy_id}', headers=headers(users['admin']))
+    assert legacy.status_code == 200 and legacy.json()['account_id'] is None
+    assert client.get(f'/api/v1/projects/{legacy_id}', headers=headers(users['writer'])).status_code == 404
+    with engine.connect() as connection:
+        assert connection.scalar(select(tables['novel_project'].c.account_id).where(tables['novel_project'].c.id == project_id)) == users['writer']['account']['id']
+
+
+def test_registration_cannot_grant_admin_and_inactive_accounts_cannot_be_promoted(setup_accounts):
+    engine, client, users = setup_accounts
+    assert client.post('/api/v1/auth/register', json={
+        'username': 'intruder', 'password': 'test-password', 'is_admin': True}).status_code == 422
+    assert client.post('/api/v1/auth/register', json={
+        'username': 'intruder', 'password': 'test-password', 'role': 'admin'}).status_code == 422
+    with pytest.raises(ValueError, match='账号不存在'):
+        set_admin(engine, 'unknown')
+    with engine.begin() as connection:
+        connection.execute(update(account).where(account.c.username == 'writer').values(is_active=False))
+    with pytest.raises(ValueError, match='停用'):
+        set_admin(engine, 'writer')
+    assert users['admin']['account']['is_admin'] is False
+
+
+def test_admin_migration_is_idempotent_and_preserves_existing_accounts():
+    engine = create_engine('sqlite://')
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql('CREATE TABLE app_account (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT)')
+            connection.exec_driver_sql("INSERT INTO app_account VALUES (1, 'admin', 'original-hash')")
+        migrate_admin(engine)
+        migrate_admin(engine)
+        with engine.begin() as connection:
+            row = connection.exec_driver_sql('SELECT username, password_hash, is_admin FROM app_account').one()
+            assert tuple(row) == ('admin', 'original-hash', 0)
+            connection.exec_driver_sql('UPDATE app_account SET is_admin=1')
+        migrate_admin(engine)
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql('SELECT is_admin FROM app_account').scalar() == 1
+    finally:
+        engine.dispose()
+
+
+def test_manage_admin_command_creates_promotes_and_revokes_without_resetting_password(setup_accounts, monkeypatch):
+    from db import manage_admin as command
+    engine, client, users = setup_accounts
+    monkeypatch.setattr(command, 'get_engine', lambda: engine)
+    monkeypatch.setattr(engine, 'dispose', lambda: None)
+    answers = iter(['test-password', 'test-password'])
+    monkeypatch.setattr(command, 'getpass', lambda _: next(answers))
+    monkeypatch.setattr('sys.argv', ['manage_admin', 'supervisor', '--create'])
+    command.main()
+    login = client.post('/api/v1/auth/login', json={'username': 'supervisor', 'password': 'test-password'})
+    assert login.status_code == 200 and login.json()['account']['is_admin']
+    command.main()  # Existing account keeps its password and does not prompt again.
+    monkeypatch.setattr('sys.argv', ['manage_admin', 'supervisor', '--revoke'])
+    command.main()
+    assert not client.get('/api/v1/auth/me', headers=headers(login.json())).json()['is_admin']
 
 
 def test_all_resources_are_isolated_for_lists_reads_updates_and_deletes(setup_accounts):
@@ -321,6 +463,24 @@ def test_mcp_uses_the_current_account_and_refuses_other_accounts_data(setup_acco
         assert server_parameters().env['AITXT_AUTH_TOKEN'] == users['writer']['access_token']
     finally:
         AUTH_TOKEN.reset(token)
+
+
+def test_mcp_admin_can_read_foreign_novel_but_cannot_change_it(setup_accounts):
+    engine, client, users = setup_accounts
+    other = graph(client, users['writer'])
+    set_admin(engine, 'admin')
+
+    async def run():
+        server = create_server('http://aitxt.test/api/v1', transport=httpx.ASGITransport(app=app),
+                               auth_token=users['admin']['access_token'])
+        async with create_connected_server_and_client_session(server) as session:
+            result = await session.call_tool('read_novel_project', {'record_id': other['projects']['id']})
+            assert not result.isError and result.structuredContent['owner_username'] == 'writer'
+            result = await session.call_tool('list_novel_chapter', {'filters': {'project_id': other['projects']['id']}})
+            assert not result.isError and len(result.structuredContent['items']) == 1
+            result = await session.call_tool('delete_novel_project', {'record_id': other['projects']['id']})
+            assert result.isError and '404' in result.content[0].text
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize('background', [False, True])

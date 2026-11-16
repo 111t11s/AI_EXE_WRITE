@@ -47,6 +47,8 @@ class CrudResource:
         return create_model(
             f"{self.schema_prefix}Read", id=(str if self.session_ids else int, ...),
             **({"account_id": (schemas.RowId | None, None)} if self.account_owned else {}),
+            **({"owner_username": (str | None, None), "owner_display_name": (str | None, None)}
+               if self.table_name == "novel_project" else {}),
             **{key: (field.annotation, ...) for key, field in self.create_schema.model_fields.items()},
             **{key: (datetime, ...) for key in self.timestamps},
         )

@@ -11,12 +11,13 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
 from api.novel_contracts import CRUD_PREFIX, CRUD_RESOURCES, CrudResource
-from api.novel_schemas import RowId, SessionId
+from api.novel_schemas import RowId, SessionId, Sequence
 from api.writing_schemas import (
     ChapterPlanReceipt, ChapterPlanRequest, DraftReceipt, DraftRequest, OutlineReceipt, OutlineRequest,
     ReviewReport, WritingInput,
     CoreCharacterRequest, SupportingCharacterRequest, CharacterReceipt,
     ConsistencyRequest, ConsistencyReceipt,
+    CharacterProgressPage,
 )
 
 
@@ -103,6 +104,16 @@ def register_tools(server: FastMCP, resource: CrudResource) -> None:
 
 
 def register_writing_tools(server: FastMCP) -> None:
+    @server.tool(description="读取小说中由正文生成并验证原句的人物进展。before_chapter_number 排除当前章和未来章节，latest 返回每人最近记录。",
+                 annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+    async def list_novel_character_progress(ctx: Context, project_id: RowId, before_chapter_number: Sequence | None = None,
+                                           latest: bool = False, limit: int = 100, offset: int = 0) -> CharacterProgressPage:
+        params = {"latest": latest, "limit": limit, "offset": offset}
+        if before_chapter_number is not None:
+            params["before_chapter_number"] = before_chapter_number
+        return await request(ctx, "GET", f"writing/projects/{project_id}/character-progress", 200,
+                             result_schema=CharacterProgressPage, params=params)
+
     def annotations(*, read_only: bool = False) -> ToolAnnotations:
         return ToolAnnotations(readOnlyHint=read_only, destructiveHint=False,
                                idempotentHint=False, openWorldHint=True)
@@ -135,6 +146,18 @@ def register_writing_tools(server: FastMCP) -> None:
                                      payload: OutlineRequest | None = None) -> OutlineReceipt:
         return await request(ctx, "POST", f"writing/projects/{project_id}/outline", 201, result_schema=OutlineReceipt,
                              json=(payload or OutlineRequest()).model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
+
+    @server.tool(description="读取指定版本原大纲、角色和世界观，按要求重写并保存为新版本；保留原大纲与已有章节。",
+                 annotations=annotations())
+    async def rewrite_novel_outline(ctx: Context, outline_id: RowId, payload: OutlineRequest) -> OutlineReceipt:
+        return await request(ctx, "POST", f"writing/outlines/{outline_id}/rewrite", 201, result_schema=OutlineReceipt,
+                             json=payload.model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
+
+    @server.tool(description="基于现有正文和设定重写完整章节，成功后替换正文并设为草稿；期间章节变更则拒绝覆盖。",
+                 annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
+    async def rewrite_novel_chapter(ctx: Context, chapter_id: RowId, payload: DraftRequest) -> DraftReceipt:
+        return await request(ctx, "POST", f"writing/chapters/{chapter_id}/rewrite", 200, result_schema=DraftReceipt,
+                             json=payload.model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
 
     @server.tool(description="将指定分卷拆成计划章节，从 start_chapter 开始编号；已有章号不会被覆盖。",
                  annotations=annotations())

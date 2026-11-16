@@ -3,6 +3,85 @@ import {test} from 'node:test';
 import {authenticatedFetch, getAuthToken, setAuthToken} from '../frontend/api-client.js';
 import {postGeneration, watchGeneration} from '../frontend/generation-stream.js';
 
+function mockStorage(context) {
+  const previous = {
+    localStorage: Object.getOwnPropertyDescriptor(globalThis, 'localStorage'),
+    sessionStorage: Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage'),
+  };
+  const makeStorage = () => {
+    const values = new Map();
+    return {
+      getItem: key => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, String(value)),
+      removeItem: key => values.delete(key),
+      clear: () => values.clear(),
+    };
+  };
+  for (const name of Object.keys(previous)) {
+    Object.defineProperty(globalThis, name, {configurable: true, value: makeStorage()});
+  }
+  context.after(() => {
+    for (const [name, descriptor] of Object.entries(previous)) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
+  });
+}
+
+test('login survives closing the tab and reopening the page', async (context) => {
+  mockStorage(context);
+  const firstPage = await import('../frontend/api-client.js?first-page');
+  firstPage.setAuthToken('persistent-account-token');
+  assert.equal(localStorage.getItem('mojian-session'), 'persistent-account-token');
+  assert.equal(sessionStorage.getItem('mojian-session'), null);
+  sessionStorage.clear();
+  const reopenedPage = await import('../frontend/api-client.js?reopened-page');
+  assert.equal(reopenedPage.getAuthToken(), 'persistent-account-token');
+  reopenedPage.setAuthToken();
+  const afterLogout = await import('../frontend/api-client.js?after-logout');
+  assert.equal(afterLogout.getAuthToken(), '');
+});
+
+test('an existing tab session is migrated and cannot reappear after logout', async (context) => {
+  mockStorage(context);
+  sessionStorage.setItem('mojian-session', 'legacy-token');
+  const page = await import('../frontend/api-client.js?legacy-page');
+  assert.equal(page.getAuthToken(), 'legacy-token');
+  assert.equal(localStorage.getItem('mojian-session'), 'legacy-token');
+  assert.equal(sessionStorage.getItem('mojian-session'), null);
+  page.setAuthToken();
+  const reopenedPage = await import('../frontend/api-client.js?legacy-after-logout');
+  assert.equal(reopenedPage.getAuthToken(), '');
+});
+
+test('a rejected persistent session is cleared before reopening the page', async (context) => {
+  mockStorage(context);
+  const previous = {fetch: globalThis.fetch, dispatchEvent: globalThis.dispatchEvent};
+  context.after(() => Object.assign(globalThis, previous));
+  const page = await import('../frontend/api-client.js?expired-persistent-page');
+  page.setAuthToken('expired-persistent-token');
+  globalThis.dispatchEvent = () => {};
+  globalThis.fetch = async () => new Response('{}', {status: 401});
+  await page.authenticatedFetch('/api/v1/auth/me');
+  assert.equal(localStorage.getItem('mojian-session'), null);
+  assert.equal(sessionStorage.getItem('mojian-session'), null);
+  const reopenedPage = await import('../frontend/api-client.js?expired-reopened-page');
+  assert.equal(reopenedPage.getAuthToken(), '');
+});
+
+test('blocked storage still allows login for the current page', async (context) => {
+  mockStorage(context);
+  for (const name of ['localStorage', 'sessionStorage']) {
+    Object.defineProperty(globalThis, name, {configurable: true, get() { throw new Error('Storage blocked'); }});
+  }
+  const page = await import('../frontend/api-client.js?blocked-storage-page');
+  assert.equal(page.getAuthToken(), '');
+  page.setAuthToken('memory-only-token');
+  assert.equal(page.getAuthToken(), 'memory-only-token');
+  page.setAuthToken();
+  assert.equal(page.getAuthToken(), '');
+});
+
 test('ordinary and streaming requests carry the account token in headers', async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; setAuthToken(); });

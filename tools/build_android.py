@@ -1,6 +1,7 @@
 """Build a side-loadable APK; optional Windows-only portable JDK/SDK bootstrap."""
 
 import argparse
+import json
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 import os
@@ -122,12 +123,22 @@ def main():
     subprocess.run([str(gradle), "--no-daemon", "--no-watch-fs", "--max-workers=2",
                     "-Dorg.gradle.internal.instrumentation.agent=false", "assembleDebug"],
                    cwd=wrapper.parent, env=env, check=True)
-    output = ROOT / "dist/mojian-android-0.1.0-debug.apk"
+    version = json.loads((MOBILE / "package.json").read_text(encoding="utf-8"))["version"]
+    output = ROOT / f"dist/mojian-android-{version}-debug.apk"
     output.parent.mkdir(exist_ok=True)
     shutil.copy2(MOBILE / "android/app/build/outputs/apk/debug/app-debug.apk", output)
     signer = Path(sdk_home) / "build-tools/35.0.0" / ("apksigner.bat" if sys.platform == "win32" else "apksigner")
     subprocess.run([str(signer), "verify", "--verbose", str(output)], env=env, check=True)
     with ZipFile(output) as apk:
+        for name in ("workbench.js", "api-client.js", "generation-stream.js", "workbench.css", "bootstrap.js"):
+            if apk.read("assets/public/" + name) != (ROOT / "frontend" / name).read_bytes():
+                raise RuntimeError("APK contains stale frontend asset: " + name)
+        if apk.read("assets/public/index.html") != (MOBILE / "www/index.html").read_bytes():
+            raise RuntimeError("APK contains a stale index page.")
+        expected_config = json.loads((MOBILE / "capacitor.config.json").read_text(encoding="utf-8"))
+        actual_config = json.loads(apk.read("assets/capacitor.config.json"))
+        if any(actual_config.get(key) != value for key, value in expected_config.items()):
+            raise RuntimeError("APK native configuration does not match the source configuration.")
         config = apk.read("assets/public/runtime-config.js").decode("utf-8")
         if env["AITXT_PUBLIC_API_URL"].rstrip("/") not in config:
             raise RuntimeError("APK public API address does not match the build configuration.")

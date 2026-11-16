@@ -1,7 +1,7 @@
 """Resolve every novel resource to its owning account in SQL."""
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, true
 
 from api.database import transaction
 from api.novel_tables import tables
@@ -48,6 +48,21 @@ def validate_owned_links(connection, relation, values, account_id):
     for foreign_key, parent in LINKS.get(relation.name, {}).items():
         if values.get(foreign_key) is not None:
             require_owned(connection, parent, values[foreign_key], account_id)
+
+
+def readable_condition(relation, user):
+    # Private questionnaire conversations remain scoped to their creator.
+    if user.is_admin and relation.name not in {"novel_design_session", "novel_design_message"}:
+        return true()
+    return owned_condition(relation, user.id)
+
+
+def require_readable(connection, table_name, record_id, user):
+    relation = tables[table_name]
+    exists = connection.scalar(select(relation.c.id).where(
+        relation.c.id == record_id, readable_condition(relation, user)))
+    if exists is None:
+        raise HTTPException(404, "记录不存在")
 
 
 def require_resource(engine, table_name, record_id, account_id):

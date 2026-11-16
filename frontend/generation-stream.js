@@ -203,7 +203,8 @@ const fieldNames = {title: '标题', name: '名称', genre: '小说类型', sett
   weakness: '弱点', character_arc: '人物成长', abilities: '能力', faction_name: '所属势力',
   central_conflict: '核心冲突', themes: '主题', main_conflict: '主要冲突', climax: '高潮', ending_hook: '结尾悬念',
   foreshadowing: '伏笔', content: '正文', evidence: '文中依据', suggestion: '修改建议', verdict: '审读结论',
-  quote: '原文引文', explanation: '偏移说明', kind: '对照类型', field: '对照字段'};
+  quote: '原文引文', explanation: '偏移说明', kind: '对照类型', field: '对照字段',
+  actions: '本章行动与结果', current_state: '截至本章状态'};
 
 export function formatGenerationText(text) {
   const entries = [];
