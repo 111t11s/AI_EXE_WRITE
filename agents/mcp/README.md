@@ -54,10 +54,12 @@
 |---|---|---|
 | `generate_novel_outline` | `{"project_id":2,"payload":{"volume_count":3}}` | 新的大纲版本、分卷 ID、剧情节点数量 |
 | `rewrite_novel_outline` | `{"outline_id":8,"payload":{"volume_count":3,"instruction":"加强第二卷冲突"}}` | 读取原大纲后重写，保存新版本，原大纲及章节保留 |
-| `generate_novel_core_characters` | `{"project_id":2,"payload":{"protagonist_count":1,"important_count":3,"outline_id":8}}` | 根据世界观及可选大纲生成核心人物；指定大纲时一并生成分卷阶段档案，返回角色 ID、档案角色 ID 与层级统计 |
+| `generate_novel_core_characters` | `{"project_id":2,"payload":{"protagonist_count":1,"important_count":3,"outline_id":8}}` | 根据世界观及大纲生成核心人物；省略 outline_id 时自动使用项目最新大纲，有大纲时一并生成分卷阶段档案，返回角色 ID、档案角色 ID 与层级统计 |
 | `generate_novel_supporting_characters` | `{"outline_id":8,"payload":{"volume_id":12,"supporting_count":2,"reuse_character_ids":[4,5]}}` | 根据分卷补充新配角并为勾选的前卷配角安排新戏份；新增数可为 0，返回新增及复用角色 ID |
 | `plan_novel_chapters` | `{"volume_id":12,"payload":{"start_chapter":1,"chapter_count":5}}` | 新的计划章节 ID、章号与标题 |
-| `draft_novel_chapter` | `{"chapter_id":34,"payload":{"target_characters":2000}}` | 检查项目已有角色后生成正文，并验证原句、同步人物正文进展；正文与档案同一事务保存，缺少角色返回 409；正文用 `read_novel_chapter` 获取 |
+| `draft_novel_chapter` | `{"chapter_id":34,"payload":{"target_characters":2000}}` | 检查项目已有角色后生成并保存正文；人物正文进展由独立分析工具处理，缺少角色返回 409；正文用 `read_novel_chapter` 获取 |
+| `batch_draft_novel_chapters` | `{"project_id":12,"payload":{"chapter_ids":[34,35],"target_characters":2000}}` | 按章号顺序生成多个已有规划章节；每章正文保存并完成独立人物进展分析后才继续下一章，最多 20 章 |
+| `analyze_novel_character_progress` | `{"chapter_id":34,"payload":{"instruction":"核对本章已发生行动和结果"}}` | 只分析已保存正文，按逐字原文依据保存人物行动、截至本章状态和关系变化；不会续写或修改正文 |
 | `list_novel_character_progress` | `{"project_id":12,"before_chapter_number":34,"latest":true}` | 只读查询人物正文进展；按章序排除当前及未来章，latest 返回每人最近状态，支持 limit/offset 分页 |
 | `rewrite_novel_chapter` | `{"chapter_id":34,"payload":{"target_characters":2000,"instruction":"保留情节，加强对话"}}` | 读取原正文后重写并替换，设为草稿；期间章节变化则拒绝覆盖 |
 | `review_novel_chapter` | `{"chapter_id":34}` | 审读结论、问题证据与修改建议；不修改数据库 |
@@ -75,6 +77,8 @@
 | 生成大纲 | `/writing/projects/{project_id}/outline/stream` |
 | 章节规划 | `/writing/volumes/{volume_id}/chapter-plan/stream` |
 | 生成正文 | `/writing/chapters/{chapter_id}/draft/stream` |
+| 批量生成正文 | `/writing/projects/{project_id}/chapters/batch-draft/stream` |
+| 分析人物正文进展 | `/writing/chapters/{chapter_id}/character-progress/stream` |
 | 审读正文 | `/writing/chapters/{chapter_id}/review/stream` |
 
 事件依次包含 `status`（中文进度）、`delta`（正文分片），最后以 `result`（校验、保存完成后的原接口结果）或 `error`（中文错误和状态码）结束。等待模型时每 10 秒发送注释心跳，并通过 `X-Accel-Buffering: no` 防止代理缓冲。开始 SSE 后发生的生成错误通过 `error` 事件报告，客户端必须等到 `result` 才能判断成功。

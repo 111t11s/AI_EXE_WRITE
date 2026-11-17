@@ -8,6 +8,7 @@ This is the new canonical structure for the novel-design workflow. The legacy XM
 - `schema.sql`: fresh MySQL 8 schema. Apply it to an empty database; it does not migrate or alter an existing database.
 - `accounts.py`: account/session tables and salted password hashing.
 - `migrate_accounts.py`: idempotent ownership migration for existing databases.
+- `migrate_project_trash.py`: additive, idempotent migration for project recycle-bin timestamps and the purge index. Run `python -m db.migrate_project_trash` when upgrading an existing database.
 - `migrate_volume_characters.py`: additive, idempotent migration for per-volume character scenes. Run `python -m db.migrate_volume_characters` when upgrading an existing MySQL database.
 - `character_progress.py` / `migrate_character_progress.py`: chapter-scoped, evidence-backed character facts. Run `python -m db.migrate_character_progress` before enabling automatic body-to-profile synchronization; `deployment/character-progress.sql` is the equivalent schema-admin migration.
 - `reset_password.py`: interactive administrator password reset that revokes all sessions.
@@ -89,6 +90,8 @@ Primary keys, foreign keys, ordering/version fields, status values, timestamps, 
 
 列表使用 `limit`（默认 20，最大 100）和 `offset`（默认 0）分页，返回 `items`、`limit`、`offset` 和 `has_more`。分卷、章节、剧情节点、等级、消息和版本按各自的业务序号排序。例如，`GET /api/v1/chapters?project_id=12&status=draft&limit=10` 查询项目 12 的草稿章节。
 
-`PATCH` 只修改提交的字段，允许给可空字段传 `null` 来解除关联，例如 `PATCH /api/v1/chapters/34` 传 `{"volume_id": null}`。记录 ID、时间戳和所属父记录不可修改。角色所属势力、章节所属分卷以及关系两端的角色必须属于同一小说项目。将一个世界观版本设为当前版本会取消该项目其他版本的当前状态。删除遵循表定义中的外键规则：例如，删除项目会级联删除其章节和世界观，并把关联问答会话的 `project_id` 置空。
+`PATCH` 只修改提交的字段，允许给可空字段传 `null` 来解除关联，例如 `PATCH /api/v1/chapters/34` 传 `{"volume_id": null}`。记录 ID、时间戳和所属父记录不可修改。角色所属势力、章节所属分卷以及关系两端的角色必须属于同一小说项目。将一个世界观版本设为当前版本会取消该项目其他版本的当前状态。普通删除会先将项目移入回收站并保留七天；期间可恢复或立即彻底删除，七天后后台自动彻底删除。彻底删除会清理项目关联的问答会话、世界观、章节、角色、大纲、人物进展档案及其下级数据。
+
+回收站接口为 `GET /api/v1/projects/trash`、`POST /api/v1/projects/{id}/restore` 和 `DELETE /api/v1/projects/{id}/purge`。
 
 不存在的记录返回 `404`，重复序号、版本号或无效关联返回 `409`，请求字段校验失败返回 `422`，数据库不可用时返回 `503`。`/novel-assistant` 的问答会话仍保存在内存中；确认生成后，助手通过 MCP 将验证通过的项目和世界观写入数据库。

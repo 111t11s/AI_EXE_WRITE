@@ -18,6 +18,8 @@ from api.writing_schemas import (
     CoreCharacterRequest, SupportingCharacterRequest, CharacterReceipt,
     ConsistencyRequest, ConsistencyReceipt,
     CharacterProgressPage,
+    CharacterProgressReceipt,
+    BatchDraftRequest, BatchDraftReceipt,
 )
 
 
@@ -104,7 +106,7 @@ def register_tools(server: FastMCP, resource: CrudResource) -> None:
 
 
 def register_writing_tools(server: FastMCP) -> None:
-    @server.tool(description="读取小说中由正文生成并验证原句的人物进展。before_chapter_number 排除当前章和未来章节，latest 返回每人最近记录。",
+    @server.tool(description="读取小说中由独立人物进展分析任务验证原句后保存的人物进展。before_chapter_number 排除当前章和未来章节，latest 返回每人最近记录。",
                  annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     async def list_novel_character_progress(ctx: Context, project_id: RowId, before_chapter_number: Sequence | None = None,
                                            latest: bool = False, limit: int = 100, offset: int = 0) -> CharacterProgressPage:
@@ -124,7 +126,7 @@ def register_writing_tools(server: FastMCP) -> None:
         return await request(ctx, "POST", f"writing/projects/{project_id}/consistency", 200,
                              result_schema=ConsistencyReceipt, json=payload.model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
 
-    @server.tool(description="根据当前世界观生成主角和重要配角，校验后整批新增保存；不会覆盖已有角色。",
+    @server.tool(description="根据当前世界观及项目最新大纲生成主角和重要配角；有大纲时自动读取并绑定各分卷阶段档案，不会覆盖已有角色。",
                  annotations=annotations())
     async def generate_novel_core_characters(ctx: Context, project_id: RowId,
                                              payload: CoreCharacterRequest | None = None) -> CharacterReceipt:
@@ -173,6 +175,21 @@ def register_writing_tools(server: FastMCP) -> None:
                                  payload: DraftRequest | None = None) -> DraftReceipt:
         return await request(ctx, "POST", f"writing/chapters/{chapter_id}/draft", 200, result_schema=DraftReceipt,
                              json=(payload or DraftRequest()).model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
+
+    @server.tool(description="按章号顺序批量生成已有规划章节的正文；每章正文保存并完成独立人物进展分析后才继续下一章，最多 20 章。",
+                 annotations=annotations())
+    async def batch_draft_novel_chapters(ctx: Context, project_id: RowId,
+                                         payload: BatchDraftRequest) -> BatchDraftReceipt:
+        return await request(ctx, "POST", f"writing/projects/{project_id}/chapters/batch-draft", 200,
+                             result_schema=BatchDraftReceipt, json=payload.model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
+
+    @server.tool(description="分析已保存章节中的人物行动、状态和关系变化，保存逐字正文依据；不会续写或修改正文。",
+                 annotations=annotations())
+    async def analyze_novel_character_progress(ctx: Context, chapter_id: RowId,
+                                               payload: WritingInput | None = None) -> CharacterProgressReceipt:
+        return await request(ctx, "POST", f"writing/chapters/{chapter_id}/character-progress", 200,
+                             result_schema=CharacterProgressReceipt,
+                             json=(payload or WritingInput()).model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
 
     @server.tool(description="审读现有章节，返回连续性问题、文中依据和修改建议。不会修改正文或章节状态。",
                  annotations=annotations(read_only=True))

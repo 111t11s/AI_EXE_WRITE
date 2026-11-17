@@ -1,7 +1,7 @@
 """Resolve every novel resource to its owning account in SQL."""
 
 from fastapi import HTTPException
-from sqlalchemy import select, true
+from sqlalchemy import and_, select, true
 
 from api.database import transaction
 from api.novel_tables import tables
@@ -30,7 +30,10 @@ LINKS = {
 
 def owned_condition(relation, account_id):
     if "account_id" in relation.c:
-        return relation.c.account_id == account_id
+        condition = relation.c.account_id == account_id
+        if relation.name == "novel_project" and "deleted_at" in relation.c:
+            condition = and_(condition, relation.c.deleted_at.is_(None))
+        return condition
     foreign_key, parent_name = next(iter(LINKS[relation.name].items()))
     parent = tables[parent_name]
     return relation.c[foreign_key].in_(select(parent.c.id).where(owned_condition(parent, account_id)))

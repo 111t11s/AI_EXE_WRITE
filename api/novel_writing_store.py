@@ -6,7 +6,8 @@ from collections import Counter
 from unicodedata import normalize
 
 from api.novel_crud_api import get_row, response_row, storage_values, tables, transaction
-from api.writing_schemas import ChapterPlanDraft, DraftReceipt, OutlineDraft, OutlineReceipt, ChapterPlanReceipt
+from api.writing_schemas import (ChapterPlanDraft, DraftReceipt, OutlineDraft, OutlineReceipt, ChapterPlanReceipt,
+                                 CharacterProgressReceipt)
 from db.connection import legacy_json_columns
 from api.writing_schemas import CharacterReceipt
 from api.character_profiles import format_profile
@@ -135,6 +136,7 @@ def require_empty_plan(chapter):
 
 
 def save_draft(engine, chapter_id: int, content: str, original: dict, character_updates=()) -> DraftReceipt:
+    """Save正文; ``character_updates`` is accepted only for legacy callers."""
     chapter = tables["novel_chapter"]
     count = sum(not character.isspace() for character in content)
     with transaction(engine) as connection:
@@ -150,6 +152,7 @@ def save_draft(engine, chapter_id: int, content: str, original: dict, character_
 
 
 def save_rewritten_draft(engine, chapter_id: int, content: str, original: dict, character_updates=()) -> DraftReceipt:
+    """Replace正文; progress is normally populated by save_character_progress."""
     chapter = tables["novel_chapter"]
     count = sum(not character.isspace() for character in content)
     with transaction(engine) as connection:
@@ -162,3 +165,16 @@ def save_rewritten_draft(engine, chapter_id: int, content: str, original: dict, 
         replace_progress(connection, current, content, character_updates)
         connection.execute(update(chapter).where(chapter.c.id == chapter_id).values(**values))
         return DraftReceipt(chapter_id=chapter_id, word_count=count)
+
+
+def save_character_progress(engine, chapter_id: int, original: dict, updates=()) -> CharacterProgressReceipt:
+    """Save analysis for an unchanged chapter without touching its正文."""
+    chapter = tables["novel_chapter"]
+    with transaction(engine) as connection:
+        json_columns = legacy_json_columns(connection, chapter.name)
+        current = response_row(get_row(connection, chapter, chapter_id, lock=True), json_columns)
+        if any(current[key] != original[key] for key in (
+                "project_id", "volume_id", "chapter_number", "title", "summary", "content", "status")):
+            raise HTTPException(409, "分析期间章节发生变化，请刷新后重新分析")
+        replace_progress(connection, current, current["content"], updates)
+        return CharacterProgressReceipt(chapter_id=chapter_id, updated_count=len(updates))

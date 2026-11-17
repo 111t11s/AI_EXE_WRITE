@@ -14,7 +14,8 @@ const initialState = () => ({projects: [], project: null, libraryOwner: 'all', w
   characters: null, characterProfiles: null, characterProgress: null, characterError: null, characterLoading: false, characterOutlineId: null,
   consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
   consistencyOutlineId: null, consistencyReport: null,
-  taskCategory: 'all', taskStatus: 'running', taskMenuOpen: false, tasksLoaded: false, tasksError: null,
+  trash: null, trashLoading: false, trashError: null,
+  taskCategory: 'all', taskStatus: 'all', taskMenuOpen: false, tasksLoaded: false, tasksError: null,
   busy: false, screen: 'project', reviews: new Map()});
 const state = initialState();
 let account = null;
@@ -79,11 +80,13 @@ const post = (path, data = {}) => api(path, {method: 'POST', data});
 
 const progressGeneration = createGenerationView($('task-progress-stream'));
 const jobStatuses = {running: '生成中', completed: '已完成', failed: '未完成'};
-const taskCategories = [['all', '全部任务'], ['worldbuilding', '世界观'], ['outline', '大纲'], ['draft', '正文'],
-  ['characters', '角色'], ['plan', '章节规划'], ['review', '审读'], ['consistency', '一致性核对'], ['other', '其他']];
+const taskCategories = [['all', '全部任务'], ['worldbuilding', '世界观'], ['outline', '大纲'], ['characters', '角色'],
+  ['draft', '正文'], ['plan', '章节规划'], ['review', '审读'], ['consistency', '一致性核对'], ['other', '其他']];
 const knownTaskKinds = new Set(taskCategories.filter(([kind]) => !['all', 'other'].includes(kind)).map(([kind]) => kind));
-const taskCategoryName = kind => taskCategories.find(([value]) => value === kind)?.[1] || '其他';
-const taskInCategory = (job, category) => category === 'all' || (category === 'other' ? !knownTaskKinds.has(job.kind) : job.kind === category);
+const taskKindCategory = kind => kind === 'character_progress' ? 'characters' :
+  kind === 'batch_draft' ? 'draft' : kind;
+const taskCategoryName = kind => taskCategories.find(([value]) => value === taskKindCategory(kind))?.[1] || '其他';
+const taskInCategory = (job, category) => category === 'all' || (category === 'other' ? !knownTaskKinds.has(taskKindCategory(job.kind)) : taskKindCategory(job.kind) === category);
 const sortedJobs = items => [...items].sort((left, right) =>
   Number(right.status === 'running') - Number(left.status === 'running') ||
   (Date.parse(right.created_at) || 0) - (Date.parse(left.created_at) || 0) || String(right.id).localeCompare(String(left.id)));
@@ -121,7 +124,7 @@ function renderTaskMenu() {
       return element('button', {type: 'button', class: 'task-menu-item', 'data-task-category': kind,
         'aria-current': ['tasks', 'progress'].includes(state.screen) && state.taskCategory === kind ? 'page' : null,
         click: () => openTasks(kind)}, element('span', {}, title),
-      element('span', {class: 'task-menu-count', 'aria-label': `${running} 个生成中，共 ${jobs.length} 项任务`}, String(running)));
+      element('span', {class: 'task-menu-count', 'aria-label': `${running} 个生成中，共 ${jobs.length} 项任务`}, String(jobs.length)));
     }));
 }
 
@@ -183,6 +186,12 @@ function taskCenterView() {
   const category = state.taskCategory;
   const jobs = sortedJobs(jobList.filter(job => taskInCategory(job, category)));
   const filtered = jobs.filter(job => state.taskStatus === 'all' || job.status === state.taskStatus);
+  const categoryFilters = element('nav', {class: 'task-category-filters', 'aria-label': '任务类型'},
+    taskCategories.filter(([kind]) => kind !== 'other' || jobList.some(job => !knownTaskKinds.has(job.kind))).map(([kind, title]) => {
+      const count = jobList.filter(job => taskInCategory(job, kind)).length;
+      return element('button', {type: 'button', class: 'button secondary', 'data-task-category': kind,
+        'aria-pressed': String(category === kind), click: () => openTasks(kind)}, `${title}（${count}）`);
+    }));
   const statuses = [['running', '生成中'], ['all', '全部状态'], ['completed', '已完成'], ['failed', '未完成']];
   const filters = element('nav', {class: 'task-status-filters', 'aria-label': '任务状态'}, statuses.map(([status, title]) =>
     element('button', {type: 'button', class: 'button secondary', 'data-task-status': status,
@@ -193,6 +202,7 @@ function taskCenterView() {
     state.taskStatus === 'running' ? '此分类暂无正在生成的任务，可切换「全部状态」查看历史任务。' : '此分类暂无符合条件的任务。';
   return panel(`任务中心 · ${taskCategoryName(category)}`, stack(
     muted('汇总当前账号所有小说的后台任务，每 4 秒自动更新；点击查看进度后可查看实时内容和生成结果。'),
+    categoryFilters,
     filters,
     state.tasksError ? prose(`任务刷新失败：${state.tasksError}。下方保留上次读取的任务。`) : null,
     ...(filtered.length ? filtered.map(jobRow) : [muted(emptyMessage)])
@@ -210,7 +220,9 @@ function renderTaskResult(job, result) {
     if (job.kind === 'worldbuilding') message = result.persistence?.world_id ? '世界观已保存。' : '生成已完成，请核对保存状态。';
     if (job.kind === 'outline') message = `大纲 v${result.version_no} 已保存，共 ${result.volume_ids.length} 卷。`;
     if (job.kind === 'plan') message = `已保存 ${result.chapters.length} 个计划章节。`;
-    if (job.kind === 'draft') message = `正文已保存，共 ${result.word_count} 字，人物正文进展档案已同步。`;
+    if (job.kind === 'draft') message = `正文已保存，共 ${result.word_count} 字；人物正文进展可另行分析。`;
+    if (job.kind === 'batch_draft') message = `已按顺序保存 ${result.completed_count} 章正文，并完成每章人物进展分析。`;
+    if (job.kind === 'character_progress') message = `已分析并保存本章 ${result.updated_count} 位角色的人物正文进展。`;
     if (job.kind === 'characters') {
       const counts = [['protagonist', '主角'], ['important', '重要配角'], ['supporting', '配角']]
         .filter(([kind]) => result.counts[kind]).map(([kind, label]) => `${label} ${result.counts[kind]} 位`).join('、');
@@ -242,10 +254,13 @@ function renderTaskResult(job, result) {
         if (result.outline_id) state.characterOutlineId = result.outline_id;
         await loadCharacters();
       }
+    } else if (job.kind === 'character_progress') {
+      state.tab = 'characters';
+      await loadCharacters();
     } else if (job.kind === 'outline') {
       state.tab = 'outline';
       await loadOutline(result.outline_id);
-    } else if (['plan', 'draft', 'review'].includes(job.kind)) {
+    } else if (['plan', 'draft', 'batch_draft', 'review'].includes(job.kind)) {
       state.tab = 'chapters';
       if (job.kind === 'review') state.reviews.set(job.resource_id, result);
       await loadChapters(0, result.chapters?.[0]?.chapter_id || job.resource_id);
@@ -320,6 +335,7 @@ function setBusy(message = '') {
   $('activity-text').textContent = message;
   $('new-project').disabled = state.busy;
   $('refresh').disabled = state.busy;
+  $('open-trash').disabled = state.busy;
   $('account-logout').disabled = state.busy;
   $('account-password-change').disabled = state.busy;
   renderLibrary();
@@ -350,6 +366,97 @@ function renderLibrary() {
 }
 
 $('library-owner').onchange = event => { state.libraryOwner = event.target.value; renderLibrary(); };
+
+async function loadTrash() {
+  const token = key('trash');
+  state.trashLoading = true;
+  state.trashError = null;
+  render();
+  try {
+    const items = await api('/projects/trash');
+    if (current('trash', token)) state.trash = items;
+  } catch (error) {
+    if (current('trash', token)) state.trashError = error.message;
+  } finally {
+    if (current('trash', token)) { state.trashLoading = false; render(); }
+  }
+}
+
+function openTrash() {
+  stopProgress();
+  state.screen = 'trash';
+  state.trash = null;
+  void loadTrash();
+  render();
+}
+
+async function moveProjectToTrash() {
+  const project = state.project;
+  if (!project || readOnlyProject() || state.busy) return;
+  if (!window.confirm(`确定将《${project.title || '未命名小说'}》移入回收站吗？七天后将自动彻底删除。`)) return;
+  const requestingAccount = account;
+  setBusy('正在移入回收站…');
+  try {
+    await api(`/projects/${project.id}`, {method: 'DELETE'});
+    if (account !== requestingAccount) return;
+    notify('小说已移入回收站，七天后会自动清理。');
+    await loadLibrary();
+  } catch (error) {
+    if (account === requestingAccount) notify(`移入回收站失败：${error.message}`, 'error');
+  } finally {
+    if (account === requestingAccount) { setBusy(); render(); }
+  }
+}
+
+async function restoreTrashProject(project) {
+  if (state.busy) return;
+  const requestingAccount = account;
+  setBusy('正在恢复小说…');
+  try {
+    await api(`/projects/${project.id}/restore`, {method: 'POST'});
+    if (account !== requestingAccount) return;
+    notify(`《${project.title || '未命名小说'}》已恢复。`);
+    await Promise.all([loadTrash(), loadLibrary(project.id)]);
+  } catch (error) {
+    if (account === requestingAccount) notify(`恢复失败：${error.message}`, 'error');
+  } finally {
+    if (account === requestingAccount) { setBusy(); render(); }
+  }
+}
+
+async function purgeTrashProject(project) {
+  if (state.busy) return;
+  if (!window.confirm(`确定立即彻底删除《${project.title || '未命名小说'}》吗？所有世界观、大纲、角色、章节和档案都将删除且无法恢复。`)) return;
+  const requestingAccount = account;
+  setBusy('正在彻底删除小说及关联数据…');
+  try {
+    await api(`/projects/${project.id}/purge`, {method: 'DELETE'});
+    if (account !== requestingAccount) return;
+    notify('小说及其所有关联数据已彻底删除。');
+    await loadTrash();
+    await loadLibrary();
+  } catch (error) {
+    if (account === requestingAccount) notify(`彻底删除失败：${error.message}`, 'error');
+  } finally {
+    if (account === requestingAccount) { setBusy(); render(); }
+  }
+}
+
+function trashView() {
+  if (state.trashError) return panel('回收站', stack(prose(`读取失败：${state.trashError}`), button('重试', loadTrash, 'secondary')),
+    '删除超过七天的小说会由后台自动清理。');
+  if (state.trashLoading || !state.trash) return empty('正在读取回收站', '请稍候。');
+  const items = state.trash;
+  return panel('回收站', stack(
+    muted('移入回收站的小说会保留七天，之后自动彻底删除。你也可以立即恢复或永久删除。'),
+    items.length ? items.map(project => element('article', {class: 'trash-row'},
+      element('div', {}, element('strong', {}, project.title || '未命名小说'),
+        muted(`${project.genre || '小说'} · 将于 ${new Date(project.purge_at).toLocaleString()} 自动清理`)),
+      actions(button('恢复小说', () => restoreTrashProject(project), 'secondary', state.busy),
+        button('立即彻底删除', () => purgeTrashProject(project), 'danger', state.busy)))) :
+      [muted('回收站为空。')]
+  ), '小说删除后可在这里恢复。', button('刷新回收站', loadTrash, 'secondary', state.busy));
+}
 
 function rememberedProject() {
   try { return Number(localStorage.getItem(`mojian-project-${account.id}`)); } catch { return null; }
@@ -438,7 +545,8 @@ function hero(project) {
       project.tone ? pill(project.tone) : null,
       account?.is_admin ? pill(`所属账号：${projectOwner(project)}`) : null),
     readOnlyProject() ? muted('管理员只读查看：可阅读和导出，编辑与生成由所属账号操作。') : null,
-    button('导出小说', exportDialog, 'secondary', state.busy || state.projectLoading || Boolean(state.projectError)));
+    actions(button('导出小说', exportDialog, 'secondary', state.busy || state.projectLoading || Boolean(state.projectError)),
+      mutationButton('移入回收站', moveProjectToTrash, 'secondary', state.busy || state.projectLoading || Boolean(state.projectError))));
 }
 
 function overview() {
@@ -466,6 +574,10 @@ function render() {
   if (state.screen === 'progress') return;
   if (state.screen === 'tasks') {
     view.replaceChildren(taskCenterView());
+    return;
+  }
+  if (state.screen === 'trash') {
+    view.replaceChildren(trashView());
     return;
   }
   view.setAttribute('aria-busy', String(Boolean(state.projectLoading)));
@@ -642,7 +754,7 @@ function characterProgressView(id) {
       details(['本章行动与结果', row.actions], ['截至本章状态', row.current_state], ['人物关系', row.relationships]),
       element('details', {}, element('summary', {}, '正文依据'),
         ...row.evidence.map(quote => element('blockquote', {class: 'consistency-quote'}, quote))))),
-    entries.length ? null : muted('尚无已同步的正文进展；新生成或重写正文时自动更新。'));
+    entries.length ? null : muted('尚无已分析的正文进展；打开章节后点击「分析人物进展」即可单独生成。'));
 }
 
 function characterView() {
@@ -656,7 +768,7 @@ function characterView() {
       state.outlines.length ? version : null,
       mutationButton('根据大纲补充配角', () => supportingCharacterDialog(), 'secondary', state.busy || !state.outlines.length || state.worlds.length !== 1),
       button('刷新角色', loadCharacters, 'secondary', state.characterLoading)),
-    muted('正文生成和重写后，自动同步人物已发生的行动、当前状态及关系变化，并保留正文原句依据。基础设定、大纲计划与正文进展分开展示；手动修改正文会清除该章旧进展，需重写后重新同步。'),
+    muted('正文生成和重写只保存正文；打开已保存章节后点击「分析人物进展」，单独提取已发生的行动、当前状态及关系变化，并保留正文原句依据。基础设定、大纲计划与正文进展分开展示；手动修改正文会清除该章旧进展，需重新分析。'),
     state.worlds.length !== 1 ? muted('请先设置唯一的当前世界观。') : null,
     !state.outlines.length ? muted('生成大纲后即可补充剧情配角。') : null));
   if (state.characterError) return stack(controls, empty('角色读取失败', state.characterError, button('重试', loadCharacters)));
@@ -793,7 +905,9 @@ function chapterView() {
   page.offset || page.has_more ? element('div', {class: 'paging'},
     button('上一页', () => loadChapters(page.offset - pageSize, null), 'secondary', !page.offset || state.chapterLoading),
     `第 ${Math.floor(page.offset / pageSize) + 1} 页`,
-    button('下一页', () => loadChapters(page.offset + pageSize, null), 'secondary', !page.has_more || state.chapterLoading)) : null));
+    button('下一页', () => loadChapters(page.offset + pageSize, null), 'secondary', !page.has_more || state.chapterLoading)) : null),
+  null, actions(mutationButton('批量生成正文', batchDraftDialog, 'primary',
+    state.busy || state.worlds.length !== 1 || readOnlyProject())));
   const chapter = state.chapter;
   if (!chapter) return element('div', {class: 'layout reading'}, list, empty(state.chapterError ? '无法读取章节' : '正在打开章节',
     state.chapterError || '请稍候。', state.chapterError ? button('重试', () => loadChapter(state.chapterId)) : null));
@@ -805,6 +919,7 @@ function chapterView() {
     !hasContent && chapter.status === 'planned' ? mutationButton('生成正文', () => draftDialog(chapter), 'primary', state.busy || state.worlds.length !== 1) : null,
     hasContent ? mutationButton('重写正文', () => draftDialog(chapter, true), 'primary', state.busy || state.worlds.length !== 1) : null,
     canEdit ? mutationButton('编辑章节', () => editDialog(chapter), 'secondary', state.busy) : null,
+    hasContent ? mutationButton('分析人物进展', () => progressAnalysisDialog(chapter), 'secondary', state.busy || state.worlds.length !== 1) : null,
     hasContent ? mutationButton('审读本章', () => reviewDialog(chapter), 'secondary', state.busy || state.worlds.length !== 1) : null));
   const report = state.reviews.get(chapter.id);
   return element('div', {class: 'layout reading'}, list, stack(section, report ? reviewView(report) : null));
@@ -1028,12 +1143,15 @@ function outlineRewriteDialog(outline) {
 }
 
 function coreCharacterDialog() {
-  openAction({title: '生成主角与重要配角', description: '根据当前世界观创作核心人物。已有大纲时可同时生成角色在各卷的行动、阶段结果和进度关系。数量表示本次新增人数。',
+  const selectedOutlineId = state.outlines.find(row => row.id === state.characterOutlineId)?.id || state.outlines[0]?.id || '';
+  const outlineChoices = [{value: '', label: state.outlines.length ? '自动使用最新大纲并绑定阶段档案' : '尚无大纲，暂生成基础档案'},
+    ...state.outlines.map(row => ({value: row.id, label: `大纲 v${row.version_no} · 绑定主线与阶段档案`}))];
+  openAction({title: '生成主角与重要配角', description: state.outlines.length ?
+    '根据当前世界观和选定大纲创作核心人物；主角目标、冲突、能力边界和成长弧线必须服务大纲主线，并为各卷保存阶段档案。未指定时自动使用最新大纲。数量表示本次新增人数。' :
+    '当前还没有大纲，只能生成基础人物档案；完成大纲后可再生成与主线绑定的阶段档案。数量表示本次新增人数。',
     submit: '后台生成并保存', fields: [numberField('protagonist_count', '新增主角数', 1, 1, 2),
       numberField('important_count', '新增重要配角数', 3, 0, 8),
-      {name: 'outline_id', label: '依据大纲', type: 'select', value: state.characterOutlineId || state.outlines[0]?.id || '',
-        choices: [{value: '', label: '仅生成基础档案（尚无大纲时）'},
-          ...state.outlines.map(row => ({value: row.id, label: `大纲 v${row.version_no} · 同时生成阶段档案`}))]}, noteField],
+      {name: 'outline_id', label: '依据大纲', type: 'select', value: selectedOutlineId, choices: outlineChoices}, noteField],
     payload: data => {
       const {outline_id, ...values} = data;
       return outline_id ? {...values, outline_id: Number(outline_id)} : values;
@@ -1160,10 +1278,66 @@ async function draftDialog(chapter, rewrite = false) {
       taskPath: `/writing/chapters/${chapter.id}/rewrite/tasks`});
     return;
   }
-  openAction({title: '生成正文', description: `角色信息已就绪，为第 ${chapter.chapter_number} 章生成初稿，正文和人物进展档案会一起保存。`,
+  openAction({title: '生成正文', description: `角色信息已就绪，为第 ${chapter.chapter_number} 章生成初稿。正文保存后，可单独分析本章人物进展。`,
     submit: '写作并保存', fields: [numberField('target_characters', '目标篇幅（字符）', 2000, 300, 6000), noteField],
     taskPath: `/writing/chapters/${chapter.id}/draft/tasks`,
   });
+}
+
+function progressAnalysisDialog(chapter) {
+  openAction({title: '分析本章人物进展',
+    description: `只读取第 ${chapter.chapter_number} 章已保存正文，提取已发生的人物行动、截至本章状态和关系变化。分析不会续写或修改正文。`,
+    submit: '后台开始分析', fields: [{...noteField, label: '分析要求（可选）',
+      placeholder: '例如：重点核对行动结果、位置变化和人物关系'}],
+    taskPath: `/writing/chapters/${chapter.id}/character-progress/tasks`,
+  });
+}
+
+async function batchDraftDialog() {
+  const projectId = state.project.id;
+  const requestingAccount = account;
+  let chapters;
+  try {
+    chapters = await allRows('/chapters', {project_id: projectId, status: 'planned'});
+  } catch (error) {
+    if (account === requestingAccount) notify(`章节读取失败：${error.message}`, 'error');
+    return;
+  }
+  if (account !== requestingAccount || state.project?.id !== projectId) return;
+  const planned = chapters.filter(row => row.status === 'planned' && !row.content?.trim())
+    .sort((left, right) => left.chapter_number - right.chapter_number);
+  if (!planned.length) {
+    notify('当前没有可批量生成的规划章节。请先完成章节规划，或检查已有正文。', 'error');
+    return;
+  }
+  const selection = new Set();
+  const count = muted('已选择 0 章（最多 20 章，任务会按章号顺序执行）');
+  const choices = element('fieldset', {class: 'reuse-characters'},
+    element('legend', {}, '选择待写章节'), count,
+    ...planned.map(row => element('label', {class: 'reuse-character'},
+      element('input', {type: 'checkbox', name: 'chapter_ids', value: row.id,
+        change: event => {
+          if (event.target.checked && selection.size >= 20) {
+            event.target.checked = false;
+            notify('批量生成一次最多选择 20 章。', 'error');
+            return;
+          }
+          if (event.target.checked) selection.add(row.id); else selection.delete(row.id);
+          count.textContent = `已选择 ${selection.size} 章（最多 20 章，任务会按章号顺序执行）`;
+        }}),
+      element('span', {}, element('strong', {}, `第 ${row.chapter_number} 章 · ${row.title || '未命名'}`),
+        muted(row.summary || '暂无章节摘要')))));
+  openAction({title: '批量生成正文',
+    description: `从已有章节规划中选择多章，系统会按章号依次写作；每章正文保存并完成独立人物进展分析后才会进入下一章。`,
+    submit: '后台开始批量写作', fields: [numberField('target_characters', '每章目标篇幅（字符）', 2000, 300, 6000), noteField],
+    extra: choices,
+    taskPath: `/writing/projects/${projectId}/chapters/batch-draft/tasks`,
+    payload: (data, form) => {
+      const ids = form.getAll('chapter_ids').map(Number);
+      if (!ids.length) throw new Error('请至少选择一章。');
+      if (ids.length > 20) throw new Error('一次最多选择 20 章。');
+      return {...data, chapter_ids: ids};
+    }});
 }
 
 function reviewDialog(chapter) {
@@ -1308,6 +1482,7 @@ async function sendMessage(content) {
 
 $('new-project').onclick = openWizard;
 $('refresh').onclick = () => loadLibrary();
+$('open-trash').onclick = openTrash;
 $('close-wizard').onclick = () => { if (!session.busy) wizard.close(); };
 wizard.addEventListener('cancel', (event) => { if (session.busy) event.preventDefault(); });
 $('restart-wizard').onclick = startConversation;
@@ -1377,6 +1552,7 @@ async function enterAccount(user) {
   $('app-shell').hidden = false;
   $('new-project').disabled = false;
   $('refresh').disabled = false;
+  $('open-trash').disabled = false;
   $('account-logout').disabled = false;
   $('account-password-change').disabled = false;
   notify();

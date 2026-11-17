@@ -17,17 +17,20 @@ from api import generation_jobs
 from api.account_api import CurrentAccount
 from api.ownership import require_resource
 from agents.mcp.worldbuilding import NovelToolError, call_novel_tool, novel_session
-from api.novel_crud_api import Database
+from api.novel_crud_api import Database, get_row, response_row
 from api.novel_schemas import RowId
 from api.novel_writing_store import require_empty_plan, save_chapter_plan, save_draft, save_outline
-from api.novel_writing_store import save_characters, save_rewritten_draft
+from api.novel_writing_store import save_characters, save_rewritten_draft, save_character_progress
 from api.novel_tables import tables
 from api.database import transaction
 from sqlalchemy import select
+from db.connection import legacy_json_columns
 from api.writing_schemas import (
     ChapterPlanReceipt, ChapterPlanRequest, DraftReceipt, DraftRequest, OutlineReceipt, OutlineRequest,
     ReviewReport, WritingInput,
     CoreCharacterRequest, SupportingCharacterRequest, CharacterReceipt,
+    CharacterProgressReceipt,
+    BatchDraftRequest, BatchDraftReceipt, BatchDraftChapterReceipt,
 )
 from api.character_profiles import validate_profiles
 from core.logging import get_logger
@@ -177,11 +180,18 @@ async def create_characters(project_id, outline_id, payload, user, engine):
     if core:
         outline_id = payload.outline_id
     await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    # Core characters are part of the active story plan whenever an outline
+    # already exists.  Keep the field optional only for a brand-new project
+    # that has not received its first outline yet.
+    if core and outline_id is None:
+        outline_id = await run_in_threadpool(latest_outline_id, engine, project_id)
     if outline_id is not None:
         await run_in_threadpool(require_resource, engine, "novel_outline", outline_id, user.id)
     emit_generation_event("status", message="正在通过 MCP 读取世界观、已有角色和剧情资料…")
     if outline_id is not None:
         context, sources = await load_context(character_profile_context, project_id, outline_id, payload.volume_id)
+        if core and not context["volumes"]:
+            raise HTTPException(409, "当前大纲尚未生成分卷，无法按大纲绑定核心人物")
     else:
         context, sources = await load_context(character_context, project_id)
     volume_id = payload.volume_id
@@ -216,8 +226,15 @@ async def create_characters(project_id, outline_id, payload, user, engine):
     return await run_in_threadpool(save_characters, engine, project_id, artifact, sources, volume_id, legacy_assignments)
 
 
+def latest_outline_id(engine, project_id):
+    outline = tables["novel_outline"]
+    with transaction(engine) as connection:
+        return connection.scalar(select(outline.c.id).where(outline.c.project_id == project_id).order_by(
+            outline.c.version_no.desc(), outline.c.id.desc()).limit(1))
+
+
 @router.post("/projects/{project_id}/characters/core", response_model=CharacterReceipt, status_code=201,
-             summary="根据世界观生成主角和重要配角")
+             summary="根据世界观和当前大纲生成主角和重要配角")
 async def write_core_characters(project_id: RowId, payload: CoreCharacterRequest, user: CurrentAccount, engine: Database):
     return await create_characters(project_id, None, payload, user, engine)
 
@@ -230,7 +247,7 @@ async def write_supporting_characters(outline_id: RowId, payload: SupportingChar
     return await create_characters(project_id, outline_id, payload, user, engine)
 
 
-@router.post("/projects/{project_id}/characters/core/tasks", status_code=202, summary="后台生成主角和重要配角")
+@router.post("/projects/{project_id}/characters/core/tasks", status_code=202, summary="后台根据世界观和当前大纲生成主角和重要配角")
 async def start_core_characters(project_id: RowId, payload: CoreCharacterRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
     if payload.outline_id is not None:
@@ -328,6 +345,14 @@ async def chapter_context(session, chapter_id, review, rewrite=False):
     return context
 
 
+async def character_progress_context(session, chapter_id):
+    """Load a saved chapter for standalone character-progress analysis."""
+    context = await chapter_context(session, chapter_id, True)
+    chapter = await read(session, "chapter", chapter_id)
+    context["chapter"]["status"] = chapter["status"]
+    return context
+
+
 async def load_context(loader, *args):
     problem = None
     try:
@@ -403,8 +428,55 @@ async def write_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAcc
     await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     context = await load_context(chapter_context, chapter_id, False)
     artifact = await generate(agents.DRAFT, context, payload)
-    emit_generation_event("status", message="正文生成完成，正在校验原文依据并同步人物进展档案…")
-    return await run_in_threadpool(save_draft, engine, chapter_id, artifact.content, context["chapter"], artifact.character_updates)
+    emit_generation_event("status", message="正文生成完成，正在保存正文；人物进展请另行启动分析任务…")
+    # Legacy combined artifacts may still be returned by an older caller. New
+    # body agents use ChapterContentDraft and never produce these updates.
+    return await run_in_threadpool(save_draft, engine, chapter_id, artifact.content, context["chapter"],
+                                   getattr(artifact, "character_updates", ()))
+
+
+def validate_batch_chapters(engine, project_id, chapter_ids, account_id):
+    """Check and snapshot all chapters before a serial batch starts."""
+    require_resource(engine, "novel_project", project_id, account_id)
+    chapter = tables["novel_chapter"]
+    with transaction(engine) as connection:
+        rows = {}
+        json_columns = legacy_json_columns(connection, chapter.name)
+        for chapter_id in chapter_ids:
+            row = response_row(get_row(connection, chapter, chapter_id), json_columns)
+            if row["project_id"] != project_id:
+                raise HTTPException(404, "所选章节不属于当前小说")
+            if row["status"] != "planned" or row["content"].strip():
+                raise HTTPException(409, f"第 {row['chapter_number']} 章已有正文或不是待写作状态")
+            rows[chapter_id] = row
+    return sorted(rows.values(), key=lambda row: (row["chapter_number"], row["id"]))
+
+
+async def write_batch_drafts(project_id: RowId, payload: BatchDraftRequest,
+                             user: CurrentAccount, engine: Database):
+    chapters = await run_in_threadpool(validate_batch_chapters, engine, project_id,
+                                       payload.chapter_ids, user.id)
+    completed = []
+    for index, chapter in enumerate(chapters, 1):
+        emit_generation_event("status", message=f"正在生成第 {chapter['chapter_number']} 章（{index}/{len(chapters)}）…")
+        draft = await write_draft(chapter["id"], DraftRequest(
+            target_characters=payload.target_characters, instruction=payload.instruction), user, engine)
+        emit_generation_event("status", message=f"第 {chapter['chapter_number']} 章正文已保存，正在分析人物进展…")
+        progress = await analyze_character_progress(
+            chapter["id"], WritingInput(instruction=payload.instruction), user, engine)
+        completed.append(BatchDraftChapterReceipt(
+            chapter_id=chapter["id"], chapter_number=chapter["chapter_number"], title=chapter["title"],
+            word_count=draft.word_count, progress_count=progress.updated_count))
+        emit_generation_event("status", message=f"第 {chapter['chapter_number']} 章正文与人物档案已同步保存。")
+    return BatchDraftReceipt(project_id=project_id, completed_count=len(completed), chapters=completed)
+
+
+@router.post("/projects/{project_id}/chapters/batch-draft", response_model=BatchDraftReceipt,
+             summary="按章节顺序批量生成正文并分析人物进展")
+async def write_batch_draft(project_id: RowId, payload: BatchDraftRequest,
+                            user: CurrentAccount, engine: Database):
+    await run_in_threadpool(validate_batch_chapters, engine, project_id, payload.chapter_ids, user.id)
+    return await write_batch_drafts(project_id, payload, user, engine)
 
 
 @router.post("/outlines/{outline_id}/rewrite", response_model=OutlineReceipt, status_code=201, summary="重写大纲并保存为新版本")
@@ -423,8 +495,20 @@ async def rewrite_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentA
     await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     context = await load_context(chapter_context, chapter_id, False, True)
     artifact = await generate(agents.DRAFT_REWRITE, context, payload)
-    emit_generation_event("status", message="重写正文生成完成，正在同步人物档案并替换本章旧进展…")
-    return await run_in_threadpool(save_rewritten_draft, engine, chapter_id, artifact.content, context["chapter"], artifact.character_updates)
+    emit_generation_event("status", message="重写正文生成完成，正在替换正文；人物进展请另行启动分析任务…")
+    return await run_in_threadpool(save_rewritten_draft, engine, chapter_id, artifact.content, context["chapter"],
+                                   getattr(artifact, "character_updates", ()))
+
+
+@router.post("/chapters/{chapter_id}/character-progress", response_model=CharacterProgressReceipt,
+             summary="分析已保存章节中的人物正文进展")
+async def analyze_character_progress(chapter_id: RowId, payload: WritingInput, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
+    context = await load_context(character_progress_context, chapter_id)
+    artifact = await generate(agents.CHARACTER_PROGRESS, context, payload)
+    emit_generation_event("status", message="人物进展分析完成，正在校验原文依据并保存…")
+    return await run_in_threadpool(save_character_progress, engine, chapter_id, context["chapter"],
+                                   artifact.character_updates)
 
 
 @router.post("/outlines/{outline_id}/rewrite/stream", summary="实时重写大纲")
@@ -464,10 +548,23 @@ async def stream_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAc
     return generation_response(lambda: write_draft(chapter_id, payload, user, engine))
 
 
+@router.post("/projects/{project_id}/chapters/batch-draft/stream", summary="实时批量生成章节正文")
+async def stream_batch_draft(project_id: RowId, payload: BatchDraftRequest,
+                             user: CurrentAccount, engine: Database):
+    await run_in_threadpool(validate_batch_chapters, engine, project_id, payload.chapter_ids, user.id)
+    return generation_response(lambda: write_batch_drafts(project_id, payload, user, engine))
+
+
 @router.post("/chapters/{chapter_id}/review/stream", summary="实时审读章节正文")
 async def stream_review(chapter_id: RowId, payload: WritingInput, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     return generation_response(lambda: review_chapter(chapter_id, payload, user, engine))
+
+
+@router.post("/chapters/{chapter_id}/character-progress/stream", summary="实时分析章节人物正文进展")
+async def stream_character_progress(chapter_id: RowId, payload: WritingInput, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
+    return generation_response(lambda: analyze_character_progress(chapter_id, payload, user, engine))
 
 
 def task_project(engine, table_name, record_id, account_id):
@@ -507,6 +604,17 @@ async def start_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAcc
         operation=lambda: write_draft(chapter_id, payload, user, engine)).summary()
 
 
+@router.post("/projects/{project_id}/chapters/batch-draft/tasks", status_code=202,
+             summary="后台按顺序批量生成章节正文并分析人物进展")
+async def start_batch_draft(project_id: RowId, payload: BatchDraftRequest,
+                            user: CurrentAccount, engine: Database):
+    await run_in_threadpool(validate_batch_chapters, engine, project_id, payload.chapter_ids, user.id)
+    return generation_jobs.store.start(
+        account_id=user.id, key=f"batch-draft:{project_id}", kind="batch_draft",
+        title="批量生成章节正文", project_id=project_id, resource_id=project_id,
+        operation=lambda: write_batch_drafts(project_id, payload, user, engine)).summary()
+
+
 @router.post("/outlines/{outline_id}/rewrite/tasks", status_code=202, summary="后台重写大纲")
 async def start_rewrite_outline(outline_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
     project_id = await run_in_threadpool(task_project, engine, "novel_outline", outline_id, user.id)
@@ -529,3 +637,17 @@ async def start_review(chapter_id: RowId, payload: WritingInput, user: CurrentAc
     return generation_jobs.store.start(account_id=user.id, key=f"review:{chapter_id}", kind="review",
         title="审读章节正文", project_id=project_id, resource_id=chapter_id,
         operation=lambda: review_chapter(chapter_id, payload, user, engine)).summary()
+
+
+@router.post("/chapters/{chapter_id}/character-progress/tasks", status_code=202,
+             summary="后台分析章节人物正文进展")
+async def start_character_progress(chapter_id: RowId, payload: WritingInput, user: CurrentAccount, engine: Database):
+    project_id = await run_in_threadpool(task_project, engine, "novel_chapter", chapter_id, user.id)
+    with transaction(engine) as connection:
+        chapter = response_row(get_row(connection, tables["novel_chapter"], chapter_id),
+                               legacy_json_columns(connection, "novel_chapter"))
+    if not chapter["content"].strip():
+        raise HTTPException(409, "该章节还没有正文，无法分析人物进展")
+    return generation_jobs.store.start(account_id=user.id, key=f"character-progress:{chapter_id}", kind="character_progress",
+        title="分析本章人物进展", project_id=project_id, resource_id=chapter_id,
+        operation=lambda: analyze_character_progress(chapter_id, payload, user, engine)).summary()

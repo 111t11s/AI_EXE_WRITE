@@ -12,6 +12,7 @@ from api.account_api import CurrentAccount
 from api.database import Database, get_database, transaction
 from api.novel_tables import tables
 from api.ownership import readable_condition, require_readable, require_owned, validate_owned_links
+from api.project_trash_api import move_project_to_trash
 from core.logging import get_logger
 from db.connection import legacy_json_columns
 from db.accounts import account
@@ -121,6 +122,8 @@ def add_resource(resource: CrudResource):
 
     def list_rows(query: Annotated[filter_schema, Query()], user: CurrentAccount, engine: Database):
         statement = read_statement().where(readable_condition(relation, user))
+        if table_name == "novel_project":
+            statement = statement.where(relation.c.deleted_at.is_(None))
         for key, value in query.model_dump(exclude={"limit", "offset"}, exclude_none=True).items():
             statement = statement.where(relation.c[key] == value)
         ordering = (*resource.order, "id")
@@ -182,6 +185,9 @@ def add_resource(resource: CrudResource):
     def delete_row(record_id: id_type, user: CurrentAccount, engine: Database):
         with transaction(engine) as connection:
             require_owned(connection, table_name, record_id, user.id)
+            if table_name == "novel_project":
+                move_project_to_trash(connection, record_id)
+                return Response(status_code=204)
             result = connection.execute(delete(relation).where(relation.c.id == record_id))
             if result.rowcount == 0:
                 raise HTTPException(404, "记录不存在")

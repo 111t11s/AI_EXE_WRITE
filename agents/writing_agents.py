@@ -10,7 +10,9 @@ from pydantic import BaseModel
 from agents.llm_streaming import collect_chat_text, has_generation_listener
 from agents.mcp.worldbuilding import crewai_tools
 from agents.outline_skills import outline_skill_prompt
-from api.writing_schemas import ChapterDraft, ChapterPlanDraft, OutlineDraft, ReviewReport, CharacterDraftList, ConsistencyReport, CharacterProfileList
+from api.writing_schemas import (ChapterContentDraft, ChapterPlanDraft, OutlineDraft, ReviewReport,
+                                 CharacterDraftList, ConsistencyReport, CharacterProfileList,
+                                 CharacterProgressAnalysis)
 from core.config import get_settings
 from core.logging import get_logger
 
@@ -57,6 +59,8 @@ PROFILE_RULES = (
 CORE_CHARACTERS = WritingRole(
     "角色生成智能体·核心人物",
     "根据当前世界观、力量规则、势力和项目主角设定，生成指定 protagonist_count 位主角和 important_count 位重要配角。"
+    "如果提供 outline，必须把 outline.summary、central_conflict、themes、每一卷的 protagonist_goal/main_conflict/climax/ending_hook "
+    "以及剧情节点作为人物设计的硬约束；主角的目标、动机、身份、能力边界和成长弧线必须服务全书主线，不能生成与大纲无关的通用人物。"
     "category 分别为 protagonist、important；role 写具体剧情职能，如对手、导师、伙伴。"
     "人物应有不同的性格、经历、目标、动机、弱点、成长弧线与能力边界，能力服从世界规则。"
     "在简介中说明与主角、势力及其他人物的关系。只新增人物，姓名不得与已有角色或本批次重复；"
@@ -113,8 +117,9 @@ DRAFT = WritingRole(
     "按已保存的章节标题和摘要写一章中文正文，贴近指定篇幅。保持视角一致，用场景和对话推进故事；"
     "结合 volume_characters 中角色在本卷的戏份安排，按 character_id 对照人物档案并遵守既有人物设定。"
     "阶段档案中标注的行动和结果是大纲计划，按本章剧情进度逐步实现，不能提前兑现后续结局。"
-    "接续前文，不在正文中写创作说明或重复章节标题。" + CHAPTER_PROGRESS_RULES,
-    ChapterDraft, CHAPTER_TOOLS,
+    "接续前文，不在正文中写创作说明或重复章节标题。只返回正文 content；人物正文进展由独立分析任务处理，"
+    "不要在正文结果中输出 character_updates。",
+    ChapterContentDraft, CHAPTER_TOOLS,
 )
 DRAFT_REWRITE = WritingRole(
     "小说正文重写编辑",
@@ -122,8 +127,15 @@ DRAFT_REWRITE = WritingRole(
     "保留未要求改动的关键情节、人物身份、叙事视角和伏笔，结合章节标题、摘要、大纲、前章结尾和角色资料。"
     "遵守世界规则与 volume_characters 中的本卷戏份，改善节奏、对话和描写；不要脱离原稿另写故事。"
     "content 只写正文，不写修改说明、章节标题、评语或省略未改段落。"
-    "重新提取本次完整新正文中的人物进展；本章原来的事件已被替换，不沿用被删改的情节。" + CHAPTER_PROGRESS_RULES,
-    ChapterDraft, CHAPTER_TOOLS,
+    "人物正文进展由独立分析任务处理，不要在正文结果中输出 character_updates。",
+    ChapterContentDraft, CHAPTER_TOOLS,
+)
+CHARACTER_PROGRESS = WritingRole(
+    "人物正文进展分析师",
+    "只分析已保存的本章正文，不续写、改写或评价正文。为本章明确参与行动或发生状态变化的已建档人物返回 character_updates。"
+    + CHAPTER_PROGRESS_RULES +
+    "如果正文没有可核实的人物行动，返回空数组。所有 evidence 必须是本章正文中逐字连续、包含人物完整姓名的原句。",
+    CharacterProgressAnalysis, CHAPTER_TOOLS,
 )
 REVIEW = WritingRole(
     "小说连续性审读编辑",

@@ -35,10 +35,13 @@ CREATE TABLE IF NOT EXISTS novel_project (
     premise TEXT NULL COMMENT '故事前提或一句话梗概',
     protagonist_goal VARCHAR(500) NOT NULL COMMENT '主角核心目标',
     status ENUM('planning','writing','completed','paused') NOT NULL DEFAULT 'planning' COMMENT '项目状态：规划中/写作中/已完成/暂停',
+    deleted_at DATETIME NULL COMMENT '移入回收站时间',
+    purge_at DATETIME NULL COMMENT '计划彻底清理时间',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间',
     PRIMARY KEY (id),
     KEY idx_project_status_updated (status, updated_at),
+    KEY idx_project_purge_at (purge_at),
     KEY idx_project_account (account_id),
     CONSTRAINT fk_project_account FOREIGN KEY (account_id) REFERENCES app_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='小说项目表';

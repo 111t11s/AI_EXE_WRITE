@@ -1,5 +1,6 @@
+import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -12,6 +13,8 @@ from core.logging import get_logger
 from core.config import get_settings
 from core.middleware import RequestLoggingMiddleware
 from core.static import FrontendFiles
+from db.connection import get_engine
+from api.project_trash_api import purge_expired_projects
 
 logger = get_logger("app")
 
@@ -19,13 +22,30 @@ logger = get_logger("app")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("服务启动：名称=%s，版本=%s", app.title, app.version)
+    cleanup = asyncio.create_task(_project_trash_cleanup())
     try:
         yield
     finally:
+        cleanup.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup
         logger.info("服务关闭")
+
+
+async def _project_trash_cleanup():
+    """Check the recycle bin hourly without delaying API startup."""
+    while True:
+        try:
+            await asyncio.to_thread(purge_expired_projects, get_engine())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("回收站自动清理失败：异常类型=%s", type(exc).__name__)
+        await asyncio.sleep(3600)
 
 from api.novel_assistant_api import router as assistant_router
 from api.novel_contracts import CRUD_PREFIX
+from api.project_trash_api import router as project_trash_router
 from api.novel_crud_api import router as crud_router
 from api.novel_writing_api import router as writing_router
 from api.novel_consistency_api import router as consistency_router
@@ -71,6 +91,7 @@ def access(user: CurrentAccount):
 app.include_router(assistant_router, prefix="/api/v1", tags=["小说设定助手"])
 app.include_router(account_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")
+app.include_router(project_trash_router, prefix=CRUD_PREFIX)
 app.include_router(crud_router, prefix=CRUD_PREFIX)
 app.include_router(writing_router, prefix=CRUD_PREFIX)
 app.include_router(consistency_router, prefix=CRUD_PREFIX)

@@ -30,6 +30,17 @@ class DraftRequest(WritingInput):
     target_characters: int = Field(default=2000, ge=300, le=6000)
 
 
+class BatchDraftRequest(DraftRequest):
+    chapter_ids: list[RowId] = Field(min_length=1, max_length=20)
+
+    @field_validator("chapter_ids")
+    @classmethod
+    def unique_chapters(cls, values):
+        if len(values) != len(set(values)):
+            raise ValueError("批量生成的章节不能重复")
+        return values
+
+
 class CoreCharacterRequest(WritingInput):
     protagonist_count: int = Field(default=1, ge=1, le=2)
     important_count: int = Field(default=3, ge=0, le=8)
@@ -128,7 +139,20 @@ class CharacterChapterUpdate(Generated):
 
 
 class ChapterDraft(Generated):
+    """Legacy combined draft payload retained for compatibility."""
     content: str = Field(min_length=100, max_length=30000)
+    character_updates: list[CharacterChapterUpdate] = Field(max_length=40)
+
+
+class ChapterContentDraft(Generated):
+    """A body-only draft; character progress is analyzed separately."""
+    # Ignore the field emitted by older model prompts so existing stream
+    # clients can be upgraded without mixing progress back into the body task.
+    model_config = ConfigDict(extra="ignore")
+    content: str = Field(min_length=100, max_length=30000)
+
+
+class CharacterProgressAnalysis(Generated):
     character_updates: list[CharacterChapterUpdate] = Field(max_length=40)
 
 
@@ -280,6 +304,25 @@ class DraftReceipt(BaseModel):
     chapter_id: RowId
     status: Literal["draft"] = "draft"
     word_count: int
+
+
+class CharacterProgressReceipt(BaseModel):
+    chapter_id: RowId
+    updated_count: int
+
+
+class BatchDraftChapterReceipt(BaseModel):
+    chapter_id: RowId
+    chapter_number: Sequence
+    title: str
+    word_count: int
+    progress_count: int
+
+
+class BatchDraftReceipt(BaseModel):
+    project_id: RowId
+    completed_count: int
+    chapters: list[BatchDraftChapterReceipt]
 
 
 class CharacterReceipt(BaseModel):
