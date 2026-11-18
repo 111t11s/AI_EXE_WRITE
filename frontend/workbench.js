@@ -108,6 +108,7 @@ let jobsTimer = null;
 let jobsLoading = false;
 let progressId = null;
 let progressAbort = null;
+let noticeTimer = null;
 
 function stopProgress() {
   progressAbort?.abort();
@@ -146,8 +147,8 @@ function renderJobSummary() {
   $('generation-task-count').textContent = `${active} 进行中`;
   renderTaskMenu();
   const summary = $('task-summary');
-  summary.hidden = !jobList.length || state.screen !== 'project';
-  summary.replaceChildren(...sortedJobs(jobList).slice(0, 3).map(jobRow));
+  summary.hidden = true;
+  summary.replaceChildren();
 }
 
 async function loadJobs(quiet = true) {
@@ -158,6 +159,9 @@ async function loadJobs(quiet = true) {
   try {
     const page = await api('/generation-jobs');
     if (account !== requestingAccount || !current('jobs', request)) return;
+    const previous = new Map(jobList.map(job => [job.id, job]));
+    const completed = state.tasksLoaded && page.items.some(job =>
+      job.status === 'completed' && previous.get(job.id)?.status !== 'completed');
     for (const job of page.items) {
       if (job.kind === 'draft' && job.status === 'completed' &&
           jobList.find(item => item.id === job.id)?.status !== 'completed') state.reviews.delete(job.resource_id);
@@ -168,6 +172,7 @@ async function loadJobs(quiet = true) {
     state.tasksLoaded = true;
     if (state.tasksError && state.screen === 'tasks') notify();
     state.tasksError = null;
+    if (completed) notify('任务完成，请去任务中心查看。', '', 3000);
     renderJobSummary();
     if (state.screen === 'tasks' && changed) render();
   } catch (error) {
@@ -184,7 +189,6 @@ function recordJob(job) {
   jobList = [job, ...jobList.filter(item => item.id !== job.id)];
   renderJobSummary();
   if (state.screen === 'tasks') render();
-  notify('任务已在后台开始，可点击「查看进度」查看实时生成内容。');
 }
 
 function openTasks(category = state.taskCategory, projectId = state.taskProjectId) {
@@ -223,11 +227,13 @@ function taskCenterView() {
   const emptyMessage = !state.tasksLoaded && !state.tasksError ? '正在读取任务…' :
     state.tasksError ? '暂时无法读取任务，请点击刷新任务重试。' :
     state.taskStatus === 'running' ? '此分类暂无正在生成的任务，可切换「全部状态」查看历史任务。' : '此分类暂无符合条件的任务。';
+  const filterGroup = (label, content) => element('div', {class: 'task-filter-group'},
+    element('strong', {class: 'task-filter-label'}, label), content);
   return panel(`任务中心 · ${taskCategoryName(category)} · ${taskProjectName(projectId)}`, stack(
     muted('汇总当前账号所有小说的后台任务，每 4 秒自动更新；点击查看进度后可查看实时内容和生成结果。'),
-    categoryFilters,
-    projectFilters,
-    filters,
+    filterGroup('种类', categoryFilters),
+    filterGroup('小说', projectFilters),
+    filterGroup('生成状态', filters),
     state.tasksError ? prose(`任务刷新失败：${state.tasksError}。下方保留上次读取的任务。`) : null,
     ...(filtered.length ? filtered.map(jobRow) : [muted(emptyMessage)])
   ), `共 ${jobs.length} 项任务，${jobs.filter(job => job.status === 'running').length} 项正在生成。`,
@@ -346,11 +352,20 @@ async function allRows(path, filters = {}) {
   return items;
 }
 
-function notify(text = '', kind = '') {
+function notify(text = '', kind = '', duration = 0) {
   const node = $('notice');
+  if (noticeTimer) { clearTimeout(noticeTimer); noticeTimer = null; }
   node.hidden = !text;
   node.textContent = text;
   node.dataset.kind = kind;
+  node.classList.toggle('toast', Boolean(text && duration));
+  if (text && duration) {
+    noticeTimer = setTimeout(() => {
+      node.hidden = true;
+      node.classList.remove('toast');
+      noticeTimer = null;
+    }, duration);
+  }
 }
 
 function setBusy(message = '') {
