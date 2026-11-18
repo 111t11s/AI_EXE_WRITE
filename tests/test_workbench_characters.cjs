@@ -95,7 +95,7 @@ async function workbench(context, initialCharacters = [], options = {}) {
 
 browserTest('admin can filter owners and read other novels without editing actions', async context => {
   const {page, state, posts, errors} = await workbench(context, [{id: 7, name: '舟客', role: '配角', summary: '渡河'}], {
-    account: {is_admin: true}, projects: [
+    account: {id: 1, is_admin: true}, projects: [
       {id: 2, title: '自己的小说', account_id: 1, owner_username: 'writer', owner_display_name: '作者'},
       {id: 1, title: '寻脉', account_id: 2, owner_username: 'other', owner_display_name: '另一位作者'},
     ],
@@ -103,6 +103,9 @@ browserTest('admin can filter owners and read other novels without editing actio
   await page.setViewportSize({width: 390, height: 844});
   assert.match(await page.locator('#account-name').innerText(), /管理员/);
   assert.equal(await page.locator('#library-title').innerText(), '全部账号的小说');
+  assert.deepEqual(await page.locator('.project-group-title').allTextContents(), ['我的小说', '其他账号小说']);
+  assert.match(await page.locator('.project-group').nth(0).innerText(), /自己的小说/);
+  assert.match(await page.locator('.project-group').nth(1).innerText(), /寻脉/);
   assert.match(await page.locator('#projects').innerText(), /另一位作者（other）/);
   await page.getByText('管理员只读查看：可阅读和导出，编辑与生成由所属账号操作。', {exact: true}).waitFor();
   await page.getByRole('button', {name: '角色', exact: true}).click();

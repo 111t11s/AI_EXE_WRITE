@@ -15,7 +15,7 @@ const initialState = () => ({projects: [], project: null, libraryOwner: 'all', w
   consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
   consistencyOutlineId: null, consistencyReport: null,
   trash: null, trashLoading: false, trashError: null,
-  taskCategory: 'all', taskStatus: 'all', taskMenuOpen: false, tasksLoaded: false, tasksError: null,
+  taskCategory: 'all', taskProjectId: 'all', taskStatus: 'all', taskMenuOpen: false, tasksLoaded: false, tasksError: null,
   busy: false, screen: 'project', reviews: new Map()});
 const state = initialState();
 let account = null;
@@ -87,6 +87,19 @@ const taskKindCategory = kind => kind === 'character_progress' ? 'characters' :
   kind === 'batch_draft' ? 'draft' : kind;
 const taskCategoryName = kind => taskCategories.find(([value]) => value === taskKindCategory(kind))?.[1] || '其他';
 const taskInCategory = (job, category) => category === 'all' || (category === 'other' ? !knownTaskKinds.has(taskKindCategory(job.kind)) : taskKindCategory(job.kind) === category);
+const taskInProject = (job, projectId) => projectId === 'all' ||
+  (projectId === 'unassigned' ? job.project_id == null : String(job.project_id) === String(projectId));
+const taskProjectName = projectId => {
+  if (projectId === 'all') return '全部书籍';
+  if (projectId === 'unassigned') return '新小说';
+  return state.projects.find(project => String(project.id) === String(projectId))?.title || '小说任务';
+};
+const taskProjectOptions = () => {
+  const ids = new Set(jobList.map(job => job.project_id == null ? 'unassigned' : String(job.project_id)));
+  return [['all', '全部书籍'], ...state.projects.filter(project => ids.has(String(project.id)))
+    .map(project => [String(project.id), project.title || '未命名小说']),
+  ...(ids.has('unassigned') ? [['unassigned', '新小说']] : [])];
+};
 const sortedJobs = items => [...items].sort((left, right) =>
   Number(right.status === 'running') - Number(left.status === 'running') ||
   (Date.parse(right.created_at) || 0) - (Date.parse(left.created_at) || 0) || String(right.id).localeCompare(String(left.id)));
@@ -151,6 +164,7 @@ async function loadJobs(quiet = true) {
     }
     const changed = !state.tasksLoaded || state.tasksError || JSON.stringify(jobList) !== JSON.stringify(page.items);
     jobList = page.items;
+    if (!taskProjectOptions().some(([id]) => String(id) === String(state.taskProjectId))) state.taskProjectId = 'all';
     state.tasksLoaded = true;
     if (state.tasksError && state.screen === 'tasks') notify();
     state.tasksError = null;
@@ -173,9 +187,10 @@ function recordJob(job) {
   notify('任务已在后台开始，可点击「查看进度」查看实时生成内容。');
 }
 
-function openTasks(category = state.taskCategory) {
+function openTasks(category = state.taskCategory, projectId = state.taskProjectId) {
   stopProgress();
   state.taskCategory = category;
+  state.taskProjectId = projectId;
   state.taskMenuOpen = true;
   state.screen = 'tasks';
   render();
@@ -184,13 +199,21 @@ function openTasks(category = state.taskCategory) {
 
 function taskCenterView() {
   const category = state.taskCategory;
-  const jobs = sortedJobs(jobList.filter(job => taskInCategory(job, category)));
+  const projectId = state.taskProjectId;
+  const jobs = sortedJobs(jobList.filter(job => taskInCategory(job, category) && taskInProject(job, projectId)));
   const filtered = jobs.filter(job => state.taskStatus === 'all' || job.status === state.taskStatus);
   const categoryFilters = element('nav', {class: 'task-category-filters', 'aria-label': '任务类型'},
     taskCategories.filter(([kind]) => kind !== 'other' || jobList.some(job => !knownTaskKinds.has(job.kind))).map(([kind, title]) => {
       const count = jobList.filter(job => taskInCategory(job, kind)).length;
       return element('button', {type: 'button', class: 'button secondary', 'data-task-category': kind,
         'aria-pressed': String(category === kind), click: () => openTasks(kind)}, `${title}（${count}）`);
+    }));
+  const projectFilters = element('nav', {class: 'task-project-filters', 'aria-label': '小说'},
+    taskProjectOptions().map(([id, title]) => {
+      const count = jobList.filter(job => taskInCategory(job, category) && taskInProject(job, id)).length;
+      return element('button', {type: 'button', class: 'button secondary', 'data-task-project': id,
+        'aria-pressed': String(String(projectId) === String(id)), click: () => openTasks(category, id)},
+      `${title}（${count}）`);
     }));
   const statuses = [['running', '生成中'], ['all', '全部状态'], ['completed', '已完成'], ['failed', '未完成']];
   const filters = element('nav', {class: 'task-status-filters', 'aria-label': '任务状态'}, statuses.map(([status, title]) =>
@@ -200,9 +223,10 @@ function taskCenterView() {
   const emptyMessage = !state.tasksLoaded && !state.tasksError ? '正在读取任务…' :
     state.tasksError ? '暂时无法读取任务，请点击刷新任务重试。' :
     state.taskStatus === 'running' ? '此分类暂无正在生成的任务，可切换「全部状态」查看历史任务。' : '此分类暂无符合条件的任务。';
-  return panel(`任务中心 · ${taskCategoryName(category)}`, stack(
+  return panel(`任务中心 · ${taskCategoryName(category)} · ${taskProjectName(projectId)}`, stack(
     muted('汇总当前账号所有小说的后台任务，每 4 秒自动更新；点击查看进度后可查看实时内容和生成结果。'),
     categoryFilters,
+    projectFilters,
     filters,
     state.tasksError ? prose(`任务刷新失败：${state.tasksError}。下方保留上次读取的任务。`) : null,
     ...(filtered.length ? filtered.map(jobRow) : [muted(emptyMessage)])
@@ -356,13 +380,29 @@ function renderLibrary() {
   $('library-owner').value = state.libraryOwner;
   const projects = state.projects.filter(project => !account?.is_admin || state.libraryOwner === 'all' ||
     String(project.account_id ?? 'unassigned') === state.libraryOwner);
-  $('projects').replaceChildren(...(projects.length ? projects.map((project) =>
-    element('button', {type: 'button', class: 'project-link', 'aria-current': String(state.project?.id === project.id),
+  const projectButton = project => element('button',
+    {type: 'button', class: 'project-link', 'aria-current': String(state.project?.id === project.id),
       disabled: state.busy, click: () => openProject(project.id)},
     element('span', {class: 'project-badge', 'aria-hidden': 'true'}, Array.from(project.title || '未')[0]),
     element('span', {}, element('strong', {}, project.title || '未命名小说'),
-      element('small', {}, account?.is_admin ? `${project.genre || '小说'} · ${projectOwner(project)}` : project.genre || '小说')))) :
-    [element('p', {class: 'rail-note'}, state.libraryError ? '书架读取失败，点击刷新重试。' : '还没有小说项目。')]));
+      element('small', {}, account?.is_admin ? `${project.genre || '小说'} · ${projectOwner(project)}` : project.genre || '小说')));
+  if (!projects.length) {
+    $('projects').replaceChildren(element('p', {class: 'rail-note'},
+      state.libraryError ? '书架读取失败，点击刷新重试。' : '还没有小说项目。'));
+    return;
+  }
+  if (!account?.is_admin) {
+    $('projects').replaceChildren(...projects.map(projectButton));
+    return;
+  }
+  const ownProjects = projects.filter(project => String(project.account_id) === String(account.id));
+  const otherProjects = projects.filter(project => String(project.account_id) !== String(account.id));
+  const projectGroup = (title, rows, emptyText) => element('section', {class: 'project-group'},
+    element('h3', {class: 'project-group-title'}, title),
+    rows.length ? rows.map(projectButton) : element('p', {class: 'rail-note'}, emptyText));
+  $('projects').replaceChildren(
+    projectGroup('我的小说', ownProjects, '暂无自己的小说。'),
+    projectGroup('其他账号小说', otherProjects, '暂无其他账号小说。'));
 }
 
 $('library-owner').onchange = event => { state.libraryOwner = event.target.value; renderLibrary(); };
@@ -416,7 +456,7 @@ async function restoreTrashProject(project) {
     await api(`/projects/${project.id}/restore`, {method: 'POST'});
     if (account !== requestingAccount) return;
     notify(`《${project.title || '未命名小说'}》已恢复。`);
-    await Promise.all([loadTrash(), loadLibrary(project.id)]);
+    await Promise.all([loadTrash(), loadLibrary(project.id, {preserveScreen: false})]);
   } catch (error) {
     if (account === requestingAccount) notify(`恢复失败：${error.message}`, 'error');
   } finally {
@@ -462,8 +502,14 @@ function rememberedProject() {
   try { return Number(localStorage.getItem(`mojian-project-${account.id}`)); } catch { return null; }
 }
 
-async function loadLibrary(preferred = state.project?.id ?? rememberedProject()) {
+async function loadLibrary(preferred = state.project?.id ?? rememberedProject(), options = {}) {
   const token = key('library');
+  const previousScreen = state.screen;
+  const previousProjectId = state.project?.id;
+  const previousTab = state.tab;
+  const previousChapterId = state.chapterId;
+  const previousCharacterOutlineId = state.characterOutlineId;
+  const preserveScreen = options.preserveScreen ?? ['tasks', 'progress', 'trash'].includes(previousScreen);
   connection('连接中', 'waiting');
   try {
     const projects = await allRows('/projects');
@@ -473,7 +519,17 @@ async function loadLibrary(preferred = state.project?.id ?? rememberedProject())
     connection('数据已连接', 'ready');
     renderLibrary();
     const target = state.projects.find((project) => project.id === preferred) ?? state.projects[0];
-    if (target) await openProject(target.id);
+    if (preserveScreen) {
+      if (previousProjectId && state.projects.some(project => project.id === previousProjectId)) {
+        state.project = state.projects.find(project => project.id === previousProjectId);
+      } else {
+        state.project = null;
+      }
+      render();
+    } else if (target) {
+      await openProject(target.id, {preserveView: target.id === previousProjectId && previousScreen === 'project',
+        tab: previousTab, chapterId: previousChapterId, characterOutlineId: previousCharacterOutlineId});
+    }
     else { state.project = null; render(); }
   } catch (error) {
     if (!current('library', token)) return;
@@ -485,16 +541,17 @@ async function loadLibrary(preferred = state.project?.id ?? rememberedProject())
   }
 }
 
-async function openProject(projectId) {
+async function openProject(projectId, options = {}) {
+  const preserveView = options.preserveView === true;
   stopProgress();
   state.screen = 'project';
   const token = key('project');
   for (const name of ['outline', 'volume', 'chapters', 'chapter', 'characters', 'consistency']) key(name);
   Object.assign(state, {project: state.projects.find((item) => item.id === projectId) ?? null, worlds: [], outlines: [],
-    tab: 'overview', outline: null, volumes: null, volume: null, beats: null, page: null,
-    chapter: null, chapterId: null, chapterLoading: false, chapterListError: null, outlineError: null,
+    tab: preserveView ? (options.tab || 'overview') : 'overview', outline: null, volumes: null, volume: null, beats: null, page: null,
+    chapter: null, chapterId: preserveView ? options.chapterId ?? null : null, chapterLoading: false, chapterListError: null, outlineError: null,
     volumeError: null, projectLoading: true, projectError: null,
-    characters: null, characterProfiles: null, characterProgress: null, characterError: null, characterLoading: false, characterOutlineId: null,
+    characters: null, characterProfiles: null, characterProgress: null, characterError: null, characterLoading: false, characterOutlineId: preserveView ? options.characterOutlineId ?? null : null,
     consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
     consistencyOutlineId: null, consistencyReport: null});
   notify();

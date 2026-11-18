@@ -56,6 +56,10 @@ def move_project_to_trash(connection, project_id, *, now=None):
     ).values(deleted_at=now, purge_at=purge_at))
     if result.rowcount == 0:
         raise HTTPException(404, "小说不存在或已在回收站")
+    # Background generation is process-local and therefore needs an explicit
+    # cleanup when the project leaves the active library.
+    from api import generation_jobs
+    generation_jobs.store.remove_project(project_id)
     return now, purge_at
 
 
@@ -67,6 +71,8 @@ def purge_project(connection, project_id):
     ).with_for_update())
     if deleted_at is None:
         return False
+    from api import generation_jobs
+    generation_jobs.store.remove_project(project_id)
     session = tables["novel_design_session"]
     connection.execute(delete(session).where(session.c.project_id == project_id))
     result = connection.execute(delete(project).where(

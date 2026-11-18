@@ -73,6 +73,10 @@ class JobStore:
     def __init__(self):
         self.jobs: dict[str, GenerationJob] = {}
         self.running: set[asyncio.Task] = set()
+        # Keep the asyncio task separately from the public job payload so a
+        # project deletion can stop its in-flight generation as well as remove
+        # the retained progress record.
+        self._tasks: dict[str, asyncio.Task] = {}
 
     def prune(self):
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -85,6 +89,25 @@ class JobStore:
         if job is None or job.account_id != account_id:
             raise HTTPException(404, "任务不存在或已过期")
         return job
+
+    def remove_project(self, project_id):
+        """Drop all jobs belonging to a project and cancel active work.
+
+        Generation jobs are process-local, so there is no database cascade to
+        remove them when a novel is moved to the recycle bin.  Cancelling the
+        associated asyncio tasks also prevents a late completion from writing
+        newly generated records back into a deleted project.
+        """
+        removed = 0
+        for job_id, job in list(self.jobs.items()):
+            if job.project_id != project_id:
+                continue
+            removed += 1
+            task = self._tasks.get(job_id)
+            if task is not None and not task.done():
+                task.cancel()
+            del self.jobs[job_id]
+        return removed
 
     def start(self, *, account_id: int, key: str, kind: str, title: str,
               operation: Callable[[], Awaitable], project_id=None, resource_id=None):
@@ -142,8 +165,12 @@ class JobStore:
 
         # create_task copies the request's account/MCP context before it closes.
         task = asyncio.create_task(run())
+        self._tasks[job.id] = task
         self.running.add(task)
-        task.add_done_callback(self.running.discard)
+        def finished(done):
+            self.running.discard(done)
+            self._tasks.pop(job.id, None)
+        task.add_done_callback(finished)
         return job
 
 
