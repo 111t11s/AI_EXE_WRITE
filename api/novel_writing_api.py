@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from agents import writing_agents as agents
-from agents.llm_streaming import emit_generation_event
+from agents.llm_streaming import IncompleteGenerationError, emit_generation_event
 from agents.outline_skills import OutlineSkillError
 from api.generation_stream import generation_response
 from api import generation_jobs
@@ -391,6 +391,8 @@ async def generate(role, context, payload):
         else:
             detail = "模型网关拒绝了生成请求，请检查模型和服务地址配置"
         raise HTTPException(502, detail) from None
+    except IncompleteGenerationError as exc:
+        raise HTTPException(502, str(exc)) from None
     except ValidationError:
         logger.warning("模型输出未通过内容校验：任务=%s", role.title)
         raise HTTPException(502, "模型已返回内容，但格式未通过校验，请重试生成") from None

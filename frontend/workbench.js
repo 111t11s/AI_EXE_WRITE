@@ -227,17 +227,21 @@ function taskCenterView() {
   const emptyMessage = !state.tasksLoaded && !state.tasksError ? '正在读取任务…' :
     state.tasksError ? '暂时无法读取任务，请点击刷新任务重试。' :
     state.taskStatus === 'running' ? '此分类暂无正在生成的任务，可切换「全部状态」查看历史任务。' : '此分类暂无符合条件的任务。';
-  const filterGroup = (label, content) => element('div', {class: 'task-filter-group'},
+  const filterGroup = (label, content, extraClass = '') => element('section', {class: `task-filter-group${extraClass ? ` ${extraClass}` : ''}`},
     element('strong', {class: 'task-filter-label'}, label), content);
-  return panel(`任务中心 · ${taskCategoryName(category)} · ${taskProjectName(projectId)}`, stack(
+  const taskProgress = panel(`任务中心 · ${taskCategoryName(category)} · ${taskProjectName(projectId)}`, stack(
     muted('汇总当前账号所有小说的后台任务，每 4 秒自动更新；点击查看进度后可查看实时内容和生成结果。'),
-    filterGroup('种类', categoryFilters),
-    filterGroup('小说', projectFilters),
-    filterGroup('生成状态', filters),
     state.tasksError ? prose(`任务刷新失败：${state.tasksError}。下方保留上次读取的任务。`) : null,
     ...(filtered.length ? filtered.map(jobRow) : [muted(emptyMessage)])
   ), `共 ${jobs.length} 项任务，${jobs.filter(job => job.status === 'running').length} 项正在生成。`,
   button('刷新任务', () => loadJobs(false)));
+  taskProgress.classList.add('task-progress-panel');
+  return element('div', {class: 'task-center-layout'},
+    filterGroup('小说目录', projectFilters, 'task-project-filter-group'),
+    element('div', {class: 'task-center-main'},
+      filterGroup('种类', categoryFilters),
+      filterGroup('生成状态', filters),
+      taskProgress));
 }
 
 function renderTaskResult(job, result) {
@@ -640,6 +644,9 @@ function overview() {
 }
 
 function render() {
+  const taskScreen = state.screen === 'tasks';
+  $('workspace').classList.toggle('task-workspace', taskScreen);
+  $('workspace').querySelector('.topline').hidden = taskScreen;
   view.hidden = state.screen === 'progress';
   $('task-progress-page').hidden = state.screen !== 'progress';
   renderJobSummary();

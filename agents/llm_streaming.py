@@ -14,6 +14,10 @@ logger = get_logger("llm_streaming")
 GENERATION_EVENTS: ContextVar[Callable[[str, dict], None] | None] = ContextVar("generation_events", default=None)
 
 
+class IncompleteGenerationError(RuntimeError):
+    """The provider explicitly stopped before finishing the requested output."""
+
+
 def emit_generation_event(event: str, **data) -> None:
     listener = GENERATION_EVENTS.get()
     if listener is not None:
@@ -94,16 +98,25 @@ def collect_chat_text(response: Any) -> str:
             thinking, content = _message_parts(message)
             record_thinking(thinking)
             result = record(content)
+            finish_reason = _value(choices[0], "finish_reason")
         elif isinstance(response, Iterable):
             parts = []
+            finish_reason = None
             for chunk in response:
                 thinking, content = _delta_parts(chunk)
                 record_thinking(thinking)
                 if content:
                     parts.append(record(content))
+                chunk_choices = _value(chunk, "choices", ()) or ()
+                if chunk_choices:
+                    finish_reason = _value(chunk_choices[0], "finish_reason") or finish_reason
             result = "".join(parts)
         else:
             result = ""
+            finish_reason = None
+        if finish_reason in {"length", "content_filter"}:
+            logger.warning("模型输出未完成：结束原因=%s，字符数=%s", finish_reason, characters)
+            raise IncompleteGenerationError("模型输出被中途截断，本次内容未保存，请重试或调低目标篇幅")
         logger.info("模型正文接收完成：分片数=%s，字符数=%s，已用时=%.1f秒",
                     content_chunks, characters, monotonic() - started)
         emit_generation_event("status", message="模型内容已接收完成，正在校验…")

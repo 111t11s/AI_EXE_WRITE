@@ -33,6 +33,8 @@
 
 重写 API：`POST /api/v1/writing/outlines/{outline_id}/rewrite`（`OutlineRequest`），`POST /api/v1/writing/chapters/{chapter_id}/rewrite`（`DraftRequest`）；追加 `/tasks` 提交后台任务，追加 `/stream` 获取 SSE。
 
+正文生成和重写向模型请求纯文本正文，保留段落换行，也兼容原有 `{"content":"正文"}` JSON 输出。正文仍需通过 100–30000 字符校验；损坏的 JSON、未闭合的代码围栏，以及模型明确报告超限或中途截断的输出不会保存。批量生成按章序逐章保存正文，再分析该章人物进展，完成后才继续下一章；角色、章节规划、审读等任务继续使用原有 JSON 校验。
+
 小说标题区域的「导出小说」下载 ZIP 压缩包，每章一个 TXT 或 Markdown 文件，文件名如 `第00001章_启程.txt`。可导出全部已保存正文，或选择「选择章节」跨页勾选、全选本页、清空选择后批量导出。章节按全书章号排序，保留分卷标题和段落，跳过空正文，不受最新大纲版本限制；附带的完整大纲、分卷及剧情节点单独存为 `大纲-v1.txt`（或 `.md`）。TXT 使用带 BOM 的 UTF-8 编码，Markdown 保留标题层级。没有正文时可选择大纲单独导出；生成中尚未保存的内容不包含在压缩包中。普通账号可导出自己的小说，管理员可导出全部小说；导出不调用模型，不修改数据库，无需数据库迁移。
 
 全部导出 API：`GET /api/v1/projects/{project_id}/export?format=txt`；批量导出 API：`POST /api/v1/projects/{project_id}/export`，JSON 如 `{"format":"txt","chapter_ids":[1,3,5]}`，避免大量章节 ID 超出网址长度限制。`format` 可为 `txt` 或 `md`，可选 `outline_id` 附带指定大纲。GET 也支持重复的 `chapter_ids` 参数。所有请求需携带账号的 `Authorization` 请求头，返回 `application/zip` 附件及中文文件名。所选章节不属于该小说或已被删除时返回 404，不会部分导出或退回全书导出。

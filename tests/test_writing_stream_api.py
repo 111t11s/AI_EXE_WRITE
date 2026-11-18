@@ -34,6 +34,9 @@ CASES = [
     ("/chapters/5/rewrite", {"instruction": "加强对话"}, {"content": "少年循着灵脉，踏上了远行的路。" * 20, "character_updates": []},
      "save_rewritten_draft", {"chapter_id": 5, "status": "draft", "word_count": 300}),
 ]
+CASES += [(path, payload, artifact["content"], save_name, receipt)
+          for path, payload, artifact, save_name, receipt in list(CASES)
+          if path.endswith(("/draft", "/rewrite")) and "content" in artifact]
 
 
 @pytest.mark.parametrize("path,payload,artifact,save_name,receipt", CASES)
@@ -59,7 +62,7 @@ def test_all_writing_endpoints_stream_then_validate_and_save(monkeypatch, path, 
 
     class ModelStream(httpx.SyncByteStream):
         def __iter__(self):
-            text = json.dumps(artifact, ensure_ascii=False)
+            text = artifact if isinstance(artifact, str) else json.dumps(artifact, ensure_ascii=False)
             for start in range(0, len(text), 11):
                 save.assert_not_called()
                 frame = {"choices": [{"delta": {"content": text[start:start + 11]}}]}

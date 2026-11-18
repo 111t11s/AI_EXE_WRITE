@@ -6,7 +6,7 @@ import pytest
 from openai import OpenAI
 
 from agents import worldbuilding_agent, writing_agents
-from agents.llm_streaming import GENERATION_EVENTS, collect_chat_text
+from agents.llm_streaming import GENERATION_EVENTS, IncompleteGenerationError, collect_chat_text
 
 
 TEXT = '{"summary":"灵潮衰退后的修仙世界"}'
@@ -81,3 +81,16 @@ def test_reasoning_is_forwarded_separately_from_json_content(field, as_object):
     assert events[0] == ("thinking", {"text": "先检查设定"})
     assert events[1] == ("delta", {"text": '{"summary":"实时输出"}'})
     assert [name for name, _ in events] == ["thinking", "delta", "status"]
+
+
+@pytest.mark.parametrize("finish_reason", ["length", "content_filter"])
+@pytest.mark.parametrize("streamed", [True, False])
+def test_explicitly_truncated_output_cannot_be_used_as_a_completed_body(finish_reason, streamed):
+    choice = {"message": {"content": "未完成的正文"}, "finish_reason": finish_reason}
+    response = {"choices": [choice]}
+    if streamed:
+        response = iter([{"choices": [{"delta": choice["message"]}]},
+                         {"choices": [{"delta": {}, "finish_reason": finish_reason}]},
+                         {"choices": [], "usage": {"completion_tokens": 100}}])
+    with pytest.raises(IncompleteGenerationError, match="未保存"):
+        collect_chat_text(response)
