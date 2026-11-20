@@ -23,7 +23,7 @@ async function library(context, options = {}) {
     word_count: 2400, updated_at: '2026-11-20T12:00:00'};
   const book = {id: 1, title: '寻脉', author: '林间客', genre: '仙侠', status: 'writing',
     premise: '灵气渐衰，一位少年踏上寻回山海灵脉的旅途。', chapter_count: 1, updated_at: '2026-11-20T12:00:00'};
-  const state = {books: options.books || [book], chapters: [chapter], requests: [], available: true, fail: false};
+  const state = {books: options.books || [book], chapters: options.chapters || [chapter], requests: [], available: true, fail: false};
   const listing = (items, url) => {
     const limit = Number(url.searchParams.get('limit') || 100);
     const offset = Number(url.searchParams.get('offset') || 0);
@@ -113,3 +113,91 @@ browserTest('mobile reader renders text safely and recovers after a refresh fail
   await page.waitForFunction(() => document.querySelector('.public-reader')?.textContent === '连接恢复后的正文');
   assert.deepEqual(errors, []);
 });
+
+function manyChapters() {
+  return Array.from({length: 80}, (_, index) => ({id: index + 1, chapter_number: index + 1,
+    title: `山海行记 ${index + 1}`, content: `第 ${index + 1} 章的故事。\n\n`.repeat(240),
+    word_count: 3600, updated_at: '2026-11-20T12:00:00'}));
+}
+
+browserTest('chapter changes keep the reader frame and directory position with independent scrolling', async context => {
+  const {page, state, errors} = await library(context, {query: '?book=1', chapters: manyChapters()});
+  const body = page.getByLabel('章节正文', {exact: true});
+  const directory = page.getByRole('navigation', {name: '章节目录', exact: true});
+  const panel = page.locator('.public-reader-panel');
+  const footer = page.getByRole('navigation', {name: '章节翻页'});
+  await body.evaluate(element => { element.scrollTop = 350; window.originalReader = element; });
+  await directory.getByRole('link').nth(12).scrollIntoViewIfNeeded();
+  const scroll = await directory.evaluate(element => element.scrollTop);
+  assert.ok(scroll > 0);
+  const frame = await panel.boundingBox();
+  const footerFrame = await footer.boundingBox();
+  await directory.getByRole('link').nth(12).click();
+  await page.getByRole('heading', {name: '第 13 章 · 山海行记 13', exact: true}).waitFor();
+  assert.equal(await body.evaluate(element => element === window.originalReader), true);
+  assert.equal(await body.evaluate(element => element.scrollTop), 0);
+  assert.equal(await directory.evaluate(element => element.scrollTop), scroll);
+  assert.deepEqual(await panel.boundingBox(), frame);
+  assert.deepEqual(await footer.boundingBox(), footerFrame);
+  assert.equal(await directory.locator('[aria-current=page]').innerText(), '第 13 章 · 山海行记 13');
+  await body.hover();
+  await page.mouse.wheel(0, 600);
+  await page.waitForFunction(() => document.querySelector('.public-reader').scrollTop > 0);
+  assert.deepEqual(await footer.boundingBox(), footerFrame);
+  assert.equal(await page.evaluate(() => window.scrollY), 0);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight));
+  const bodyScroll = await body.evaluate(element => element.scrollTop);
+  state.chapters[12].content += '\n作者新增的一段。';
+  await page.getByRole('button', {name: '刷新内容', exact: true}).click();
+  await page.waitForFunction(() => document.querySelector('.public-reader').textContent.endsWith('作者新增的一段。'));
+  assert.equal(await body.evaluate(element => element.scrollTop), bodyScroll);
+  await page.getByRole('link', {name: '下一章 →', exact: true}).click();
+  await page.getByRole('heading', {name: '第 14 章 · 山海行记 14', exact: true}).waitFor();
+  await page.goBack();
+  await page.getByRole('heading', {name: '第 13 章 · 山海行记 13', exact: true}).waitFor();
+  assert.deepEqual(await panel.boundingBox(), frame);
+  assert.equal(await directory.evaluate(element => element.scrollTop), scroll);
+  assert.equal(await body.evaluate(element => element.scrollTop), 0);
+  await page.goForward();
+  await page.getByRole('heading', {name: '第 14 章 · 山海行记 14', exact: true}).waitFor();
+  assert.equal(await body.evaluate(element => element === window.originalReader), true);
+  assert.deepEqual(errors, []);
+});
+
+for (const viewport of [{width: 390, height: 844}, {width: 360, height: 640}, {width: 740, height: 390}]) {
+  browserTest(`mobile directory overlays a fixed reader at ${viewport.width}x${viewport.height}`, async context => {
+    const {page, errors} = await library(context, {query: '?book=1', viewport, chapters: manyChapters()});
+    const body = page.getByLabel('章节正文', {exact: true});
+    const directory = page.getByRole('navigation', {name: '章节目录', exact: true});
+    const toggle = page.getByRole('button', {name: '目录', exact: true});
+    const frame = await page.locator('.public-reader-panel').boundingBox();
+    assert.equal(await directory.isVisible(), false);
+    assert.ok((await body.boundingBox()).height >= (viewport.height > 600 ? 300 : 100));
+    await body.evaluate(element => { element.scrollTop = 240; });
+    await toggle.click();
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await directory.getByRole('link').last().evaluate(element => element === document.activeElement), true);
+    await page.keyboard.press('Tab');
+    assert.equal(await page.getByRole('button', {name: '收起目录'}).evaluate(element => element === document.activeElement), true);
+    await directory.getByRole('link').nth(20).click();
+    await page.getByRole('heading', {name: '第 21 章 · 山海行记 21', exact: true}).waitFor();
+    assert.equal(await directory.isVisible(), false);
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+    assert.equal(await body.evaluate(element => element.scrollTop), 0);
+    assert.deepEqual(await page.locator('.public-reader-panel').boundingBox(), frame);
+    await toggle.click();
+    await directory.getByRole('link').nth(20).click();
+    await page.waitForFunction(() => !document.querySelector('.public-reading').classList.contains('is-directory-open'));
+    assert.equal(await body.evaluate(element => element.scrollTop), 0);
+    await toggle.click();
+    await page.keyboard.press('Escape');
+    assert.equal(await directory.isVisible(), false);
+    assert.equal(await toggle.evaluate(element => element === document.activeElement), true);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight));
+    await page.getByRole('link', {name: '← 返回公共书架', exact: true}).click();
+    await page.getByRole('heading', {name: '公共书架', exact: true}).waitFor();
+    assert.equal(await page.locator('.public-workspace').evaluate(element => element.classList.contains('is-reading')), false);
+    assert.deepEqual(errors, []);
+  });
+}

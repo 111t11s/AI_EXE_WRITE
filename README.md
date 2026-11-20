@@ -6,6 +6,8 @@
 
 [正文写作技能](agents/skills/prose-writing/SKILL.md)已从 20 篇写作教程独立蒸馏，正文初稿、批量正文及完整正文重写会自动加载。场景、对话、心理、外貌、打斗、节奏、伏笔、铺垫、成长与换场景的完整方法均保存在该技能及其 `references` 文件中；重写额外加载修改检查。提炼取舍见技能内的 `distillation.json`，没有外部资料路径和运行依赖，清理原资料不会影响使用。仅核对一致性、单项一致性修复、人物进展分析和大纲生成不加载这套正文提示词；正文保持原有输出与校验约定。部署时一并更新 `agents/prose_skills.py`、`agents/writing_agents.py`、`api/novel_writing_api.py` 和完整技能目录，无需数据库迁移。
 
+[黄金三章技能](agents/skills/opening-chapters/SKILL.md)补充六种开局入口、三章间的因果承接、信息分配、章末呼应和点题句。仅全书第 1—3 章的初稿、批量正文和完整重写按章序自动加载，不将数据库 ID 或新卷首章当作全书开篇；未知章序和中后期章节不加载。四份资料的提炼方法、完整提示词及取舍记录均保存在独立技能目录，运行时无需原始资料；尊重慢热、群像、倒叙等用户风格，不保证签约或流量。部署时保留完整 `agents/skills/opening-chapters` 并更新上述正文加载代码，无需数据库迁移。
+
 网页与 Android 打包：Linux 服务端见 [部署说明](deployment/README.md)，Android 见 [打包说明](mobile/README.md)。默认服务器为 http://49.232.132.111/，每个账号拥有独立书架。
 
 从项目根目录启动现有 Python 环境中的应用：

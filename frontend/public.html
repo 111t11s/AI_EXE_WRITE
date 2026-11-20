@@ -6,14 +6,14 @@
   <meta name="theme-color" content="#212b25">
   <title>墨间 · 公共书架</title>
   <link rel="stylesheet" href="/workbench.css?v=task-pagination-20261118">
-  <link rel="stylesheet" href="/public.css?v=public-library-20261120">
+  <link rel="stylesheet" href="/public.css?v=public-reader-20261120">
   <script src="/runtime-config.js?v=outline-skills-20261114"></script>
-  <script type="module" src="/public-library.js?v=public-library-20261120"></script>
+  <script type="module" src="/public-library.js?v=public-reader-20261120"></script>
 </head>
 <body>
   <main class="public-workspace">
-    <header class="topline"><a href="/public.html">墨间 · 公共书架</a><a class="button secondary" href="/">我的书架 / 登录</a></header>
-    <div class="panel-head"><p class="muted">发现大家的小说，阅读随作者更新。</p><button id="public-refresh" class="button secondary" type="button">刷新内容</button></div>
+    <header class="topline"><a href="/public.html">墨间 · 公共书架</a><div class="public-top-actions"><button id="public-refresh" class="button secondary" type="button">刷新内容</button><a class="button secondary" href="/">我的书架 / 登录</a></div></header>
+    <div class="public-shelf-intro"><p class="muted">发现大家的小说，阅读随作者更新。</p></div>
     <p id="public-status" class="notice" role="status" hidden></p>
     <div id="public-view" aria-busy="true"><section class="panel empty"><h1>正在打开公共书架</h1><p>正在读取已发布的书籍。</p></section></div>
     <noscript><p>请启用 JavaScript 后刷新页面。</p></noscript>

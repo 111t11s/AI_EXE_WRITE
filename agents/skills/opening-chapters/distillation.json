@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "scope": "全书第 1—3 章初稿与完整正文重写",
+  "reviewed_materials": 4,
+  "source_dependency": false,
+  "runtime_files": ["SKILL.md", "references/opening-methods.md", "references/revision.md"],
+  "method": "读取两份旧格式 Word 的正文、逐段查看扫描 PDF 的完整单页图像、遍历 XMind 实际内容树后，重写为独立决策方法与原创微例。无外部路径、外链、原文件校验或运行时回读。",
+  "synthesis": "三章的关注、承接与阶段反馈是为本应用组织的联合检查方式，不是材料共同规定的固定章法；章节边界服从用户及原计划。",
+  "materials": [
+    {
+      "number": 1,
+      "format": "doc",
+      "topic": "开头的具体写法",
+      "retained": ["先抑后扬与先扬后抑的期待机制", "报恩复仇动机", "烘托与楔子", "减少无关前史、人物和信息负担", "在动机与后果上具体化以避免熟套"],
+      "excluded": ["课堂聊天与作品摘抄", "审美贬损类比", "武侠与慢热题材的过时市场断言", "固定字数门槛与姓名上限", "保证商业表现及要求大量阅读后才能动笔"],
+      "files": ["SKILL.md", "references/opening-methods.md"]
+    },
+    {
+      "number": 2,
+      "format": "doc",
+      "topic": "小说开头与签约注意事项",
+      "retained": ["人物关注点与视角可跟踪", "有依据的疑问和困境", "必要背景随行动引入", "分段、标点、错字和正文完整性"],
+      "excluded": ["开头只能写主角的绝对化建议", "越少背景越好的机械删减", "平台投稿、签约与封面审核清单", "不适用于本次正文任务的命名和推广要求"],
+      "files": ["SKILL.md", "references/revision.md"]
+    },
+    {
+      "number": 3,
+      "format": "scanned-pdf",
+      "topic": "文章开头、结尾与金句",
+      "review": "PDF 共一页，为纵向扫描图，无可提取文本；全部图像分段查看，无跳页。",
+      "retained": ["好奇与反常事件建立期待", "将读者关联感转成角色可体验的牵挂与代价", "首尾有变化的呼应与情绪落点", "点题句精炼、有节奏且紧扣情境"],
+      "excluded": ["社交媒体阅读与转发目标", "读者痛点营销话术", "结尾观点清单与强制升华", "金句配额和删文比例", "原作者宣传、收入示例、名言摘抄及作业"],
+      "files": ["SKILL.md", "references/revision.md"]
+    },
+    {
+      "number": 4,
+      "format": "xmind",
+      "topic": "六种故事开头方法",
+      "review": "实际主题树使用 content.json；兼容 XML 是旧版本提示页，不作为教程内容。",
+      "retained": ["平铺直述、场景、悬念、对比、道具、引用六种入口", "困境、倒叙、反差三种悬念", "台词与行动对照", "道具引出线索和下一步行动"],
+      "excluded": ["带错字的原始示例与人物姓名", "职业、出身或身体状况的刻板标签", "课程引流和未提供的后续课程"],
+      "limitations": "引用式仅有定义，没有完整教法；补充的使用边界明确标为小说任务适配。",
+      "files": ["references/opening-methods.md"]
+    }
+  ]
+}
