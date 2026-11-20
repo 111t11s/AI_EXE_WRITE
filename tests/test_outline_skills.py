@@ -53,13 +53,21 @@ def test_skill_files_and_source_manifest_are_consistent():
     root = skills.SKILL_ROOT.parents[1]
     unique = set()
     for item in manifest["sources"]:
-        assert hashlib.sha256((root / item["path"]).read_bytes()).hexdigest() == item["sha256"]
+        if item["path"].startswith("archived-source://"):
+            # Original source files are deliberately cleaned after distillation;
+            # the manifest retains their hashes for historical traceability only.
+            assert manifest["source_retention"]
+        else:
+            assert hashlib.sha256((root / item["path"]).read_bytes()).hexdigest() == item["sha256"]
         assert set(item["skills"]) <= ids
         if duplicate := item.get("duplicate_of"):
-            assert hashlib.sha256((root / duplicate).read_bytes()).hexdigest() == item["sha256"]
+            if duplicate.startswith("archived-source://"):
+                assert manifest["source_retention"]
+            else:
+                assert hashlib.sha256((root / duplicate).read_bytes()).hexdigest() == item["sha256"]
         unique.add(item["sha256"])
-    assert len(manifest["sources"]) == manifest["source_count"] == 13
-    assert len(unique) == manifest["unique_source_count"] == 11
+    assert len(manifest["sources"]) == manifest["source_count"] == 29
+    assert len(unique) == manifest["unique_source_count"] == 27
 
 
 def test_questionnaire_switches_skills_and_keeps_sessions_separate(monkeypatch):

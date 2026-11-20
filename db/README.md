@@ -9,6 +9,7 @@ This is the new canonical structure for the novel-design workflow. The legacy XM
 - `accounts.py`: account/session tables and salted password hashing.
 - `migrate_accounts.py`: idempotent ownership migration for existing databases.
 - `migrate_project_trash.py`: additive, idempotent migration for project recycle-bin timestamps and the purge index. Run `python -m db.migrate_project_trash` when upgrading an existing database.
+- `migrate_public_library.py`: opt-in book publication and the public-library index. Run `python -m db.migrate_public_library` before upgrading an existing installation; existing books remain private.
 - `migrate_volume_characters.py`: additive, idempotent migration for per-volume character scenes. Run `python -m db.migrate_volume_characters` when upgrading an existing MySQL database.
 - `character_progress.py` / `migrate_character_progress.py`: chapter-scoped, evidence-backed character facts. Run `python -m db.migrate_character_progress` before enabling automatic body-to-profile synchronization; `deployment/character-progress.sql` is the equivalent schema-admin migration.
 - `reset_password.py`: interactive administrator password reset that revokes all sessions.
@@ -93,5 +94,13 @@ Primary keys, foreign keys, ordering/version fields, status values, timestamps, 
 `PATCH` 只修改提交的字段，允许给可空字段传 `null` 来解除关联，例如 `PATCH /api/v1/chapters/34` 传 `{"volume_id": null}`。记录 ID、时间戳和所属父记录不可修改。角色所属势力、章节所属分卷以及关系两端的角色必须属于同一小说项目。将一个世界观版本设为当前版本会取消该项目其他版本的当前状态。普通删除会先将项目移入回收站并保留七天；期间可恢复或立即彻底删除，七天后后台自动彻底删除。彻底删除会清理项目关联的问答会话、世界观、章节、角色、大纲、人物进展档案及其下级数据。
 
 回收站接口为 `GET /api/v1/projects/trash`、`POST /api/v1/projects/{id}/restore` 和 `DELETE /api/v1/projects/{id}/purge`。
+
+## 书籍发布与公共书架
+
+作者在小说概览点击「发布书籍」后，任何人都可以在 `/public.html` 阅读。发布默认关闭；只有所属账号可以通过 `PATCH /api/v1/projects/{id}` 的 `{"is_public": true}` 发布，或用 `false` 取消发布。管理员查看他人的小说时同样没有发布和编辑权限。
+
+公共只读接口无需登录：`GET /api/v1/public/projects`（分页书架）、`GET /api/v1/public/projects/{id}`（书籍简介）、`GET /api/v1/public/projects/{id}/chapters`（分页目录）和 `GET /api/v1/public/projects/{id}/chapters/{chapter_id}`（正文）。公共接口仅提供书名、类型、简介、作者昵称、连载状态、更新时间和已有正文，不公开世界观、大纲、角色档案、章节规划或问答记录。正文为空的章节不出现在目录中，所有非空正文都会随书籍公开，包括草稿和审读后的正文。
+
+公开阅读直接读取作者的原始数据，修改正文、标题、简介及增删章节会自动同步，无需重复发布。书架更新时间取书籍与已有正文的最近更新时间；已打开的公共页面每 30 秒检查更新，也可点击「刷新内容」。取消发布或移入回收站后，公共接口立即停止提供书籍和正文；移入回收站不改变发布开关，恢复后保留原发布状态。
 
 不存在的记录返回 `404`，重复序号、版本号或无效关联返回 `409`，请求字段校验失败返回 `422`，数据库不可用时返回 `503`。`/novel-assistant` 的问答会话仍保存在内存中；确认生成后，助手通过 MCP 将验证通过的项目和世界观写入数据库。

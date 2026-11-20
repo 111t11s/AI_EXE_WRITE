@@ -1,11 +1,12 @@
-"""On-demand, read-only consistency checks over explicitly selected chapters."""
+"""Consistency checks and explicitly adopted repairs of cited chapters."""
 
 import hashlib
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from starlette.concurrency import run_in_threadpool
 
 from agents import writing_agents as agents
@@ -14,15 +15,24 @@ from api import generation_jobs
 from api.account_api import CurrentAccount
 from api.database import Database, transaction
 from api.novel_schemas import RowId
+from api.novel_crud_api import get_row, response_row, storage_values
+from api.character_progress import replace_progress
 from api.novel_tables import tables
 from api.novel_writing_api import all_context_rows, character_context, generate, load_context, read
 from api.ownership import require_resource
-from api.writing_schemas import ConsistencyReceipt, ConsistencyRequest
+from api.writing_schemas import ConsistencyReceipt, ConsistencyRequest, ConsistencySuggestion, WritingInput
+from db.connection import legacy_json_columns
 
 
 router = APIRouter(prefix="/writing", tags=["小说一致性核对"])
 MAX_CHAPTER_TEXT = 120000
 MAX_CONTEXT = 200000
+CHAPTER_FIELDS = ("id", "project_id", "volume_id", "chapter_number", "title", "summary", "content", "status")
+
+
+def chapter_fingerprint(chapter):
+    value = {key: chapter[key] for key in CHAPTER_FIELDS}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 # Only story fields can establish a discrepancy; IDs, timestamps and workflow
 # status strings are not evidence of a narrative contradiction.
@@ -79,7 +89,7 @@ async def consistency_context(session, project_id, payload):
         row = await read(session, "chapter", chapter_id)
         if row["project_id"] != project_id:
             raise HTTPException(404, "所选章节不存在或不属于当前小说")
-        chapters.append({key: row[key] for key in ("id", "chapter_number", "title", "summary", "content", "volume_id")})
+        chapters.append({key: row[key] for key in CHAPTER_FIELDS})
     chapters.sort(key=lambda row: row["chapter_number"])
     validate_bodies(chapters)
     notes = ["只核对所选章节，未选章节未读取正文；结论基于任务读取时的资料快照，不代表全书评价。",
@@ -166,7 +176,8 @@ async def check_consistency(project_id: RowId, payload: ConsistencyRequest, user
     return ConsistencyReceipt(**values, project_id=project_id, outline_id=payload.outline_id,
         outline_version=context["outline"]["version_no"], checked_at=checked_at,
         chapters=[dict(chapter_id=row["id"], chapter_number=row["chapter_number"], title=row["title"])
-                  for row in context["selected_chapters"]], references=references, reference_materials=materials)
+                  for row in context["selected_chapters"]], references=references, reference_materials=materials,
+        chapter_fingerprints={str(row["id"]): chapter_fingerprint(row) for row in context["selected_chapters"]})
 
 
 @router.post("/projects/{project_id}/consistency/tasks", status_code=202, summary="后台核对所选章节的一致性")
@@ -174,6 +185,144 @@ async def start_consistency(project_id: RowId, payload: ConsistencyRequest, user
     await run_in_threadpool(require_selection, engine, project_id, payload, user.id)
     selection = {**payload.model_dump(), "chapter_ids": sorted(payload.chapter_ids)}
     signature = hashlib.sha256(json.dumps(selection, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-    return generation_jobs.store.start(account_id=user.id, key=f"consistency:{project_id}:{signature}", kind="consistency",
+    async def operation():
+        report = await check_consistency(project_id, payload, user, engine)
+        report.job_id = job.id
+        return report
+
+    job = generation_jobs.store.start(account_id=user.id, key=f"consistency:{project_id}:{signature}", kind="consistency",
         title=f"一致性核对 · {len(payload.chapter_ids)} 章", project_id=project_id, resource_id=payload.outline_id,
-        operation=lambda: check_consistency(project_id, payload, user, engine)).summary()
+        operation=operation)
+    return job.summary()
+
+
+def report_issue(project_id, job_id, issue_index, account_id):
+    job = generation_jobs.store.owned(job_id, account_id)
+    if job.kind != "consistency" or job.project_id != project_id or job.status != "completed" or not job.result:
+        raise HTTPException(404, "一致性核对报告不存在或尚未完成")
+    issues = job.result["issues"]
+    if not 0 <= issue_index < len(issues):
+        raise HTTPException(404, "修复意见不存在")
+    return job.result, issues[issue_index]
+
+
+def require_editable_issue(issue):
+    if issue.get("repair_status") in {"running", "completed"}:
+        raise HTTPException(409, "该意见已采纳，请查看修复进度；修复后如需继续调整，请重新核对")
+
+
+@router.patch("/projects/{project_id}/consistency/{job_id}/issues/{issue_index}", summary="保存编辑后的修复意见")
+async def edit_suggestion(project_id: RowId, job_id: str, issue_index: int, payload: ConsistencySuggestion,
+                          user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    _, issue = report_issue(project_id, job_id, issue_index, user.id)
+    require_editable_issue(issue)
+    issue["suggestion"] = payload.suggestion
+    return issue
+
+
+def validate_repair_chapters(engine, project_id, report, account_id, lock=False, connection=None):
+    """Compare with the checked snapshot, including chapters used for continuity."""
+    if connection is None:
+        require_resource(engine, "novel_project", project_id, account_id)
+        with transaction(engine) as connection:
+            return validate_repair_chapters(engine, project_id, report, account_id, lock, connection)
+    relation = tables["novel_chapter"]
+    json_columns = legacy_json_columns(connection, relation.name)
+    rows = []
+    for entry in sorted(report["chapters"], key=lambda row: row["chapter_id"]):
+        row = response_row(get_row(connection, relation, entry["chapter_id"], lock=lock), json_columns)
+        if row["project_id"] != project_id:
+            raise HTTPException(404, "对应章节不存在或不属于当前小说")
+        if report.get("chapter_fingerprints", {}).get(str(row["id"])) != chapter_fingerprint(row):
+            raise HTTPException(409, "核对后章节已发生变化或报告缺少正文快照，请重新核对后采纳修复意见")
+        rows.append(row)
+    return rows
+
+
+def save_repairs(engine, project_id, report, generated, account_id):
+    require_resource(engine, "novel_project", project_id, account_id)
+    with transaction(engine) as connection:
+        # Lock and validate every source before writing, so multi-chapter repairs
+        # either all save or leave every chapter unchanged.
+        rows = validate_repair_chapters(engine, project_id, report, account_id, True, connection)
+        relation = tables["novel_chapter"]
+        json_columns = legacy_json_columns(connection, relation.name)
+        completed, fingerprints = [], {}
+        for row in rows:
+            if row["id"] not in generated:
+                continue
+            content = generated[row["id"]]
+            count = sum(not letter.isspace() for letter in content)
+            replace_progress(connection, row, content, ())
+            values = storage_values(dict(content=content, word_count=count, status="draft"), json_columns)
+            connection.execute(update(relation).where(relation.c.id == row["id"]).values(**values))
+            completed.append(dict(chapter_id=row["id"], chapter_number=row["chapter_number"], title=row["title"], word_count=count))
+            fingerprints[str(row["id"])] = chapter_fingerprint({**row, "content": content, "status": "draft"})
+    return dict(project_id=project_id, completed_count=len(completed), chapters=completed), fingerprints
+
+
+async def repair_issue(engine, project_id, report, approved, user):
+    await run_in_threadpool(validate_repair_chapters, engine, project_id, report, user.id)
+    payload = ConsistencyRequest(outline_id=report["outline_id"], chapter_ids=[row["chapter_id"] for row in report["chapters"]])
+    emit_generation_event("status", message="正在读取核对范围的正文与档案，按采纳的意见修复…")
+    context = await load_context(consistency_context, project_id, payload)
+    for row in context["selected_chapters"]:
+        if report["chapter_fingerprints"].get(str(row["id"])) != chapter_fingerprint(row):
+            raise HTTPException(409, "核对后正文发生变化，请重新核对")
+    chapters = {row["id"]: row for row in context["selected_chapters"]}
+    references = reference_records(context)
+    basis = approved["basis"]
+    source = references.get((basis["kind"], basis["record_id"]), {}).get(basis["field"])
+    if (any(entry["quote"] not in chapters[entry["chapter_id"]]["content"] for entry in approved["evidence"])
+            or not isinstance(source, str) or basis["quote"] not in source):
+        raise HTTPException(409, "该意见的正文或档案依据已变化，请重新核对后修复")
+    targets = {entry["chapter_id"] for entry in approved["evidence"]}
+    generated = {}
+    for row in context["selected_chapters"]:
+        if row["id"] not in targets:
+            continue
+        emit_generation_event("status", message=f"正在修复第 {row['chapter_number']} 章…")
+        artifact = await generate(agents.CONSISTENCY_REPAIR, {**context, "chapter": row, "approved_fix": approved}, WritingInput())
+        generated[row["id"]] = artifact.content
+    emit_generation_event("status", message="修复完成，正在校验并保存对应章节…")
+    return await run_in_threadpool(save_repairs, engine, project_id, report, generated, user.id)
+
+
+@router.post("/projects/{project_id}/consistency/{job_id}/issues/{issue_index}/repair/tasks", status_code=202,
+             summary="采纳修复意见并后台修复对应章节")
+async def start_repair(project_id: RowId, job_id: str, issue_index: int, payload: ConsistencySuggestion,
+                       user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    report, issue = report_issue(project_id, job_id, issue_index, user.id)
+    if issue.get("repair_status") == "running" and issue["suggestion"] == payload.suggestion:
+        return generation_jobs.store.owned(issue["repair_job_id"], user.id).summary()
+    require_editable_issue(issue)
+    rows = await run_in_threadpool(validate_repair_chapters, engine, project_id, report, user.id)
+    targets = {entry["chapter_id"] for entry in issue["evidence"]}
+    if any(len(row["content"]) > 30000 for row in rows if row["id"] in targets):
+        raise HTTPException(422, "对应章节超过单次修复上限 30000 字符，请精简后重新核对")
+    # Recheck after database IO, before mutating the process-local report.
+    require_editable_issue(issue)
+    repair_report = deepcopy(report)
+    approved = {key: value for key, value in issue.items() if not key.startswith("repair_")}
+    approved["suggestion"] = payload.suggestion
+
+    async def operation():
+        try:
+            receipt, fingerprints = await repair_issue(engine, project_id, repair_report, approved, user)
+        except Exception:
+            issue["repair_status"] = "failed"
+            raise
+        issue["repair_status"] = "completed"
+        # Allow the other suggestions to be adopted against our own saved
+        # revisions. Each running task keeps its independent snapshot so a
+        # concurrent repair cannot overwrite an earlier repair.
+        report["chapter_fingerprints"].update(fingerprints)
+        return receipt
+
+    repair = generation_jobs.store.start(account_id=user.id, key=f"consistency-repair:{job_id}:{issue_index}",
+        kind="consistency_repair", title=f"一致性修复 · {issue['title']}", project_id=project_id,
+        resource_id=issue["evidence"][0]["chapter_id"], operation=operation)
+    issue.update(suggestion=payload.suggestion, repair_job_id=repair.id, repair_status="running")
+    return repair.summary()

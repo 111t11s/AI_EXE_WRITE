@@ -29,7 +29,7 @@ async function workbench(context, initialCharacters = [], options = {}) {
     summary: '启程渡河', content: '', status: 'planned', word_count: 0};
   const character = {id: 7, name: '舟客', role: '配角 · 渡河向导', summary: '寻脉卷中帮助渡河'};
   const posts = [];
-  const state = {characters: initialCharacters, chapter, exports: [], jobs: [], profiles: [], characterProgress: [],
+  const state = {characters: initialCharacters, chapter, exports: [], jobs: options.jobs || [], profiles: [], characterProgress: [],
     projects: options.projects || [project]};
   const listing = items => ({items, has_more: false, limit: 100, offset: 0});
   await page.addInitScript(() => sessionStorage.setItem('mojian-session', 'test-session'));
@@ -49,8 +49,27 @@ async function workbench(context, initialCharacters = [], options = {}) {
         'content-disposition': `attachment; filename="novel-1.zip"; filename*=UTF-8''${encodeURIComponent('寻脉.zip')}`},
         body: Buffer.from('UEsDBBQAAAgIABiicF1TsVk0GgAAABUAAAAWAAAA56ysMDAwMDHnq6Bf5rih5rKzLnR4dAEVAOr/6Iif5a6i5pKR6Ii55rih5rKz44CCUEsBAhQAFAAACAgAGKJwXVOxWTQaAAAAFQAAABYAAAAAAAAAAAAAAIABAAAAAOesrDAwMDAx56ugX+a4oeaysy50eHRQSwUGAAAAAAEAAQBEAAAATgAAAAAA', 'base64')});
     }
+    if (request.method() === 'PATCH' && endpoint === '/projects/1') {
+      const data = request.postDataJSON();
+      posts.push({endpoint, data, method: 'PATCH'});
+      Object.assign(state.projects.find(item => item.id === 1), data);
+      return route.fulfill({json: state.projects.find(item => item.id === 1)});
+    }
+    if (request.method() === 'PATCH' && endpoint === '/writing/projects/1/consistency/consistency/issues/0') {
+      const data = request.postDataJSON();
+      posts.push({endpoint, data, method: 'PATCH'});
+      Object.assign(state.consistencyReport.issues[0], data);
+      return route.fulfill({json: state.consistencyReport.issues[0]});
+    }
     if (request.method() === 'POST') {
       posts.push({endpoint, data: request.postDataJSON()});
+      if (endpoint.endsWith('/issues/0/repair/tasks')) {
+        Object.assign(state.consistencyReport.issues[0], request.postDataJSON(), {repair_job_id: 'repair', repair_status: 'running'});
+        const job = {id: 'repair', kind: 'consistency_repair', project_id: 1, resource_id: 1,
+          title: '一致性修复 · 人物关系', status: 'running', message: '修复中', created_at: '2026-11-19T12:00:00Z'};
+        state.jobs.push(job);
+        return route.fulfill({status: 202, json: job});
+      }
       if (endpoint.includes('/characters/core/')) state.characters = [character];
       return route.fulfill({status: 202, json: {id: String(posts.length), kind: endpoint.includes('/chapters/') ? 'draft' :
         endpoint.includes('/rewrite/') ? 'outline' : 'characters',
@@ -64,7 +83,12 @@ async function workbench(context, initialCharacters = [], options = {}) {
     else if (endpoint === '/generation-jobs/consistency/events') return route.fulfill({
       contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify(state.jobs[0])}\n\nevent: result\ndata: ${JSON.stringify(state.consistencyReport)}\n\n`,
     });
+    else if (endpoint === '/generation-jobs/repair/events') return route.fulfill({
+      contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify(state.jobs.find(job => job.id === 'repair'))}\n\nevent: result\ndata: ${JSON.stringify(state.repairResult)}\n\n`,
+    });
     else if (endpoint === '/worlds') result = listing([{id: 1, title: '山海', summary: '灵气衰竭', era: '古代', version_no: 1}]);
+    else if (endpoint === '/novel-assistant/outline-skills') result = {genre: '仙侠', specialized: true,
+      skills: [{id: 'outline-general', name: '通用小说大纲设计技能'}], notice: '已加载：通用小说大纲设计技能'};
     else if (endpoint === '/outlines') result = listing([{id: 1, version_no: 1, summary: '寻脉', central_conflict: '宗门垄断'}]);
     else if (endpoint === '/outline-volumes') result = listing(volumes);
     else if (endpoint === '/plot-beats' || endpoint === '/volume-characters') result = listing([]);
@@ -92,6 +116,123 @@ async function workbench(context, initialCharacters = [], options = {}) {
   await page.getByRole('button', {name: '章节与正文', exact: true}).waitFor();
   return {page, state, posts, errors};
 }
+
+browserTest('authors can publish and unpublish their book from the overview', async context => {
+  const {page, posts, errors} = await workbench(context);
+  page.on('dialog', dialog => dialog.accept());
+  await page.getByRole('button', {name: '发布书籍', exact: true}).click();
+  await page.getByRole('button', {name: '取消发布', exact: true}).waitFor();
+  assert.equal(posts.at(-1).endpoint, '/projects/1');
+  assert.deepEqual(posts.at(-1).data, {is_public: true});
+  assert.equal(await page.getByRole('link', {name: '公开阅读 ↗', exact: true}).getAttribute('href'), '/public.html?book=1');
+  await page.getByRole('button', {name: '取消发布', exact: true}).click();
+  await page.getByRole('button', {name: '发布书籍', exact: true}).waitFor();
+  assert.deepEqual(posts.at(-1).data, {is_public: false});
+  assert.equal(await page.getByRole('link', {name: '公开阅读 ↗', exact: true}).count(), 0);
+  assert.deepEqual(errors, []);
+});
+
+browserTest('administrators viewing another authors book have no publication controls', async context => {
+  const {page, errors} = await workbench(context, [], {account: {is_admin: true}, project: {account_id: 2, is_public: true}});
+  assert.equal(await page.getByRole('button', {name: '发布书籍', exact: true}).count(), 0);
+  assert.equal(await page.getByRole('button', {name: '取消发布', exact: true}).count(), 0);
+  assert.equal(await page.getByRole('link', {name: '公开阅读 ↗', exact: true}).count(), 1);
+  assert.deepEqual(errors, []);
+});
+
+function taskJobs(count) {
+  return Array.from({length: count}, (_, index) => ({id: `task-${index + 1}`, project_id: 1,
+    kind: 'outline', status: 'completed', title: `大纲任务 ${index + 1}`, message: '已生成',
+    created_at: new Date(Date.UTC(2026, 10, 18, 0, index)).toISOString()}));
+}
+
+browserTest('task pagination keeps the current page on polling and clamps after cleanup', async context => {
+  const {page, state, errors} = await workbench(context, [], {jobs: taskJobs(13)});
+  await page.locator('#generation-tasks').click();
+  const pager = page.getByRole('navigation', {name: '任务分页', exact: true});
+  const rows = page.locator('.task-list .task-row');
+  await pager.getByText('第 1 / 3 页', {exact: true}).waitFor();
+  assert.equal(await rows.count(), 5);
+  assert.equal(await rows.first().getAttribute('data-job-id'), 'task-13');
+  assert.equal(await pager.getByRole('button', {name: '上一页', exact: true}).isDisabled(), true);
+  await pager.getByRole('button', {name: '下一页', exact: true}).click();
+  assert.equal(await rows.first().getAttribute('data-job-id'), 'task-8');
+  state.jobs[7].message = '自动刷新后的任务';
+  await rows.first().getByText(/自动刷新后的任务/).waitFor({timeout: 8000});
+  assert.match(await pager.innerText(), /第 2 \/ 3 页/);
+  await pager.getByRole('button', {name: '下一页', exact: true}).click();
+  assert.equal(await rows.count(), 3);
+  assert.equal(await pager.getByRole('button', {name: '下一页', exact: true}).isDisabled(), true);
+  state.jobs = state.jobs.slice(0, 2);
+  await page.getByRole('button', {name: '刷新任务', exact: true}).click();
+  await pager.getByText('第 1 / 1 页', {exact: true}).waitFor();
+  assert.equal(await rows.count(), 2);
+  state.jobs = [];
+  await page.getByRole('button', {name: '刷新任务', exact: true}).click();
+  await pager.getByText('共 0 条 · 0–0 条', {exact: true}).waitFor();
+  assert.equal(await rows.count(), 0);
+  assert.equal(await pager.getByRole('button', {name: '上一页', exact: true}).isDisabled(), true);
+  assert.equal(await pager.getByRole('button', {name: '下一页', exact: true}).isDisabled(), true);
+  assert.deepEqual(errors, []);
+});
+
+browserTest('task filters and page size reset pagination before slicing results', async context => {
+  const jobs = taskJobs(24).map((job, index) => ({...job, project_id: index % 2 + 1,
+    kind: index % 3 === 0 ? 'draft' : 'outline', status: index % 4 === 0 ? 'failed' : 'completed'}));
+  const {page, errors} = await workbench(context, [], {jobs,
+    projects: [{id: 1, title: '寻脉'}, {id: 2, title: '远行'}]});
+  await page.locator('#generation-tasks').click();
+  const pager = page.getByRole('navigation', {name: '任务分页', exact: true});
+  const next = pager.getByRole('button', {name: '下一页', exact: true});
+  await pager.getByText('第 1 / 5 页', {exact: true}).waitFor();
+  await next.click();
+  await page.locator('.task-category-filters [data-task-category="outline"]').click();
+  await pager.getByText('第 1 / 4 页', {exact: true}).waitFor();
+  await next.click();
+  await page.locator('.task-status-filters [data-task-status="completed"]').click();
+  await pager.getByText('第 1 / 3 页', {exact: true}).waitFor();
+  await next.click();
+  await page.locator('.task-project-filters [data-task-project="2"]').click();
+  await pager.getByText('第 1 / 2 页', {exact: true}).waitFor();
+  await next.click();
+  await page.getByLabel('每页任务数', {exact: true}).selectOption('10');
+  await pager.getByText('第 1 / 1 页', {exact: true}).waitFor();
+  const ids = await page.locator('.task-list .task-row').evaluateAll(rows => rows.map(row => row.dataset.jobId));
+  assert.deepEqual(ids, [...jobs].reverse().filter(job => job.project_id === 2 && job.kind === 'outline' && job.status === 'completed').map(job => job.id));
+  assert.deepEqual(errors, []);
+});
+
+browserTest('task panel contains the scrollable list and footer within the desktop viewport', async context => {
+  const {page, errors} = await workbench(context, [], {jobs: taskJobs(24).map(job => ({...job,
+    title: job.title.repeat(12), message: '较长的任务说明'.repeat(30)}))});
+  await page.locator('#generation-tasks').click();
+  await page.getByLabel('每页任务数', {exact: true}).selectOption('20');
+  for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 720}, {width: 1024, height: 600}]) {
+    await page.setViewportSize(viewport);
+    const bounds = await page.evaluate(() => {
+      const rect = selector => {
+        const {top, bottom, left, right, height} = document.querySelector(selector).getBoundingClientRect();
+        return {top, bottom, left, right, height};
+      };
+      const list = document.querySelector('.task-list');
+      return {panel: rect('.task-progress-panel'), list: rect('.task-list'), footer: rect('.task-pagination'),
+        directory: rect('.task-project-filter-group'), rail: rect('.rail'),
+        scrollHeight: document.documentElement.scrollHeight, scrollWidth: document.documentElement.scrollWidth,
+        listScrolls: list.scrollHeight > list.clientHeight};
+    });
+    assert.ok(bounds.panel.bottom <= viewport.height + 1, JSON.stringify(bounds));
+    assert.ok(bounds.list.bottom <= bounds.footer.top + 1, JSON.stringify(bounds));
+    assert.ok(bounds.footer.bottom <= bounds.panel.bottom, JSON.stringify(bounds));
+    assert.ok(bounds.directory.top === 0 && bounds.directory.height === bounds.rail.height, JSON.stringify(bounds));
+    assert.ok(bounds.scrollHeight <= viewport.height + 1, JSON.stringify(bounds));
+    assert.ok(bounds.scrollWidth <= viewport.width, JSON.stringify(bounds));
+    assert.ok(bounds.listScrolls);
+  }
+  await page.setViewportSize({width: 390, height: 844});
+  assert.equal(await page.getByRole('navigation', {name: '任务分页', exact: true}).isVisible(), true);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  assert.deepEqual(errors, []);
+});
 
 browserTest('admin can filter owners and read other novels without editing actions', async context => {
   const {page, state, posts, errors} = await workbench(context, [{id: 7, name: '舟客', role: '配角', summary: '渡河'}], {
@@ -216,11 +357,27 @@ browserTest('outline rewrite submits selected version, volume count and instruct
   assert.match(await dialog.innerText(), /保存为新版本/);
   assert.equal(await dialog.getByLabel('重写后的分卷数').inputValue(), '2');
   await dialog.getByLabel('重写后的分卷数').fill('3');
+  await dialog.getByLabel('本版大纲主题', {exact: true}).selectOption('comeback');
   await dialog.getByLabel('重写要求（可选）', {exact: true}).fill('保留主线，加强第二卷冲突');
   await page.locator('#action-submit').click();
   await dialog.waitFor({state: 'hidden'});
   assert.deepEqual(posts[0], {endpoint: '/writing/outlines/1/rewrite/tasks',
-    data: {volume_count: 3, instruction: '保留主线，加强第二卷冲突'}});
+    data: {volume_count: 3, outline_theme: 'comeback', instruction: '保留主线，加强第二卷冲突'}});
+  assert.deepEqual(errors, []);
+});
+
+browserTest('new outline submits the selected theme', async context => {
+  const {page, posts, errors} = await workbench(context);
+  await page.getByRole('button', {name: '大纲与分卷', exact: true}).click();
+  await page.getByRole('button', {name: '生成新大纲', exact: true}).click();
+  const dialog = page.locator('#action-dialog');
+  await dialog.getByLabel('分卷数', {exact: true}).fill('4');
+  await dialog.getByLabel('本版大纲主题', {exact: true}).selectOption('survival');
+  await dialog.getByLabel('补充要求（可选）', {exact: true}).fill('每卷都要有倒计时和资源取舍');
+  await page.locator('#action-submit').click();
+  await dialog.waitFor({state: 'hidden'});
+  assert.deepEqual(posts[0], {endpoint: '/writing/projects/1/outline/tasks',
+    data: {volume_count: 4, outline_theme: 'survival', instruction: '每卷都要有倒计时和资源取舍'}});
   assert.deepEqual(errors, []);
 });
 
@@ -453,6 +610,61 @@ browserTest('consistency report shows the archives actually loaded and labels re
   assert.deepEqual(errors, []);
 });
 
+browserTest('consistency suggestions can be saved, reopened and adopted for the cited chapter', async context => {
+  const {page, state, posts, errors} = await workbench(context);
+  await page.setViewportSize({width: 390, height: 844});
+  state.jobs = [{id: 'consistency', kind: 'consistency', project_id: 1, resource_id: 1,
+    title: '一致性核对 · 1 章', status: 'completed', message: '已完成', created_at: '2026-11-19T12:00:00Z'}];
+  state.consistencyReport = {job_id: 'consistency', project_id: 1, outline_id: 1, outline_version: 1,
+    checked_at: '2026-11-19T12:00:00Z', verdict: 'drifted', summary: '人物关系与档案冲突', limitations: [],
+    chapters: [{chapter_id: 1, chapter_number: 1, title: '渡河'}, {chapter_id: 4, chapter_number: 4, title: '远行'}],
+    references: [{kind: 'character_relationship', record_id: 3, label: '舟客 → 林川'}],
+    issues: [{category: 'character', severity: 'major', title: '人物关系发生无依据的变化',
+      evidence: [{chapter_id: 1, quote: '舟客从未见过林川。'}],
+      basis: {kind: 'character_relationship', record_id: 3, field: 'description', quote: '两人是同行伙伴'},
+      explanation: '正文的初识描述与档案冲突。', suggestion: '依据同行经历调整对话。'}]};
+  await page.locator('#generation-tasks').click();
+  await page.getByRole('button', {name: '查看进度', exact: true}).click();
+  const report = page.locator('#task-progress-result');
+  await report.getByRole('button', {name: '编辑修复意见', exact: true}).click();
+  const dialog = page.locator('#action-dialog');
+  const edited = '保留渡河场景，改为两人回忆上一次同行。';
+  await dialog.getByLabel('修复意见', {exact: true}).fill(edited);
+  await dialog.getByRole('button', {name: '保存修复意见', exact: true}).click();
+  await dialog.waitFor({state: 'hidden'});
+  await report.getByText(`修复意见：${edited}`, {exact: true}).waitFor();
+  assert.deepEqual(posts, [{endpoint: '/writing/projects/1/consistency/consistency/issues/0', method: 'PATCH', data: {suggestion: edited}}]);
+  await report.getByRole('button', {name: '采纳并修复', exact: true}).click();
+  assert.equal(await dialog.getByLabel('修复意见', {exact: true}).inputValue(), edited);
+  assert.match(await dialog.locator('#action-description').innerText(), /第 1 章 · 渡河/);
+  assert.doesNotMatch(await dialog.locator('#action-description').innerText(), /第 4 章/);
+  const approved = edited + '并保留原有对白语气。';
+  await dialog.getByLabel('修复意见', {exact: true}).fill(approved);
+  await dialog.getByRole('button', {name: '采纳并开始修复', exact: true}).click();
+  await dialog.waitFor({state: 'hidden'});
+  await report.getByRole('button', {name: '修复中', exact: true}).waitFor();
+  assert.equal(await report.getByRole('button', {name: '编辑修复意见', exact: true}).isDisabled(), true);
+  assert.deepEqual(posts[1], {endpoint: '/writing/projects/1/consistency/consistency/issues/0/repair/tasks', data: {suggestion: approved}});
+  // Reopening the original job replays the saved edit and adoption state.
+  await page.locator('#back-to-tasks').click();
+  await page.locator('.task-row[data-job-id="consistency"]').getByRole('button', {name: '查看进度', exact: true}).click();
+  await report.getByText(`修复意见：${approved}`, {exact: true}).waitFor();
+  assert.equal(await report.getByRole('button', {name: '修复中', exact: true}).isDisabled(), true);
+  state.jobs.find(job => job.id === 'repair').status = 'completed';
+  state.consistencyReport.issues[0].repair_status = 'completed';
+  state.repairResult = {project_id: 1, completed_count: 1, chapters: [{chapter_id: 1, chapter_number: 1, title: '渡河', word_count: 200}]};
+  state.chapter.content = '舟客提起与林川上一次同行的经历，笑着撑开竹篙。';
+  state.chapter.status = 'draft';
+  // Polling updates the report's adoption status without reopening it.
+  await report.getByRole('button', {name: '已修复', exact: true}).waitFor({timeout: 8000});
+  await report.getByRole('button', {name: '查看修复进度', exact: true}).click();
+  await report.getByText(/已按采纳的修复意见保存 1 章正文/).waitFor();
+  await report.getByRole('button', {name: '打开小说查看结果', exact: true}).click();
+  await page.getByRole('article', {name: '章节正文', exact: true}).waitFor();
+  assert.equal(await page.getByRole('article', {name: '章节正文', exact: true}).innerText(), state.chapter.content);
+  assert.deepEqual(errors, []);
+});
+
 browserTest('character dossiers display planned actions, results and current progress, and regenerate by volume', async context => {
   const {page, state, posts, errors} = await workbench(context, [{id: 7, name: '舟客', role: '配角', summary: '渡河向导'}]);
   await page.setViewportSize({width: 390, height: 844});
@@ -507,7 +719,7 @@ browserTest('chapter facts show actions, current state and quotations separately
   await page.getByRole('heading', {name: '角色档案 · 1 位', exact: true}).waitFor();
   assert.equal(await page.locator('.character-fact').count(), 0);
   await card.locator(':scope > summary').click();
-  assert.match(await card.innerText(), /尚无已同步的正文进展/);
+  assert.match(await card.innerText(), /尚无已分析的正文进展/);
   assert.deepEqual(errors, []);
 });
 

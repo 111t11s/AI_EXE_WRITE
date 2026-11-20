@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#212b25">
   <title>墨间 · 小说工作台</title>
-  <link rel="stylesheet" href="/workbench.css?v=task-directory-height-20261118">
+  <link rel="stylesheet" href="/workbench.css?v=task-pagination-20261118">
   <script src="/runtime-config.js?v=outline-skills-20261114"></script>
   <script type="importmap">
     {"imports": {
-      "/workbench.js": "/workbench.js?v=task-directory-height-20261118",
+      "/workbench.js": "/workbench.js?v=public-library-20261120",
       "/api-client.js": "/api-client.js?v=character-progress-20261116",
       "/generation-stream.js": "/generation-stream.js?v=character-progress-20261116"
     }}
@@ -29,6 +29,7 @@
       <header class="brand"><span class="brand-mark" aria-hidden="true">墨</span><div><strong>墨间</strong><small>小说工作台</small></div></header>
       <div class="account-bar"><span id="account-name"></span><span class="account-actions"><button type="button" class="account-logout" id="account-password-change">修改密码</button><button type="button" class="account-logout" id="account-logout">退出账号</button></span></div>
       <button class="button primary new-project" type="button" id="new-project"><span aria-hidden="true">＋</span> 新建小说</button>
+      <a class="button secondary" href="/public.html">公共书架 ↗</a>
       <div class="task-navigation"><button class="button secondary" type="button" id="generation-tasks" aria-expanded="false" aria-controls="task-submenus">任务中心 <span id="generation-task-count">0</span></button>
         <nav id="task-submenus" class="task-submenus" aria-label="任务分类" hidden></nav>
       </div>
@@ -62,6 +63,7 @@
       <p class="eyebrow">墨间 · 个人书架</p><h1 id="account-title">登录账号</h1>
       <p class="muted account-intro">登录后继续创作，小说会保存在你的账号下。</p>
       <p class="muted account-intro">忘记密码请联系管理员重置。</p>
+      <p class="muted account-intro"><a href="/public.html">无需登录，浏览公共书架 →</a></p>
       <div class="fields">
         <label class="control">用户名<input id="account-username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_][A-Za-z0-9_.-]*" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="3—32 位字母、数字、下划线"></label>
         <label class="control" id="account-display-field" hidden>昵称（可选）<input id="account-display-name" name="display_name" maxlength="80" autocomplete="nickname"></label>
@@ -104,7 +106,7 @@
         <div class="question-picker" id="question-picker" hidden><p class="muted" id="question-label"></p><div class="question-options" id="question-options" role="group" aria-labelledby="question-label"></div></div>
         <form class="composer" id="chat-form" hidden><label class="sr-only" for="chat-input">自定义设定或修改已收集设定</label><input id="chat-input" required maxlength="4000" autocomplete="off" placeholder="输入自定义设定…"><button class="button primary" type="submit" id="chat-send">发送</button></form>
       </div>
-      <aside class="wizard-settings"><h3>已收集设定 <span id="slot-count" class="muted"></span></h3><dl class="slots" id="slots"></dl><p class="muted" id="outline-skill" role="status" aria-live="polite">选择小说类型后自动加载大纲设计技能。</p><button class="button primary" type="button" id="confirm-world" disabled>确认并生成</button></aside>
+      <aside class="wizard-settings"><h3>已收集设定 <span id="slot-count" class="muted"></span></h3><dl class="slots" id="slots"></dl><p class="muted" id="outline-skill" role="status" aria-live="polite">选择小说类型后自动加载大纲设计技能。</p><label class="control">本版大纲主题<select id="outline-theme"><option value="development">发育（成长推进）</option><option value="comeback">逆袭</option><option value="ending">结尾收束</option><option value="survival">逃杀（生存竞逐）</option><option value="revenge">复仇</option><option value="mystery">揭秘</option><option value="relationship">关系推进</option><option value="custom">自定义主题（结合上方设定）</option></select></label><button class="button primary" type="button" id="confirm-world" disabled>确认并生成</button></aside>
     </div>
     <footer class="dialog-foot"><button class="button secondary" type="button" id="restart-wizard">开始新对话</button></footer>
   </dialog>

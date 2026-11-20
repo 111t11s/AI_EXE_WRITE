@@ -15,7 +15,7 @@ from agents.llm_streaming import emit_generation_event
 from agents.mcp.server import create_server
 from agents.mcp.worldbuilding import NovelToolError
 from api import novel_writing_api as writing
-from api.writing_schemas import ConsistencyReport
+from api.writing_schemas import ChapterContentDraft, ConsistencyReport
 from core.config import Settings
 from test_character_generation import novel
 from main import app
@@ -349,3 +349,223 @@ def test_consistency_agent_streams_via_sdk_without_browsing_other_chapters(selec
     assert context["power_system"][0]["limitations"] == "不可无中生水"
     assert [row["chapter_number"] for row in context["selected_chapters"]] == [1, 4]
     assert "第2章正文" not in prompt and "第3章正文" not in prompt
+
+
+def completed_report(data):
+    client, headers = data["client"], data["headers"]["writer"]
+    response = client.post(data["path"] + "/tasks", json=data["payload"], headers=headers)
+    assert response.status_code == 202, response.text
+    job_id = response.json()["id"]
+    events = client.get(f"/api/v1/generation-jobs/{job_id}/events", headers=headers)
+    assert "event: result" in events.text and "event: error" not in events.text, events.text
+    report = client.get(f"/api/v1/generation-jobs/{job_id}", headers=headers).json()["result"]
+    assert report["job_id"] == job_id
+    return f'{data["path"]}/{job_id}/issues/0', report
+
+
+def repaired_body(number=1):
+    return f"第{number}章。林川俯身感知已有河水的流向。" + "他沿着河岸寻找浅滩，小心引导舟船前进。" * 10
+
+
+def repair_result(data, response):
+    assert response.status_code == 202, response.text
+    job_id = response.json()["id"]
+    headers, client = data["headers"]["writer"], data["client"]
+    client.get(f"/api/v1/generation-jobs/{job_id}/events", headers=headers)
+    return client.get(f"/api/v1/generation-jobs/{job_id}", headers=headers).json()
+
+
+def test_edit_suggestion_is_saved_without_writing_chapters_and_adoption_uses_edit(selection, monkeypatch):
+    data = selection
+    path, receipt = completed_report(data)
+    before = snapshot(data)
+    suggestion = "保留渡河情节，改为感知浅滩，借舟通过。" * 90  # Longer than generic rewrite instructions.
+    headers, client = data["headers"]["writer"], data["client"]
+    edited = client.patch(path, json={"suggestion": suggestion}, headers=headers)
+    assert edited.status_code == 200, edited.text
+    assert snapshot(data) == before
+    saved = client.get(f'/api/v1/generation-jobs/{receipt["job_id"]}', headers=headers).json()["result"]
+    assert saved["issues"][0]["suggestion"] == suggestion
+    seen = []
+
+    def generate(role, context):
+        assert role == agents.CONSISTENCY_REPAIR and role.tools == ()
+        assert context["approved_fix"]["suggestion"] == suggestion
+        assert context["chapter"]["id"] == data["chapter_ids"][0]
+        assert [row["chapter_number"] for row in context["selected_chapters"]] == [1, 4]
+        seen.append(context)
+        return ChapterContentDraft(content=repaired_body())
+
+    monkeypatch.setattr(agents, "generate", generate)
+    result = repair_result(data, client.post(path + "/repair/tasks", json={"suggestion": suggestion}, headers=headers))
+    assert result["status"] == "completed", result
+    assert result["kind"] == "consistency_repair" and result["result"]["completed_count"] == 1
+    assert len(seen) == 1
+    for index, chapter_id in enumerate(data["chapter_ids"]):
+        chapter = client.get(f"/api/v1/chapters/{chapter_id}", headers=headers).json()
+        if index == 0:
+            assert chapter["content"] == repaired_body() and chapter["status"] == "draft"
+            assert chapter["word_count"] == sum(not c.isspace() for c in repaired_body())
+        else:
+            assert chapter["content"] == f"第{index + 1}章正文，仅选中时可读取。"
+    after = snapshot(data)
+    assert all(after[name] == rows for name, rows in before.items() if name != "novel_chapter")
+    assert client.post(path + "/repair/tasks", json={"suggestion": suggestion}, headers=headers).status_code == 409
+    assert client.patch(path, json={"suggestion": "再次编辑"}, headers=headers).status_code == 409
+    saved = client.get(f'/api/v1/generation-jobs/{receipt["job_id"]}', headers=headers).json()["result"]
+    assert saved["issues"][0]["repair_status"] == "completed"
+
+
+@pytest.mark.parametrize("during_generation", [False, True])
+def test_repair_rejects_changed_source_without_overwriting(selection, monkeypatch, during_generation):
+    data = selection
+    path, _ = completed_report(data)
+    calls = []
+
+    def edit_source():
+        # A continuity reference matters even when it is not a repair target.
+        with data["engine"].begin() as connection:
+            connection.execute(text("UPDATE novel_chapter SET content='用户的新正文' WHERE id=:id"),
+                               {"id": data["chapter_ids"][3]})
+
+    def generate(role, context):
+        calls.append(1)
+        edit_source()
+        return ChapterContentDraft(content=repaired_body())
+
+    monkeypatch.setattr(agents, "generate", generate)
+    if not during_generation:
+        edit_source()
+    response = data["client"].post(path + "/repair/tasks", json={"suggestion": "改为借舟渡河"}, headers=data["headers"]["writer"])
+    if during_generation:
+        result = repair_result(data, response)
+        assert result["status"] == "failed" and result["error"]["status"] == 409, result
+    else:
+        assert response.status_code == 409, response.text
+        assert calls == []
+    headers = data["headers"]["writer"]
+    first = data["client"].get(f'/api/v1/chapters/{data["chapter_ids"][0]}', headers=headers).json()
+    fourth = data["client"].get(f'/api/v1/chapters/{data["chapter_ids"][3]}', headers=headers).json()
+    assert first["content"] == "林川凭空造出河流。" and fourth["content"] == "用户的新正文"
+
+
+@pytest.mark.parametrize("fail_second", [False, True])
+def test_multi_chapter_adoption_only_saves_after_every_generation_succeeds(selection, monkeypatch, fail_second):
+    data = selection
+    value = report(data).model_dump()
+    value["issues"][0]["evidence"].append({"chapter_id": data["chapter_ids"][3], "quote": "第4章正文"})
+    monkeypatch.setattr(agents, "generate", lambda *args: ConsistencyReport.model_validate(value))
+    path, _ = completed_report(data)
+    before = snapshot(data)
+    calls = []
+
+    def generate(role, context):
+        number = context["chapter"]["chapter_number"]
+        calls.append(number)
+        if fail_second and number == 4:
+            raise ValueError("invalid model output")
+        return ChapterContentDraft(content=repaired_body(number))
+
+    monkeypatch.setattr(agents, "generate", generate)
+    result = repair_result(data, data["client"].post(path + "/repair/tasks", json={"suggestion": "保持两章能力一致"}, headers=data["headers"]["writer"]))
+    assert calls == [1, 4]
+    if fail_second:
+        assert result["status"] == "failed" and snapshot(data) == before
+        assert data["client"].patch(path, json={"suggestion": "修改后可重试"}, headers=data["headers"]["writer"]).status_code == 200
+    else:
+        assert result["status"] == "completed", result
+        assert {row["chapter_id"] for row in result["result"]["chapters"]} == {data["chapter_ids"][i] for i in (0, 3)}
+
+
+def test_repair_and_suggestion_edits_require_ownership_and_valid_issue(selection, monkeypatch):
+    data = selection
+    path, _ = completed_report(data)
+    calls = []
+    monkeypatch.setattr(agents, "generate", lambda *args: calls.append(args))
+    for method, suffix in (("patch", ""), ("post", "/repair/tasks")):
+        request = getattr(data["client"], method)
+        assert request(path + suffix, json={"suggestion": "修复"}).status_code == 401
+        assert request(path + suffix, json={"suggestion": "修复"}, headers=data["headers"]["other"]).status_code == 404
+        for suggestion in ("   ", "字" * 4001):
+            assert request(path + suffix, json={"suggestion": suggestion}, headers=data["headers"]["writer"]).status_code == 422
+        for index in (-1, 10):
+            assert request(path[:-1] + str(index) + suffix, json={"suggestion": "修复"}, headers=data["headers"]["writer"]).status_code == 404
+    assert calls == []
+
+
+def test_running_repair_is_deduplicated_and_cannot_be_edited(selection, monkeypatch):
+    data = selection
+    path, _ = completed_report(data)
+    entered, release = threading.Event(), threading.Event()
+
+    def generate(role, context):
+        entered.set()
+        assert release.wait(15)
+        return ChapterContentDraft(content=repaired_body())
+
+    monkeypatch.setattr(agents, "generate", generate)
+    client, headers = data["client"], data["headers"]["writer"]
+    try:
+        response = client.post(path + "/repair/tasks", json={"suggestion": "改为借舟渡河"}, headers=headers)
+        assert response.status_code == 202, response.text
+        assert entered.wait(5)
+        repeated = client.post(path + "/repair/tasks", json={"suggestion": "改为借舟渡河"}, headers=headers)
+        assert repeated.status_code == 202 and repeated.json()["id"] == response.json()["id"]
+        assert client.patch(path, json={"suggestion": "另一种修复"}, headers=headers).status_code == 409
+        assert client.post(path + "/repair/tasks", json={"suggestion": "另一种修复"}, headers=headers).status_code == 409
+        release.set()
+        assert repair_result(data, response)["status"] == "completed"
+    finally:
+        release.set()
+
+
+def two_issue_report(data, monkeypatch, same_chapter=False):
+    value = report(data).model_dump()
+    second = {**value["issues"][0], "title": "另一处能力偏移"}
+    if not same_chapter:
+        second["evidence"] = [{"chapter_id": data["chapter_ids"][3], "quote": "第4章正文"}]
+    value["issues"].append(second)
+    monkeypatch.setattr(agents, "generate", lambda *args: ConsistencyReport.model_validate(value))
+    return completed_report(data)
+
+
+def test_other_suggestions_can_be_adopted_after_a_saved_repair(selection, monkeypatch):
+    data = selection
+    path, _ = two_issue_report(data, monkeypatch)
+    monkeypatch.setattr(agents, "generate", lambda role, context: ChapterContentDraft(
+        content=repaired_body(context["chapter"]["chapter_number"])))
+    for index in (0, 1):
+        response = data["client"].post(path[:-1] + str(index) + "/repair/tasks", json={"suggestion": "修复本章能力描述"}, headers=data["headers"]["writer"])
+        result = repair_result(data, response)
+        assert result["status"] == "completed", result
+        assert result["result"]["chapters"][0]["chapter_number"] == (1 if index == 0 else 4)
+
+
+def test_concurrent_repairs_never_overwrite_a_saved_repair(selection, monkeypatch):
+    data = selection
+    path, _ = two_issue_report(data, monkeypatch, same_chapter=True)
+    entered = [threading.Event(), threading.Event()]
+    release = [threading.Event(), threading.Event()]
+
+    def generate(role, context):
+        index = int(context["approved_fix"]["title"] == "另一处能力偏移")
+        entered[index].set()
+        assert release[index].wait(15)
+        return ChapterContentDraft(content=repaired_body(index + 1))
+
+    monkeypatch.setattr(agents, "generate", generate)
+    try:
+        responses = []
+        for index in (0, 1):
+            responses.append(data["client"].post(path[:-1] + str(index) + "/repair/tasks", json={"suggestion": "修复能力描述"}, headers=data["headers"]["writer"]))
+            assert entered[index].wait(5)
+        release[0].set()
+        assert repair_result(data, responses[0])["status"] == "completed"
+        release[1].set()
+        second = repair_result(data, responses[1])
+        assert second["status"] == "failed" and second["error"]["status"] == 409, second
+        saved = data["client"].get(f'/api/v1/chapters/{data["chapter_ids"][0]}', headers=data["headers"]["writer"]).json()
+        assert saved["content"] == repaired_body(1)
+    finally:
+        for event in release:
+            event.set()

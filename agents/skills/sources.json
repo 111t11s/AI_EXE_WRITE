@@ -1,19 +1,20 @@
 {
-  "version": 1,
-  "source_count": 13,
-  "unique_source_count": 11,
+  "version": 2,
+  "source_count": 29,
+  "unique_source_count": 27,
   "method": "人工阅读提炼。TXT 按 GB18030 解码，DOC 按 OLE Word piece table 提取正文，DOCX 提取 word/document.xml；未执行文档宏或读取外部链接。",
-  "scope": "项目运行时大纲技能。保留通用方法，类型适配建议在各技能中说明，原始资料保持不变。",
+  "scope": "项目运行时大纲技能。保留通用方法，类型适配建议在各技能中说明。",
+  "source_retention": "原始资料由用户自行管理；本清单仅保留历史校验与溯源记录，运行时不加载原始资料。",
   "excluded": "原文个人信息、网址、完整范例、固定性别与后宫设定、成功保证、禁止第一人称等偏好；科幻等无专项资料的类型回退通用技能。",
   "sources": [
     {
-      "path": "meterials/大纲相关/[写作相关] 写作技巧 YY小说大纲 [复制链接].doc",
+      "path": "archived-source://大纲相关/[写作相关] 写作技巧 YY小说大纲 [复制链接].doc",
       "sha256": "db0086de857ccae0a247965fd9b6b1c6bdcd5c5843081c718319cf0bcb8440e1",
       "skills": [],
       "distillation": "已审阅；夸张拼接范例，未用于技能指令或剧情素材。"
     },
     {
-      "path": "meterials/大纲相关/[置顶] 网络商业写作新手指南之大纲设定 .txt",
+      "path": "archived-source://大纲相关/[置顶] 网络商业写作新手指南之大纲设定 .txt",
       "sha256": "ff2bfd5f057d021f9d98dfedb423d0c60e6f786f166785dc784d992a3a6c0802",
       "skills": [
         "outline-general"
@@ -21,7 +22,7 @@
       "distillation": "提炼设定与大纲的区别、主线及分段规划；未采纳读者画像和商业成功保证。"
     },
     {
-      "path": "meterials/大纲相关/【写作大纲】经典都市写作大纲二十二条主线.doc",
+      "path": "archived-source://大纲相关/【写作大纲】经典都市写作大纲二十二条主线.doc",
       "sha256": "bcc0321637155321dfce878f8abc3593df5415c03953f17131722492ec7c1b36",
       "skills": [
         "outline-urban"
@@ -29,7 +30,7 @@
       "distillation": "仅提炼事业与关系线交叉、旧身份回归和线索揭示；原文为连续套路链而非独立主线库。"
     },
     {
-      "path": "meterials/大纲相关/【教程】小说大纲如何设定(1).doc",
+      "path": "archived-source://大纲相关/【教程】小说大纲如何设定(1).doc",
       "sha256": "0ed06bf8b1b2010c0efac9df0a54727c3159bc32e45d10069bbe5a6e95f23b56",
       "skills": [
         "outline-general"
@@ -37,16 +38,16 @@
       "distillation": "结构化提纲字段、人物能力及主支线关系；与大纲模块设定有内容重叠。"
     },
     {
-      "path": "meterials/大纲相关/【教程】小说大纲如何设定.doc",
+      "path": "archived-source://大纲相关/【教程】小说大纲如何设定.doc",
       "sha256": "0ed06bf8b1b2010c0efac9df0a54727c3159bc32e45d10069bbe5a6e95f23b56",
       "skills": [
         "outline-general"
       ],
       "distillation": "结构化提纲字段、人物能力及主支线关系；与大纲模块设定有内容重叠。",
-      "duplicate_of": "meterials/大纲相关/【教程】小说大纲如何设定(1).doc"
+      "duplicate_of": "archived-source://大纲相关/【教程】小说大纲如何设定(1).doc"
     },
     {
-      "path": "meterials/大纲相关/买断大纲格式模板——豆子.docx",
+      "path": "archived-source://大纲相关/买断大纲格式模板——豆子.docx",
       "sha256": "9e135601bdd5ce2b2226df3c4c48c2f7e2dc715918b4a23a2c5d258f59945226",
       "skills": [
         "outline-general"
@@ -54,7 +55,7 @@
       "distillation": "仅保留卖点、人物、风格、简介和详细大纲等创作字段；排除联系方式和投稿报价。"
     },
     {
-      "path": "meterials/大纲相关/大纲拓展.doc",
+      "path": "archived-source://大纲相关/大纲拓展.doc",
       "sha256": "5d9ed9baca6f0835077b14999e388ce433a07cef2347afc6e4ebe6e2f1cb95a4",
       "skills": [
         "outline-general",
@@ -65,7 +66,7 @@
       "distillation": "一句话扩展、目标分解与障碍组织；删去必然超强、人物性别及外貌限制。"
     },
     {
-      "path": "meterials/大纲相关/大纲模块设定.txt",
+      "path": "archived-source://大纲相关/大纲模块设定.txt",
       "sha256": "a20624469ed765d26f4e6d7b7cfc21a81d9b6ab10de6fdecd928996b8a7cd34f",
       "skills": [
         "outline-general"
@@ -73,7 +74,7 @@
       "distillation": "环境、角色、能力、道具与情节的结构化组织，不要求填写全部栏目。"
     },
     {
-      "path": "meterials/大纲相关/大纲详细写法(1).doc",
+      "path": "archived-source://大纲相关/大纲详细写法(1).doc",
       "sha256": "87b2b79e93a239f466340f1f45542be40c7623f67f7c91bec1941840b60ff115",
       "skills": [
         "outline-general"
@@ -81,22 +82,22 @@
       "distillation": "主角动机、开局到结尾的关键节点、铺垫、情绪余韵；排除人称和比例等一刀切规则。"
     },
     {
-      "path": "meterials/大纲相关/大纲详细写法.doc",
+      "path": "archived-source://大纲相关/大纲详细写法.doc",
       "sha256": "87b2b79e93a239f466340f1f45542be40c7623f67f7c91bec1941840b60ff115",
       "skills": [
         "outline-general"
       ],
       "distillation": "主角动机、开局到结尾的关键节点、铺垫、情绪余韵；排除人称和比例等一刀切规则。",
-      "duplicate_of": "meterials/大纲相关/大纲详细写法(1).doc"
+      "duplicate_of": "archived-source://大纲相关/大纲详细写法(1).doc"
     },
     {
-      "path": "meterials/大纲相关/小说大纲word.doc",
+      "path": "archived-source://大纲相关/小说大纲word.doc",
       "sha256": "008cf5f490f33e6bc726b8c3d152b1214183766b39ce06d203c91353d6deff88",
       "skills": [],
       "distillation": "已审阅；原文含不作商业使用声明，仅记录目录与校验值，不纳入运行时技能或复制范例。"
     },
     {
-      "path": "meterials/大纲相关/武侠（仙侠）小说写作大纲详细指南.txt",
+      "path": "archived-source://大纲相关/武侠（仙侠）小说写作大纲详细指南.txt",
       "sha256": "f64e5dffcfdf693f3eb172cb1c0d5f2226174c222cc0e9e25b377365328b8656",
       "skills": [
         "outline-wuxia",
@@ -105,13 +106,141 @@
       "distillation": "通用类型承诺、人物与剧情驱动及神话虚构中的组织关系；不复制谱系和故事，不视为历史依据。"
     },
     {
-      "path": "meterials/大纲相关/玄幻大纲范文.docx",
+      "path": "archived-source://大纲相关/玄幻大纲范文.docx",
       "sha256": "b5209135906cf2e980ca73f22180d77a5e2bc381c22f22af844dcc5c611746a4",
       "skills": [
         "outline-xuanhuan",
         "outline-xianxia"
       ],
       "distillation": "提炼力量、资源、地理、势力和分卷状态联动；不复制人名、术语、剧情和固定卷数。"
+    },
+    {
+      "path": "archived-source://大纲完整模板（基础，通用.doc",
+      "sha256": "ea88cf1cc7514320cc90a2e3fa9386a137a596d4ff93a9f1b3cd059aac955de5",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼总纲、人物—事件—大纲三层展开，八类检查材料，人物关系与主辅线整理，章节摘要的可写性，以及伏笔和注解记录；排除范例人名、固定性别与人称、机械字数比例、固定章节数、投稿署名和协作流程。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第10章：小说大纲的创作心得.docx",
+      "sha256": "a7dc52a198b4f5c57e53bceeb4893cfb4d91542dad1ff0dfaf4d2703ac8f37b",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼从创意、主题、人物与背景到主线和分卷的推进顺序；排除固定字数、投稿和商业保证。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第11章：大纲的九线写法.docx",
+      "sha256": "5f9e5a9c5d80b30ad8db6a188ebe38a4fefffd1a8bec7a3d8590d10235cdff6f",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼主角、配角、能力、伙伴、资源、冒险、身世、势力与关系线的漏项检查；泛化特定题材关系写法。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第12章：小说速成大纲.docx",
+      "sha256": "f42ddf8a7755b34bc820a92c6b2fe7f8040a73b17fca30379b7ee0f81309d7a2",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼先定主题与结局、再拆阶段目标和节点的快速工作流；排除固定篇幅和范例套路。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第13章：活学活用之小说大纲.docx",
+      "sha256": "77b5dab277abde30f00a83f561f39e83daad10fd330eb93f6e5f72c7f07b3d9b",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼点线面扩展、人物选择驱动事件及分线服务主线；排除原文作品范例和类型偏好。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第14章：都市写作大纲的24条主线.docx",
+      "sha256": "ffce4403f63e1d32d32793a475b2519bacd539b7335d08e5566259ed707eb083",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼多条事业、关系、身份与线索如何交叉推进；不复制都市套路、人物和固定主线清单。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第15章：起点神作的标准提纲.docx",
+      "sha256": "9069e63c678332a31fa90f253ab466904af19b7b03bb14d45f92065494760e70",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼开篇冲突、阶段升级、伏笔回收和卷末钩子的结构检查；排除平台规则、成功保证和固定字数。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第1章：大纲格式与内容概述.docx",
+      "sha256": "302b489477efb1c24508b539f2bc238bb5f1a6455a9573089f1cde161f9f3386",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼大纲的功能、基本栏目和从总纲到章节的层级；不固化原文格式、篇幅和示例。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第2章：小说大纲详解.docx",
+      "sha256": "c5fb8d1a24ce6454ac6d94020c4777ea594463b1f1b2ecfcb8730994a66ccf0a",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼立意、背景、人物、冲突、主线与结局的因果组织；排除特定作品和商业写作判断。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第3章：小说的基础提纲结构.docx",
+      "sha256": "fe5f67d15427b65d8cd898df311f1dda0151ede03e80b69bd1c0d61e8eb85885",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼背景地图、规则、角色、势力和情节五类基础材料；仅保留会影响剧情的设定。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第4章：大纲的写法和新手常见问题.docx",
+      "sha256": "7fd7983f09fe892fad5c957ece319b19ecd2ffc4f2c1a326888749b217620db8",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼新手常见的设定堆砌、动机空缺、冲突重复和结尾失控等检查项；排除一刀切写作偏好。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第5章：大纲在小说中的作用.docx",
+      "sha256": "101a0410ade752bb9a40c3f3e86f93fcbc8c4e4ba070d3f5a7e560e28c880060",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼大纲对因果、节奏、人物状态和长篇一致性的控制作用；排除成功承诺和平台话术。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第6章：大纲的要素设定.docx",
+      "sha256": "49eb3c86e98a387088da6cc4c27fe5702d14741406274e15046b5dc822277658",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼人物、能力、道具、势力、环境与规则的约束关系；不复制范例设定和固定栏目。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第7章：大纲的主辅线设置.docx",
+      "sha256": "1d74e2e2dd46a9e0bc2bcb3eca80732ec0453dad7b87311cd1bd2f759d9ae0cf",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼主线、辅线、关系线的优先级、交汇点和回收方式；排除固定题材线索。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第8章：大纲的制作方法.docx",
+      "sha256": "05cfdde95437b6d5d37d7a3f96fd0c7c4ed851eca96ed9fcd12c511fd0a51606",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼从一句话创意到分卷、节点和章节摘要的制作步骤；不采用固定章节数或字数比例。"
+    },
+    {
+      "path": "archived-source://大纲教程（小白可看）/第9章：大纲的创作手法.docx",
+      "sha256": "0992743d094021d30c3b839ea2a13c8effa62703bb08088c3eea54c7fba9d0a1",
+      "skills": [
+        "outline-general"
+      ],
+      "distillation": "提炼开篇切入、悬念伏笔、冲突升级、人物行为化和结局回收；排除特定作品模仿和套路保证。"
     }
   ]
 }

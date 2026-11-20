@@ -93,8 +93,26 @@ def test_context_mode_generates_once_and_still_persists_via_mcp(generation, monk
     assert writes.await_count == 2
 
 
-def confirm(client):
-    return client.post("/api/v1/novel-assistant/sessions/draft/messages", json={"content": "确认生成"})
+def confirm(client, theme=None):
+    payload = {"content": "确认生成"}
+    if theme:
+        payload["outline_theme"] = theme
+    return client.post("/api/v1/novel-assistant/sessions/draft/messages", json=payload)
+
+
+def test_confirmation_passes_selected_outline_theme_to_model(generation, monkeypatch):
+    writes, mock_gateway = generation
+    monkeypatch.setattr(agent, "get_settings", lambda: SimpleNamespace(
+        API_KEY="test-key", PROXY_URL="https://model.test/v1", REQUEST_TIMEOUT=5,
+        MODEL_NATIVE_TOOLS=False,
+    ))
+    requests = mock_gateway(iter([(200, completion(BLUEPRINT))]))
+    with TestClient(app) as client:
+        response = confirm(client, "comeback")
+    assert response.status_code == 200
+    prompt = requests[0]["messages"][-1]["content"]
+    assert "本次大纲主题：逆袭" in prompt
+    assert response.json()["outline_theme"] == "comeback"
 
 
 @pytest.mark.parametrize("failure,status", [(None, None), (httpx.ReadTimeout, 504)])

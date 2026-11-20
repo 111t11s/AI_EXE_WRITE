@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from agents import writing_agents as agents
 from agents.llm_streaming import IncompleteGenerationError, emit_generation_event
 from agents.outline_skills import OutlineSkillError
+from agents.prose_skills import ProseSkillError
 from api.generation_stream import generation_response
 from api import generation_jobs
 from api.account_api import CurrentAccount
@@ -371,8 +372,13 @@ async def load_context(loader, *args):
 
 async def generate(role, context, payload):
     try:
-        return await run_in_threadpool(agents.generate, role, {**context, "request": payload.model_dump()})
-    except OutlineSkillError as exc:
+        request = payload.model_dump()
+        # Keep omitted theme fields out of the context for older callers while
+        # agents.generate supplies the backwards-compatible default guidance.
+        if isinstance(payload, OutlineRequest) and "outline_theme" not in payload.model_fields_set:
+            request.pop("outline_theme", None)
+        return await run_in_threadpool(agents.generate, role, {**context, "request": request})
+    except (OutlineSkillError, ProseSkillError) as exc:
         raise HTTPException(503, str(exc)) from None
     except (APITimeoutError, httpx.TimeoutException):
         logger.warning("模型请求超时：任务=%s", role.title)

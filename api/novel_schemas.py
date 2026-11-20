@@ -26,6 +26,7 @@ class ProjectCreate(RowInput):
     premise: str | None = None
     protagonist_goal: str = Field(min_length=1, max_length=500)
     status: Literal["planning", "writing", "completed", "paused"] = "planning"
+    is_public: bool = False
 
 
 class DesignSessionCreate(RowInput):

@@ -15,7 +15,8 @@ const initialState = () => ({projects: [], project: null, libraryOwner: 'all', w
   consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
   consistencyOutlineId: null, consistencyReport: null,
   trash: null, trashLoading: false, trashError: null,
-  taskCategory: 'all', taskProjectId: 'all', taskStatus: 'all', taskMenuOpen: false, tasksLoaded: false, tasksError: null,
+  taskCategory: 'all', taskProjectId: 'all', taskStatus: 'all', taskPage: 1, taskPageSize: 5,
+  taskMenuOpen: false, tasksLoaded: false, tasksError: null,
   busy: false, screen: 'project', reviews: new Map()});
 const state = initialState();
 let account = null;
@@ -84,7 +85,7 @@ const taskCategories = [['all', '全部任务'], ['worldbuilding', '世界观'],
   ['draft', '正文'], ['plan', '章节规划'], ['review', '审读'], ['consistency', '一致性核对'], ['other', '其他']];
 const knownTaskKinds = new Set(taskCategories.filter(([kind]) => !['all', 'other'].includes(kind)).map(([kind]) => kind));
 const taskKindCategory = kind => kind === 'character_progress' ? 'characters' :
-  kind === 'batch_draft' ? 'draft' : kind;
+  kind === 'batch_draft' ? 'draft' : kind === 'consistency_repair' ? 'consistency' : kind;
 const taskCategoryName = kind => taskCategories.find(([value]) => value === taskKindCategory(kind))?.[1] || '其他';
 const taskInCategory = (job, category) => category === 'all' || (category === 'other' ? !knownTaskKinds.has(taskKindCategory(job.kind)) : taskKindCategory(job.kind) === category);
 const taskInProject = (job, projectId) => projectId === 'all' ||
@@ -108,12 +109,14 @@ let jobsTimer = null;
 let jobsLoading = false;
 let progressId = null;
 let progressAbort = null;
+let consistencyProgress = null;
 let noticeTimer = null;
 
 function stopProgress() {
   progressAbort?.abort();
   progressAbort = null;
   progressId = null;
+  consistencyProgress = null;
 }
 
 function jobRow(job) {
@@ -168,13 +171,17 @@ async function loadJobs(quiet = true) {
     }
     const changed = !state.tasksLoaded || state.tasksError || JSON.stringify(jobList) !== JSON.stringify(page.items);
     jobList = page.items;
-    if (!taskProjectOptions().some(([id]) => String(id) === String(state.taskProjectId))) state.taskProjectId = 'all';
+    if (!taskProjectOptions().some(([id]) => String(id) === String(state.taskProjectId))) {
+      state.taskProjectId = 'all';
+      state.taskPage = 1;
+    }
     state.tasksLoaded = true;
     if (state.tasksError && state.screen === 'tasks') notify();
     state.tasksError = null;
     if (completed) notify('任务完成，请去任务中心查看。', '', 3000);
     renderJobSummary();
-    if (state.screen === 'tasks' && changed) render();
+    if (changed && (state.screen === 'tasks' || (state.screen === 'progress' && consistencyProgress) ||
+        (state.screen === 'project' && state.tab === 'consistency' && state.consistencyReport?.issues.some(issue => issue.repair_job_id)))) render();
   } catch (error) {
     if (account === requestingAccount) {
       state.tasksError = error.message;
@@ -193,6 +200,7 @@ function recordJob(job) {
 
 function openTasks(category = state.taskCategory, projectId = state.taskProjectId) {
   stopProgress();
+  if (category !== state.taskCategory || String(projectId) !== String(state.taskProjectId)) state.taskPage = 1;
   state.taskCategory = category;
   state.taskProjectId = projectId;
   state.taskMenuOpen = true;
@@ -206,6 +214,10 @@ function taskCenterView() {
   const projectId = state.taskProjectId;
   const jobs = sortedJobs(jobList.filter(job => taskInCategory(job, category) && taskInProject(job, projectId)));
   const filtered = jobs.filter(job => state.taskStatus === 'all' || job.status === state.taskStatus);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / state.taskPageSize));
+  state.taskPage = Math.min(Math.max(1, state.taskPage), totalPages);
+  const offset = (state.taskPage - 1) * state.taskPageSize;
+  const pageJobs = filtered.slice(offset, offset + state.taskPageSize);
   const categoryFilters = element('nav', {class: 'task-category-filters', 'aria-label': '任务类型'},
     taskCategories.filter(([kind]) => kind !== 'other' || jobList.some(job => !knownTaskKinds.has(job.kind))).map(([kind, title]) => {
       const count = jobList.filter(job => taskInCategory(job, kind)).length;
@@ -222,17 +234,36 @@ function taskCenterView() {
   const statuses = [['running', '生成中'], ['all', '全部状态'], ['completed', '已完成'], ['failed', '未完成']];
   const filters = element('nav', {class: 'task-status-filters', 'aria-label': '任务状态'}, statuses.map(([status, title]) =>
     element('button', {type: 'button', class: 'button secondary', 'data-task-status': status,
-      'aria-pressed': String(state.taskStatus === status), click: () => { state.taskStatus = status; render(); }},
+      'aria-pressed': String(state.taskStatus === status), click: () => {
+        if (state.taskStatus !== status) state.taskPage = 1;
+        state.taskStatus = status;
+        render();
+      }},
     `${title}（${jobs.filter(job => status === 'all' || job.status === status).length}）`)));
   const emptyMessage = !state.tasksLoaded && !state.tasksError ? '正在读取任务…' :
     state.tasksError ? '暂时无法读取任务，请点击刷新任务重试。' :
     state.taskStatus === 'running' ? '此分类暂无正在生成的任务，可切换「全部状态」查看历史任务。' : '此分类暂无符合条件的任务。';
   const filterGroup = (label, content, extraClass = '') => element('section', {class: `task-filter-group${extraClass ? ` ${extraClass}` : ''}`},
     element('strong', {class: 'task-filter-label'}, label), content);
-  const taskProgress = panel(`任务中心 · ${taskCategoryName(category)} · ${taskProjectName(projectId)}`, stack(
-    muted('汇总当前账号所有小说的后台任务，每 4 秒自动更新；点击查看进度后可查看实时内容和生成结果。'),
-    state.tasksError ? prose(`任务刷新失败：${state.tasksError}。下方保留上次读取的任务。`) : null,
-    ...(filtered.length ? filtered.map(jobRow) : [muted(emptyMessage)])
+  const taskList = element('div', {class: 'task-list', tabindex: '0', 'aria-label': '任务列表'},
+    ...(pageJobs.length ? pageJobs.map(jobRow) : [muted(emptyMessage)]));
+  const pageSizes = element('select', {'aria-label': '每页任务数', change: event => {
+    state.taskPageSize = Number(event.target.value);
+    state.taskPage = 1;
+    render();
+  }}, [5, 10, 20].map(size => element('option', {value: size, selected: state.taskPageSize === size}, `每页 ${size} 条`)));
+  const pagination = element('nav', {class: 'paging task-pagination', 'aria-label': '任务分页'},
+    element('span', {'aria-live': 'polite'}, `共 ${filtered.length} 条 · ${filtered.length ? offset + 1 : 0}–${offset + pageJobs.length} 条`),
+    actions(pageSizes,
+      button('上一页', () => { state.taskPage -= 1; render(); }, 'secondary', state.taskPage === 1),
+      element('span', {'aria-current': 'page'}, `第 ${state.taskPage} / ${totalPages} 页`),
+      button('下一页', () => { state.taskPage += 1; render(); }, 'secondary', state.taskPage === totalPages)));
+  const taskProgress = panel(`任务中心 · ${taskCategoryName(category)} · ${taskProjectName(projectId)}`, element('div', {class: 'task-panel-body'},
+    element('div', {class: 'task-list-description'},
+      muted('汇总当前账号所有小说的后台任务，每 4 秒自动更新；点击查看进度后可查看实时内容和生成结果。'),
+      state.tasksError ? prose(`任务刷新失败：${state.tasksError}。下方保留上次读取的任务。`) : null),
+    taskList,
+    pagination
   ), `共 ${jobs.length} 项任务，${jobs.filter(job => job.status === 'running').length} 项正在生成。`,
   button('刷新任务', () => loadJobs(false)));
   taskProgress.classList.add('task-progress-panel');
@@ -245,6 +276,7 @@ function taskCenterView() {
 }
 
 function renderTaskResult(job, result) {
+  consistencyProgress = job.kind === 'consistency' ? {job, result} : null;
   if (job.kind === 'draft') state.reviews.delete(job.resource_id);
   const content = [];
   if (job.kind === 'review') content.push(reviewView(result));
@@ -255,6 +287,10 @@ function renderTaskResult(job, result) {
     if (job.kind === 'outline') message = `大纲 v${result.version_no} 已保存，共 ${result.volume_ids.length} 卷。`;
     if (job.kind === 'plan') message = `已保存 ${result.chapters.length} 个计划章节。`;
     if (job.kind === 'draft') message = `正文已保存，共 ${result.word_count} 字；人物正文进展可另行分析。`;
+    if (job.kind === 'consistency_repair') {
+      for (const row of result.chapters) state.reviews.delete(row.chapter_id);
+      message = `已按采纳的修复意见保存 ${result.completed_count} 章正文：${result.chapters.map(row => `第 ${row.chapter_number} 章 · ${row.title}`).join('、')}。人物正文进展可重新分析，修复结果可再次核对。`;
+    }
     if (job.kind === 'batch_draft') message = `已按顺序保存 ${result.completed_count} 章正文，并完成每章人物进展分析。`;
     if (job.kind === 'character_progress') message = `已分析并保存本章 ${result.updated_count} 位角色的人物正文进展。`;
     if (job.kind === 'characters') {
@@ -294,7 +330,7 @@ function renderTaskResult(job, result) {
     } else if (job.kind === 'outline') {
       state.tab = 'outline';
       await loadOutline(result.outline_id);
-    } else if (['plan', 'draft', 'batch_draft', 'review'].includes(job.kind)) {
+    } else if (['plan', 'draft', 'batch_draft', 'review', 'consistency_repair'].includes(job.kind)) {
       state.tab = 'chapters';
       if (job.kind === 'review') state.reviews.set(job.resource_id, result);
       await loadChapters(0, result.chapters?.[0]?.chapter_id || job.resource_id);
@@ -404,7 +440,7 @@ function renderLibrary() {
       disabled: state.busy, click: () => openProject(project.id)},
     element('span', {class: 'project-badge', 'aria-hidden': 'true'}, Array.from(project.title || '未')[0]),
     element('span', {}, element('strong', {}, project.title || '未命名小说'),
-      element('small', {}, account?.is_admin ? `${project.genre || '小说'} · ${projectOwner(project)}` : project.genre || '小说')));
+      element('small', {}, `${account?.is_admin ? `${project.genre || '小说'} · ${projectOwner(project)}` : project.genre || '小说'}${project.is_public ? ' · 已公开' : ''}`)));
   if (!projects.length) {
     $('projects').replaceChildren(element('p', {class: 'rail-note'},
       state.libraryError ? '书架读取失败，点击刷新重试。' : '还没有小说项目。'));
@@ -618,11 +654,38 @@ function hero(project) {
   return element('section', {class: 'hero'}, element('p', {class: 'eyebrow'}, '小说项目'),
     element('h1', {}, project.title || '未命名小说'), project.premise ? element('p', {}, project.premise) : null,
     element('div', {class: 'hero-meta'}, pill(project.genre || '小说'), pill(statusNames[project.status] ?? project.status),
+      pill(project.is_public ? '已发布到公共书架' : '未发布'),
       project.tone ? pill(project.tone) : null,
       account?.is_admin ? pill(`所属账号：${projectOwner(project)}`) : null),
     readOnlyProject() ? muted('管理员只读查看：可阅读和导出，编辑与生成由所属账号操作。') : null,
     actions(button('导出小说', exportDialog, 'secondary', state.busy || state.projectLoading || Boolean(state.projectError)),
+      mutationButton(project.is_public ? '取消发布' : '发布书籍', togglePublication, 'secondary',
+        state.busy || state.projectLoading || Boolean(state.projectError)),
+      project.is_public ? element('a', {class: 'button secondary', href: `/public.html?book=${project.id}`}, '公开阅读 ↗') : null,
       mutationButton('移入回收站', moveProjectToTrash, 'secondary', state.busy || state.projectLoading || Boolean(state.projectError))));
+}
+
+async function togglePublication() {
+  const project = state.project;
+  if (!project || readOnlyProject() || state.busy) return;
+  const publish = !project.is_public;
+  if (!window.confirm(publish ?
+    `发布《${project.title}》后，所有人无需登录即可阅读简介和全部已有正文，之后的正文修改和新增章节也会自动公开。确定发布吗？` :
+    `确定取消发布《${project.title}》吗？取消后将从公共书架移除。`)) return;
+  const requestingAccount = account;
+  setBusy(publish ? '正在发布书籍…' : '正在取消发布…');
+  render();
+  try {
+    const updated = await api(`/projects/${project.id}`, {method: 'PATCH', data: {is_public: publish}});
+    if (account !== requestingAccount) return;
+    state.projects = state.projects.map(item => item.id === updated.id ? updated : item);
+    if (state.project?.id === updated.id) state.project = updated;
+    notify(publish ? '书籍已发布，后续正文更新将自动同步到公共书架。' : '已取消发布，书籍已从公共书架移除。');
+  } catch (error) {
+    if (account === requestingAccount) notify(`操作失败：${error.message}`, 'error');
+  } finally {
+    if (account === requestingAccount) { setBusy(); render(); }
+  }
 }
 
 function overview() {
@@ -650,7 +713,10 @@ function render() {
   view.hidden = state.screen === 'progress';
   $('task-progress-page').hidden = state.screen !== 'progress';
   renderJobSummary();
-  if (state.screen === 'progress') return;
+  if (state.screen === 'progress') {
+    if (consistencyProgress) renderTaskResult(consistencyProgress.job, consistencyProgress.result);
+    return;
+  }
   if (state.screen === 'tasks') {
     view.replaceChildren(taskCenterView());
     return;
@@ -774,8 +840,11 @@ function consistencyReportView(report) {
     muted(`核对范围：${report.chapters.map(row => `第 ${row.chapter_number} 章 · ${row.title}`).join('、')}`),
     report.reference_materials?.length ? details(['已读取的对照档案', report.reference_materials
       .map(row => `${kinds[row.kind] || row.kind} · ${row.label}`).join('\n')]) : null,
-    ...report.issues.map(issue => {
+    ...report.issues.map((issue, index) => {
       const reference = report.references.find(row => row.kind === issue.basis.kind && row.record_id === issue.basis.record_id);
+      const repair = jobList.find(job => job.id === issue.repair_job_id);
+      const repairStatus = repair?.status || issue.repair_status;
+      const adopted = ['running', 'completed'].includes(repairStatus);
       return element('section', {class: 'report-issue'}, actions(pill(categories[issue.category]), pill(issue.severity === 'major' ? '主要问题' : '细节建议', true)),
         element('h3', {}, issue.title),
         ...issue.evidence.map(evidence => {
@@ -784,10 +853,41 @@ function consistencyReportView(report) {
         }),
         muted(`对照依据 · ${kinds[issue.basis.kind]} · ${reference?.label || ''} · ${fieldLabels[issue.basis.field] || issue.basis.field}`),
         element('blockquote', {class: 'prose consistency-quote'}, issue.basis.quote),
-        prose(`偏移说明：${issue.explanation}`), prose(`修改建议：${issue.suggestion}`));
+        prose(`偏移说明：${issue.explanation}`), prose(`修复意见：${issue.suggestion}`),
+        report.job_id ? actions(
+          button('编辑修复意见', () => consistencySuggestionDialog(report, index), 'secondary', state.busy || adopted),
+          button(adopted ? (repairStatus === 'completed' ? '已修复' : '修复中') : repairStatus === 'failed' ? '重试修复' : '采纳并修复',
+            () => consistencySuggestionDialog(report, index, true), 'primary', state.busy || adopted),
+          issue.repair_job_id ? button('查看修复进度', () => openProgress(issue.repair_job_id)) : null) : null,
+        repairStatus === 'failed' ? muted('修复未完成，可查看进度中的原因，调整意见后重试。') : null);
     }),
     report.limitations.length ? details(['核对范围与限制', report.limitations.join('\n')]) : null),
     '报告可在任务中心再次查看，记录保留规则与其他后台任务相同。', pill(verdicts[report.verdict], report.verdict !== 'consistent'));
+}
+
+function consistencySuggestionDialog(report, index, adopt = false) {
+  const issue = report.issues[index];
+  const chapterIds = new Set(issue.evidence.map(row => row.chapter_id));
+  const chapters = report.chapters.filter(row => chapterIds.has(row.chapter_id));
+  const path = `/writing/projects/${report.project_id}/consistency/${report.job_id}/issues/${index}`;
+  openAction({title: adopt ? '采纳并修复章节' : '编辑修复意见',
+    description: adopt ? `将按下方意见修复${chapters.map(row => `第 ${row.chapter_number} 章 · ${row.title}`).join('、')}，完成后替换正文并保存为草稿。核对后正文如有变动，需重新核对。` :
+      '保存后可再次编辑；点击「采纳并修复」才会修改对应章节正文。',
+    submit: adopt ? '采纳并开始修复' : '保存修复意见',
+    fields: [{name: 'suggestion', label: '修复意见', type: 'textarea', value: issue.suggestion, rows: 7, maxlength: 4000, required: true}],
+    send: data => adopt ? post(`${path}/repair/tasks`, data) : api(path, {method: 'PATCH', data}),
+    success: () => adopt ? '已采纳修复意见，正在后台修复对应章节。' : '修复意见已保存。',
+    after: async receipt => {
+      if (adopt) {
+        issue.suggestion = $('action-fields').querySelector('[name="suggestion"]').value.trim();
+        issue.repair_job_id = receipt.id;
+        issue.repair_status = receipt.status;
+        recordJob(receipt);
+      } else Object.assign(issue, receipt);
+      if (state.screen === 'progress' && progressId === report.job_id) {
+        renderTaskResult(jobList.find(job => job.id === report.job_id) || {kind: 'consistency', project_id: report.project_id}, report);
+      }
+    }});
 }
 
 async function loadCharacters() {
@@ -1008,6 +1108,16 @@ const action = $('action-dialog');
 let task = null;
 const noteField = {name: 'instruction', label: '补充要求（可选）', type: 'textarea', maxlength: 2000,
   placeholder: '例如：加强主角与世界规则的冲突'};
+const outlineThemeField = {name: 'outline_theme', label: '本版大纲主题', type: 'select', value: 'development', choices: [
+  {value: 'development', label: '发育（成长推进）'},
+  {value: 'comeback', label: '逆袭'},
+  {value: 'ending', label: '结尾收束'},
+  {value: 'survival', label: '逃杀（生存竞逐）'},
+  {value: 'revenge', label: '复仇'},
+  {value: 'mystery', label: '揭秘'},
+  {value: 'relationship', label: '关系推进'},
+  {value: 'custom', label: '自定义主题（请在补充要求中说明）'},
+]};
 const numberField = (name, label, value, min, max) => ({name, label, value, min, max, type: 'number', required: true});
 
 function openAction(options) {
@@ -1091,7 +1201,7 @@ async function outlineDialog() {
   catch (error) { if (account === requestingAccount) notify(`大纲技能加载失败：${error.message}`, 'error'); return; }
   if (account !== requestingAccount || state.project?.id !== id) return;
   openAction({title: '生成新大纲', description: `根据当前世界观创建一个新版本，已有大纲会保留。${selection.notice}。`,
-    submit: '生成并保存', fields: [numberField('volume_count', '分卷数', 3, 1, 5), noteField],
+    submit: '生成并保存', fields: [numberField('volume_count', '分卷数', 3, 1, 5), outlineThemeField, noteField],
     taskPath: `/writing/projects/${id}/outline/tasks`,
   });
 }
@@ -1216,7 +1326,7 @@ function exportDialog() {
 
 function outlineRewriteDialog(outline) {
   openAction({title: '重写大纲', description: `基于大纲 v${outline.version_no}、现有角色和世界观重写全书结构，结果保存为新版本。原大纲、已有章节和原卷戏份保留在原版本中。`,
-    submit: '重写并保存新版本', fields: [numberField('volume_count', '重写后的分卷数', Math.min(5, state.volumes.length), 1, 5),
+    submit: '重写并保存新版本', fields: [numberField('volume_count', '重写后的分卷数', Math.min(5, state.volumes.length), 1, 5), outlineThemeField,
       {...noteField, label: '重写要求（可选）', placeholder: '例如：保留主线，加强第二卷冲突，调整结尾伏笔'}],
     taskPath: `/writing/outlines/${outline.id}/rewrite/tasks`});
 }
@@ -1472,6 +1582,7 @@ function syncWizard() {
   $('outline-skill').textContent = session.outlineSkill?.notice || '选择小说类型后自动加载大纲设计技能。';
   $('chat-input').disabled = !id || busy || done;
   $('chat-send').disabled = !id || busy || done;
+  $('outline-theme').disabled = !id || busy || done;
   $('chat-form').hidden = !id || done || Boolean(question && !custom);
   $('chat-input').placeholder = question ? `输入自定义${question.label}…` : '修改设定，例如：小说类型：仙侠';
   $('question-picker').hidden = !id || !question || done;
@@ -1535,7 +1646,8 @@ async function sendMessage(content) {
   const generating = ['确认生成', '确认', '开始生成'].includes(content);
   try {
     const path = `/novel-assistant/sessions/${session.id}/messages`;
-    const reply = await post(generating ? `${path}/tasks` : path, {content});
+    const data = generating ? {content, outline_theme: $('outline-theme').value} : {content};
+    const reply = await post(generating ? `${path}/tasks` : path, data);
     if (session !== requestingSession) return;
     if (generating) {
       session.done = true;

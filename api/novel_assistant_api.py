@@ -9,6 +9,7 @@ from agents.worldbuilding_agent import ConversationState, WorldbuildingAssistant
 from api.generation_stream import generation_response
 from api import generation_jobs
 from api.account_api import CurrentAccount
+from api.writing_schemas import OutlineTheme
 from agents.outline_skills import OutlineSkillError, outline_skill_selection
 
 router = APIRouter(prefix="/novel-assistant")
@@ -30,6 +31,7 @@ def get_outline_skills(user: CurrentAccount, genre: str = Query(default="", max_
 
 class MessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
+    outline_theme: OutlineTheme = "development"
 
 
 @router.post("/sessions")
@@ -38,7 +40,8 @@ def create_session(user: CurrentAccount) -> dict:
     state = ConversationState(account_id=user.id)
     _sessions[session_id] = state
     return {"session_id": session_id, "message": _assistant.start(state), "values": state.values,
-            "question": state.question, "outline_skill": skill_selection(None)}
+            "question": state.question, "outline_skill": skill_selection(None),
+            "outline_theme": state.outline_theme}
 
 
 @router.post("/sessions/{session_id}/messages")
@@ -49,7 +52,7 @@ async def send_message(session_id: str, request: MessageRequest, user: CurrentAc
     message = request.content.strip()
     if message in {"确认生成", "确认", "开始生成"}:
         try:
-            result = await _assistant.confirm(state)
+            result = await _assistant.confirm(state, request.outline_theme)
         except WorldbuildingGenerationError as exc:
             raise HTTPException(exc.status, str(exc)) from None
         except ValueError as exc:
@@ -63,10 +66,12 @@ async def send_message(session_id: str, request: MessageRequest, user: CurrentAc
             "done": True,
             "question": state.question,
             "outline_skill": skill_selection(state.values.get("genre")),
+            "outline_theme": state.outline_theme,
         }
     reply = _assistant.receive(state, message)
     return {"message": reply, "values": state.values, "done": state.result is not None,
-            "question": state.question, "outline_skill": skill_selection(state.values.get("genre"))}
+            "question": state.question, "outline_skill": skill_selection(state.values.get("genre")),
+            "outline_theme": state.outline_theme}
 
 
 @router.get("/sessions/{session_id}")
@@ -83,6 +88,7 @@ def get_session(session_id: str, user: CurrentAccount) -> dict:
         "persistence": state.persistence,
         "done": state.result is not None and not state.confirmation_lock.locked(),
         "outline_skill": skill_selection(state.values.get("genre")),
+        "outline_theme": state.outline_theme,
     }
 
 

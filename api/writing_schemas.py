@@ -10,6 +10,22 @@ from api.novel_schemas import RowId, Sequence
 Title = Annotated[str, Field(min_length=1, max_length=200)]
 Detail = Annotated[str, Field(min_length=1, max_length=4000)]
 
+OutlineTheme = Literal[
+    "development", "comeback", "ending", "survival",
+    "revenge", "mystery", "relationship", "custom",
+]
+
+OUTLINE_THEME_LABELS = {
+    "development": "发育（成长推进）",
+    "comeback": "逆袭",
+    "ending": "结尾收束",
+    "survival": "逃杀（生存竞逐）",
+    "revenge": "复仇",
+    "mystery": "揭秘",
+    "relationship": "关系推进",
+    "custom": "自定义主题",
+}
+
 
 class WritingInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -19,6 +35,13 @@ class WritingInput(BaseModel):
 
 class OutlineRequest(WritingInput):
     volume_count: int = Field(default=3, ge=1, le=5)
+    outline_theme: OutlineTheme = "development"
+
+    @model_validator(mode="after")
+    def require_custom_theme_description(self):
+        if self.outline_theme == "custom" and not self.instruction.strip():
+            raise ValueError("选择自定义主题时请在补充要求中说明主题")
+        return self
 
 
 class ChapterPlanRequest(WritingInput):
@@ -91,6 +114,12 @@ class ConsistencyRequest(WritingInput):
         if len(values) != len(set(values)):
             raise ValueError("所选章节不能重复")
         return values
+
+
+class ConsistencySuggestion(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    suggestion: Detail
 
 
 class Generated(BaseModel):
@@ -278,6 +307,8 @@ class ConsistencyReceipt(ConsistencyReport):
     references: list[ConsistencyReference]
     reference_materials: list[ConsistencyReference] = Field(default_factory=list)
     limitations: list[Detail] = Field(max_length=20)
+    job_id: str | None = None
+    chapter_fingerprints: dict[str, str] = Field(default_factory=dict)
 
 
 class OutlineReceipt(BaseModel):

@@ -92,6 +92,17 @@ sudo systemctl start aitxt
 
 项目的普通删除会保留七天，期间可在网页「回收站」恢复或立即彻底删除；后台服务每小时清理到期项目及其全部关联数据。
 
+升级书籍发布与公共书架功能前，备份数据库并补充发布字段（重复执行安全，已有小说保持未发布）：
+
+```bash
+cd /opt/aitxt
+sudo systemctl stop aitxt
+sudo .venv/bin/python -m db.migrate_public_library
+sudo systemctl start aitxt
+```
+
+新数据库导入最新版 `db/schema.sql` 即已包含发布字段。作者在小说概览点击「发布书籍」，访客无需登录即可在 `/public.html` 阅读简介和所有非空正文；后续正文更新自动同步。作者可以取消发布，移入回收站也会立即停止公共访问。升级网页后强制刷新；Android 需重新构建以包含公共书架页面。
+
 命令会新增 `app_account`、`app_auth_session` 表，并给小说项目和问答会话增加 `account_id` 及索引、外键。首次创建 `admin` 时在终端输入两次密码（至少 8 位），密码不会显示或出现在命令历史中。若账号已存在，会保留原密码。只有归属为空的旧小说和旧会话会绑定给 `admin`；新账号的已有数据不会改变。命令可重复执行，不会删除小说，也不会重新分配已绑定数据。`admin` 是指定的小说归属账号。
 
 执行迁移的数据库账号需要 CREATE、ALTER、INDEX 等建表改表权限；应用日常需要相关表的 SELECT、INSERT、UPDATE、DELETE 权限。如果迁移仅执行了一部分，补齐权限后重新执行即可。完成后强制刷新网页，Android 需重新构建并安装。

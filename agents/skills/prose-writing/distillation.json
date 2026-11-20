@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "scope": "正文初稿与完整正文重写",
+  "reviewed_lessons": 20,
+  "method": "阅读教程正文后归纳决策方法，合并重复内容，重写提示词与简短示例；不复制作品节选或截图范例。",
+  "source_dependency": false,
+  "runtime_files": ["SKILL.md", "references/scene-craft.md", "references/story-rhythm.md", "references/revision.md"],
+  "retention": "只保留本技能内完整方法与提示词；不记录外部文件路径，不回读教程，不使用外链或原始文件校验作为运行条件。",
+  "excluded": ["签约和商业成功保证", "过时的平台流量和收费数据", "软件、网站及投稿渠道推荐", "作品节选和人物名", "固定性别分工与固定圆满结局", "机械字数、章数与高潮比例", "强制金手指、唯一性或保密性", "为凑字数注水", "露骨或胁迫性的亲密桥段及规避审核的隐喻模板"],
+  "lessons": [
+    {"number": 1, "topic": "题材选择", "retained": "用户选定的题材和故事承诺优先，以可理解的具体经验支撑场景。", "excluded": "市场规模断言、替用户改选热门题材。", "files": ["SKILL.md"]},
+    {"number": 2, "topic": "对话形式与标点", "retained": "四种对话形式、说话人辨识、根据句法区分提示语与独立动作。", "excluded": "不完整引号示例和机械标点口诀。", "files": ["references/scene-craft.md"]},
+    {"number": 3, "topic": "叙述方法", "retained": "叙述压缩过程，场景展开关键节点；插入回忆后返回当前事件，动作可改变台词重心。", "excluded": "完整作品节选、禁止其他表达方式的泛化结论。", "files": ["SKILL.md", "references/scene-craft.md", "references/story-rhythm.md"]},
+    {"number": 4, "topic": "网络小说术语", "retained": "把崩文、未兑现承诺、成长与换地图等术语转成因果和连续性检查。", "excluded": "行业身份、榜单、收费与平台术语表，不单独生成术语提示词。", "files": ["references/story-rhythm.md", "references/revision.md"]},
+    {"number": 5, "topic": "综合描写", "retained": "动作、神态、心理与环境相互作用；感官与空间顺序按场景需要选择。", "excluded": "五感强制齐全、同义描写堆叠及教材节选。", "files": ["references/scene-craft.md"]},
+    {"number": 6, "topic": "创作辅助工具", "retained": "不纳入创作提示词；已有资料足以支持本次任务时，专注写作而非收集软件和网址。", "excluded": "全部工具清单和外部地址。", "files": []},
+    {"number": 7, "topic": "开篇", "retained": "以具体处境建立视角、目标、阻力和期待，避免背景说明淹没事件。", "excluded": "签约与定价推断、配角人数上限、固定字数门槛及禁止群像开篇。", "files": ["SKILL.md", "references/story-rhythm.md"]},
+    {"number": 8, "topic": "大纲与正文", "retained": "区分粗纲、细纲和正文；围绕渴望、障碍、行动与结果展开，不改造既有全书结构。", "excluded": "截图大纲范例、人物姓名和所有题材必须有数值等级的要求。", "files": ["SKILL.md"]},
+    {"number": 9, "topic": "签约与文字清洁度", "retained": "错字、句法、标点、段落可读性的交付检查。", "excluded": "投稿、编辑关系、推荐、签约时限和收益指导。", "files": ["references/revision.md"]},
+    {"number": 10, "topic": "世界规则", "retained": "通过使用、限制、资源交易和结果揭示设定，以现实可理解的细节帮助代入。", "excluded": "复制现成世界体系或为写一章重新创建整个世界。", "files": ["SKILL.md", "references/scene-craft.md"]},
+    {"number": 11, "topic": "人物优势与金手指", "retained": "优势服务行动，沿用来源、成长条件、限制和代价，保留人物的选择作用。", "excluded": "所有作品必须有金手指、必须唯一且永不泄密。", "files": ["SKILL.md", "references/story-rhythm.md"]},
+    {"number": 12, "topic": "打斗场景", "retained": "动机、场地、策略、攻防反馈与战后后果，按胜负关键组织动作。", "excluded": "固定招式模板、群众轮番震惊、胜利奖励的物化设定及复制名作战斗。", "files": ["references/scene-craft.md"]},
+    {"number": 13, "topic": "小说节奏", "retained": "区分事件密度与情绪起伏；压缩重复、合并同目的场景，缺少转折时补过程和后果。", "excluded": "注水、固定高潮章数和按读者性别强分节奏。", "files": ["references/story-rhythm.md", "references/revision.md"]},
+    {"number": 14, "topic": "伏笔", "retained": "伏笔有当下作用和后续照应，重复提示带来增量，不伪造前文或无休止开坑。", "excluded": "机械反复强调、每章必埋伏笔和按固定间隔回收。", "files": ["references/story-rhythm.md"]},
+    {"number": 15, "topic": "铺垫", "retained": "从人物动机、事件条件和气氛建立关键转折的必要性与可信度。", "excluded": "所有铺垫必须导向打脸、配角吹捧及固定套路。", "files": ["references/scene-craft.md", "references/story-rhythm.md"]},
+    {"number": 16, "topic": "外貌", "retained": "选辨识度细节，随动作和处境呈现，避免每次出场重复五官清单。", "excluded": "外貌决定品德、固定审美、教材人物肖像。", "files": ["references/scene-craft.md"]},
+    {"number": 17, "topic": "对话内容", "retained": "人物目的、知情范围、潜台词、有效信息与关系变化，删重复但保留有作用的日常。", "excluded": "所有对话必须含蓄、固定对话比例、注水建议和性别刻板印象。", "files": ["references/scene-craft.md", "references/revision.md"]},
+    {"number": 18, "topic": "人物心理", "retained": "直接叙述、内心独白、侧面行为与环境呼应；呈现刺激到决定的变化，受既定视角约束。", "excluded": "每步显写、逐个替换心理动词和无依据切入所有人物内心。", "files": ["references/scene-craft.md"]},
+    {"number": 19, "topic": "关系与亲密", "retained": "情感、人物意愿、留白转场以及关系后果，服从已选题材和基调。", "excluded": "性行为细节、强迫桥段、规避审核隐喻、过时平台规定和固定占比。", "files": ["references/scene-craft.md"]},
+    {"number": 20, "topic": "成长、感情与换地图", "retained": "成长可见、关系由共同事件推进，换场有理由且延续状态与承诺。", "excluded": "性别分工、固定后宫结构、强制圆满结局、按章数机械制造高潮。", "files": ["references/story-rhythm.md"]}
+  ]
+}

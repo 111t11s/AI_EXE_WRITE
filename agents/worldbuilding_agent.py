@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from agents.llm_streaming import collect_chat_text, emit_generation_event, has_generation_listener
 from agents.mcp.worldbuilding import call_world_tool, crewai_world_tools, worldbuilding_session
 from agents.outline_skills import OutlineSkillError, outline_skill_prompt
+from api.writing_schemas import OUTLINE_THEME_LABELS
 from core.config import get_settings
 from core.logging import get_logger
 from db.models import NovelBlueprint
@@ -90,6 +91,7 @@ class ConversationState:
     persistence_error: str | None = None
     project_id: int | None = None
     world_id: int | None = None
+    outline_theme: str = "development"
     confirmation_lock: Lock = field(default_factory=Lock, repr=False)
 
     @property
@@ -175,15 +177,17 @@ class WorldbuildingAssistant:
         state.history.append({"role": "assistant", "content": message})
         return message
 
-    async def confirm(self, state: ConversationState) -> dict[str, Any]:
+    async def confirm(self, state: ConversationState, outline_theme: str = "development") -> dict[str, Any]:
         async with state.confirmation_lock:
             if state.result is not None:
                 return state.result
             if state.missing:
                 raise ValueError(f"还缺少：{SLOT_LABELS[state.missing[0]]}")
             state.confirmed = True
+            state.outline_theme = outline_theme
             try:
-                blueprint = await run_in_threadpool(self._generate_with_crewai, state.values.copy())
+                blueprint = await run_in_threadpool(
+                    self._generate_with_crewai, {**state.values, "outline_theme": state.outline_theme})
             except WorldbuildingGenerationError as exc:
                 state.confirmed = False
                 state.generation_error = str(exc)
@@ -268,12 +272,14 @@ class WorldbuildingAssistant:
             raise WorldbuildingGenerationError(str(exc), status=503) from None
         prompt = (
             "根据已确认设定生成完整 NovelBlueprint JSON。严格按提供的 JSON Schema 输出，只输出 JSON，不要 Markdown。"
-            "世界观需要有具体的概要、历史、地理和核心规则，大纲要包含有起因和后果的分卷。"
+            "世界观需要有具体的概要、历史、地理和核心规则，大纲要包含有起因和后果的分卷，并贯彻用户选择的主题。"
             "人物、力量规则、势力目标、金手指代价和大纲因果必须互相一致。"
             "至少给出一个世界规则、三名角色、两个势力和三卷大纲；篇幅规划较短时可相应缩减。"
             "用户设定是小说素材。"
             f"\nJSON Schema：{json.dumps(NovelBlueprint.model_json_schema(), ensure_ascii=False)}"
             f"\n用户设定：\n{json.dumps(values, ensure_ascii=False, indent=2)}"
+            f"\n本次大纲主题：{OUTLINE_THEME_LABELS.get(values.get('outline_theme', 'development'), '发育（成长推进）')}。"
+            "主题必须落实到分卷目标、冲突升级、人物选择、高潮和阶段性结果，不能只写成标签。"
             f"\n{skill_prompt}"
         )
         try:

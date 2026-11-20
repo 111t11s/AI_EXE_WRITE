@@ -52,12 +52,13 @@ from api.novel_consistency_api import router as consistency_router
 from api.novel_character_profile_api import router as character_profile_router
 from api.novel_character_progress_api import router as character_progress_router
 from api.novel_export_api import router as export_router
+from api.public_library_api import router as public_library_router
 from api.account_api import CurrentAccount, router as account_router
 from api.generation_jobs import router as jobs_router
 
 app = FastAPI(
     title="AI 小说工程 API",
-    description="账号登录、个人小说书架、小说设定助手、写作智能体、小说导出与 16 类小说数据的 CRUD 接口",
+    description="账号登录、个人小说书架、书籍发布与公共阅读、小说设定助手、写作智能体、小说导出与 16 类小说数据的 CRUD 接口",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs" if get_settings().ENABLE_API_DOCS else None,
@@ -91,6 +92,7 @@ def access(user: CurrentAccount):
 app.include_router(assistant_router, prefix="/api/v1", tags=["小说设定助手"])
 app.include_router(account_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")
+app.include_router(public_library_router, prefix=CRUD_PREFIX)
 app.include_router(project_trash_router, prefix=CRUD_PREFIX)
 app.include_router(crud_router, prefix=CRUD_PREFIX)
 app.include_router(writing_router, prefix=CRUD_PREFIX)

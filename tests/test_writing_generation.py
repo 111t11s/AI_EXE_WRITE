@@ -7,6 +7,7 @@ from openai import APIStatusError, OpenAI
 from pydantic import ValidationError
 
 from agents import writing_agents as agent
+from api.writing_schemas import OutlineRequest
 from core.config import Settings
 
 
@@ -56,6 +57,41 @@ def test_context_mode_does_not_retry_rejected_credentials(monkeypatch):
     with pytest.raises(APIStatusError) as error:
         agent.generate(agent.REVIEW, {})
     assert error.value.status_code == 401 and len(requests) == 1
+
+
+@pytest.mark.parametrize("theme, label", [
+    ("development", "发育（成长推进）"), ("comeback", "逆袭"),
+    ("ending", "结尾收束"), ("survival", "逃杀（生存竞逐）"),
+])
+def test_outline_prompt_contains_selected_theme(monkeypatch, theme, label):
+    output = {"summary": "主线", "central_conflict": "冲突", "themes": "主题", "volumes": [{
+        "title": "第一卷", "summary": "摘要", "protagonist_goal": "目标", "main_conflict": "冲突",
+        "climax": "高潮", "ending_hook": "后果", "beats": [{"title": "行动", "summary": "因果"}]}]}
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        body = json.dumps(output, ensure_ascii=False)
+        frames = [{"choices": [{"delta": {"content": body}, "finish_reason": "stop"}]}]
+        wire = "".join("data: " + json.dumps(frame) + "\n\n" for frame in frames) + "data: [DONE]\n\n"
+        return httpx.Response(200, content=wire.encode(), headers={"content-type": "text/event-stream"})
+
+    settings = Settings(_env_file=None, API_KEY="test-key", PROXY_URL="https://model.test/v1")
+    monkeypatch.setattr(agent, "get_settings", lambda: settings)
+    monkeypatch.setattr(agent, "OpenAI", lambda **kwargs: OpenAI(
+        **kwargs, http_client=httpx.Client(transport=httpx.MockTransport(respond))))
+    agent.generate(agent.OUTLINE, {"project": {"genre": "玄幻"},
+                                   "request": {"volume_count": 1, "outline_theme": theme}})
+    assert f"本次大纲主题：{label}" in requests[0]["messages"][-1]["content"]
+
+
+def test_outline_request_defaults_theme_and_validates_custom_description():
+    assert OutlineRequest().outline_theme == "development"
+    assert OutlineRequest(instruction="说明一个融合主题", outline_theme="custom").outline_theme == "custom"
+    with pytest.raises(ValidationError, match="自定义主题"):
+        OutlineRequest(outline_theme="custom")
+    with pytest.raises(ValidationError):
+        OutlineRequest(outline_theme="unknown")
 
 
 BODY = "夜里第三次换过灵石时，沈砚舟终于安静下来。\n\n" + "她收起长剑，守着窗边最后一盏灵灯。" * 12
