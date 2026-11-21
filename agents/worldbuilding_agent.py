@@ -17,6 +17,8 @@ from starlette.concurrency import run_in_threadpool
 from agents.llm_streaming import collect_chat_text, emit_generation_event, has_generation_listener
 from agents.mcp.worldbuilding import call_world_tool, crewai_world_tools, worldbuilding_session
 from agents.outline_skills import OutlineSkillError, outline_skill_prompt
+from agents.prose_skills import ProseSkillError
+from agents.webnovel_skills import webnovel_skill_prompt
 from api.writing_schemas import OUTLINE_THEME_LABELS
 from core.config import get_settings
 from core.logging import get_logger
@@ -268,7 +270,8 @@ class WorldbuildingAssistant:
         }
         try:
             skill_prompt = outline_skill_prompt(values.get("genre"))
-        except OutlineSkillError as exc:
+            skill_prompt += webnovel_skill_prompt("blueprint")
+        except (OutlineSkillError, ProseSkillError) as exc:
             raise WorldbuildingGenerationError(str(exc), status=503) from None
         prompt = (
             "根据已确认设定生成完整 NovelBlueprint JSON。严格按提供的 JSON Schema 输出，只输出 JSON，不要 Markdown。"

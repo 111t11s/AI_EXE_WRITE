@@ -378,7 +378,12 @@ async function openProgress(id) {
   }
 }
 
-$('generation-tasks').onclick = () => openTasks('all');
+$('generation-tasks').onclick = () => {
+  if (state.taskMenuOpen) {
+    state.taskMenuOpen = false;
+    renderTaskMenu();
+  } else openTasks('all');
+};
 $('back-to-tasks').onclick = () => openTasks();
 $('reconnect-progress').onclick = () => { if (progressId) void openProgress(progressId); };
 
