@@ -72,6 +72,63 @@ def test_release_contains_loader_and_the_entire_skill():
     included = set(release_files(["agents"]))
     assert Path(skills.__file__) in included
     assert {path for path in skills.SKILL_ROOT.rglob("*") if path.is_file()} <= included
+    serial_root = skills.SKILL_ROOT.parent / "serial-writing-workflow"
+    assert {path for path in serial_root.rglob("*") if path.is_file()} <= included
+
+
+def test_full_course_review_accounts_for_every_document_and_its_destinations():
+    root = skills.SKILL_ROOT
+    entry = json.loads((root / "distillation.json").read_text(encoding="utf-8"))
+    assert "full-course-distillation.json" in entry["additional_reviews"]
+    review = json.loads((root / "full-course-distillation.json").read_text(encoding="utf-8"))
+    materials = review["materials"]
+    assert review["source_dependency"] is False
+    assert review["reviewed_materials"] == len(materials) == 56
+    assert len({item["id"] for item in materials}) == 56
+    assert len({(item["category"], item["title"]) for item in materials}) == 56
+    assert review["categories"] == len({item["category"] for item in materials}) == 19
+    for item in materials:
+        assert item["retained"] and item["excluded"]
+        for name, files in item["outputs"].items():
+            assert name in {"webnovel-basics", "serial-writing-workflow"}
+            destination = root.parent / name
+            for filename in files:
+                path = (destination / filename).resolve()
+                assert path.is_relative_to(destination.resolve()) and path.is_file()
+
+
+def test_serial_workflow_is_portable_and_absent_from_creative_prompts(tmp_path, monkeypatch):
+    from agents.prose_skills import _skill_text
+
+    serial = skills.SKILL_ROOT.parent / "serial-writing-workflow"
+    body = (serial / "SKILL.md").read_text(encoding="utf-8").split("\n---\n", 1)[1].strip()
+    for mode in skills.MODE_FILES:
+        assert body not in skills.webnovel_skill_prompt(mode)
+    root = tmp_path / "serial-writing-workflow"
+    shutil.copytree(serial, root)
+    read_text = Path.read_text
+
+    def isolated_read(path, *args, **kwargs):
+        assert path.resolve().is_relative_to(root.resolve()), f"External dependency: {path}"
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", isolated_read)
+    prompt = _skill_text(root, "serial-writing-workflow", ("SKILL.md",), "连载创作安排")
+    assert body in prompt
+    assert not any(value in prompt for value in ("meterials", "http://", "https://"))
+
+
+@pytest.mark.parametrize("reference,available,unavailable", [
+    (skills.DEVELOPMENT, ("characters", "draft", "rewrite"), ("blueprint", "outline", "plan")),
+    (skills.CONFLICT, ("characters",), ("blueprint", "outline", "plan", "draft", "rewrite")),
+])
+def test_new_references_are_required_only_for_related_tasks(independent_skill, reference, available, unavailable):
+    (independent_skill / reference).unlink()
+    for mode in available:
+        assert skills.webnovel_skill_prompt(mode)
+    for mode in unavailable:
+        with pytest.raises(ProseSkillError, match="网文基础创作"):
+            skills.webnovel_skill_prompt(mode)
 
 
 @pytest.mark.parametrize("rewrite", [False, True])

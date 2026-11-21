@@ -12,13 +12,15 @@ SKILL_ROOT = Path(__file__).resolve().parent / "skills" / "webnovel-basics"
 CHARACTERS = "references/characters.md"
 PLOT = "references/plot-and-payoff.md"
 LANGUAGE = "references/viewpoint-and-language.md"
+CONFLICT = "references/conflict-and-foreshadowing.md"
+DEVELOPMENT = "references/long-form-planning.md"
 MODE_FILES = {
-    "blueprint": ("references/title-and-introduction.md", CHARACTERS, PLOT),
-    "outline": (CHARACTERS, PLOT),
+    "blueprint": ("references/title-and-introduction.md", CHARACTERS, PLOT, CONFLICT, DEVELOPMENT),
+    "outline": (CHARACTERS, PLOT, CONFLICT, DEVELOPMENT),
     "characters": (CHARACTERS,),
-    "plan": (CHARACTERS, PLOT),
-    "draft": (CHARACTERS, LANGUAGE, PLOT),
-    "rewrite": (CHARACTERS, LANGUAGE, PLOT, "references/feedback-and-revision.md"),
+    "plan": (CHARACTERS, PLOT, CONFLICT, DEVELOPMENT),
+    "draft": (CHARACTERS, LANGUAGE, PLOT, CONFLICT),
+    "rewrite": (CHARACTERS, LANGUAGE, PLOT, CONFLICT, "references/feedback-and-revision.md"),
 }
 MODE_LABELS = {"blueprint": "小说蓝图", "outline": "大纲设计", "characters": "人物设计",
                "plan": "章节规划", "draft": "正文初稿", "rewrite": "正文重写"}

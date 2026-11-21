@@ -12,22 +12,25 @@
     "references/characters.md",
     "references/viewpoint-and-language.md",
     "references/plot-and-payoff.md",
-    "references/feedback-and-revision.md"
+    "references/feedback-and-revision.md",
+    "references/conflict-and-foreshadowing.md",
+    "references/long-form-planning.md"
   ],
   "automatic_modes": {
-    "blueprint": ["SKILL.md", "references/title-and-introduction.md", "references/characters.md", "references/plot-and-payoff.md"],
-    "outline": ["SKILL.md", "references/characters.md", "references/plot-and-payoff.md"],
+    "blueprint": ["SKILL.md", "references/title-and-introduction.md", "references/characters.md", "references/plot-and-payoff.md", "references/conflict-and-foreshadowing.md", "references/long-form-planning.md"],
+    "outline": ["SKILL.md", "references/characters.md", "references/plot-and-payoff.md", "references/conflict-and-foreshadowing.md", "references/long-form-planning.md"],
     "characters": ["SKILL.md", "references/characters.md"],
-    "plan": ["SKILL.md", "references/characters.md", "references/plot-and-payoff.md"],
-    "draft": ["SKILL.md", "references/characters.md", "references/viewpoint-and-language.md", "references/plot-and-payoff.md"],
-    "rewrite": ["SKILL.md", "references/characters.md", "references/viewpoint-and-language.md", "references/plot-and-payoff.md", "references/feedback-and-revision.md"]
+    "plan": ["SKILL.md", "references/characters.md", "references/plot-and-payoff.md", "references/conflict-and-foreshadowing.md", "references/long-form-planning.md"],
+    "draft": ["SKILL.md", "references/characters.md", "references/viewpoint-and-language.md", "references/plot-and-payoff.md", "references/conflict-and-foreshadowing.md"],
+    "rewrite": ["SKILL.md", "references/characters.md", "references/viewpoint-and-language.md", "references/plot-and-payoff.md", "references/conflict-and-foreshadowing.md", "references/feedback-and-revision.md"]
   },
   "excluded": ["完整作品节选与具体桥段照搬", "固定字数、人数、章数与对话比例", "禁止第一人称、慢热、群像、悲剧或道德取舍", "主角不得有弱点或失败", "将同伴和女性角色当作道具、奖励或财产", "为凸显主角而强制队友背叛、团灭或反派降智", "性别与读者群体刻板推断", "无依据的生理心理学结论", "借鉴近似书名误导读者和标题欺骗", "依靠注水、无关转场或故意拖延强迫追读", "历史市场数据、平台推荐与签约收益保证", "固定上架时点、爆更和求票促销", "历史法规转述作为现行法律或自动审核标准"],
   "overlap_handling": [
     "开篇六种入口与三章方法已有专项技能，本技能仅保留关注对象、信息负担及前后联系，不重复建立第三套黄金三章规则。",
     "对白标点、环境细节和节奏已在正文技法中覆盖，本技能补充人称与知情范围的区别、语境限制与补充、需求与奖励用途的对应；独立使用仍包含足够的方法。",
     "爽点教程中创作手法与首部分重复，合并为一次需求、阻力、行动和兑现的方法，不照录五种爽点或固定情节模板。",
-    "对白文档含标称 103 个经典桥段及重复编号，按实际内容审阅，只提炼已有条件、结果差异、协作与行动反馈等机制，不把清单作为剧情库。"
+    "对白文档含标称 103 个经典桥段及重复编号，按实际内容审阅，只提炼已有条件、结果差异、协作与行动反馈等机制，不把清单作为剧情库。",
+    "第二轮复查未新增资料；补足人物移情的行动入口与边界，以及读者和人物知情差异、发现与突转的分别，不重复建立人物模板或悬念清单。"
   ],
   "materials": [
     {"number": 1, "topic": "书名", "retained": "从真实卖点提炼名称，书名、简介、章节名与正文互相呼应；类型信号、辨识度、口头可读性与公平的信息留白。", "excluded": "三至六字和全汉字硬限制、历史榜单与关键词照搬、近似名蹭热度、擦边标题、作者神秘化与无关转场注水。", "files": ["references/title-and-introduction.md", "references/plot-and-payoff.md"]},
@@ -36,13 +39,14 @@
     {"number": 4, "topic": "人称", "retained": "区分叙述人称、观察者身份和知情范围，有限视角不越权，事后得知交代信息来源，多视点切换有边界。", "excluded": "第一人称不可长篇或商业成功的断言、十五万三十万五十万字限制、贬低第三人称有限视角。", "files": ["references/viewpoint-and-language.md"]},
     {"number": 5, "topic": "角色", "retained": "言语、动作和处事方式建立辨识度，特征与事件相连，性格变化有触发和过渡，侧面评价不代替实际行为。", "excluded": "固定角色数与主角登场章数、广告式反复强调、创伤暴力模板、只允许由坏变好和特定作品桥段。", "files": ["references/characters.md"]},
     {"number": 6, "topic": "对白及桥段合集", "retained": "多人对白辨认发言者，提示语与独立动作按句法组织，形式变化有用途；桥段只归纳需求、阻碍、已有条件、合作和结果变化。", "excluded": "标称 103 个套路照搬、重复编号、强制对话占比、动作后必加冒号、为注水添加细节、物化关系与无条件报复。", "files": ["references/viewpoint-and-language.md", "references/plot-and-payoff.md", "references/characters.md"]},
-    {"number": 7, "topic": "人物", "retained": "可理解的欲望、表层目标与内在需要、背景和当下生活的联系、性格表现与情节互相塑造；配角与对手有独立立场和能力。", "excluded": "固定性别职能、强制反差人格、每人三类生活齐备、必须有爱情线、纯善纯恶禁令和作品节选。", "files": ["references/characters.md"]},
+    {"number": 7, "topic": "人物", "retained": "可理解的欲望、表层目标与内在需要、背景和当下生活的联系、性格表现与情节互相塑造；通过处境、牵挂和行动建立移情，理解不等于赞同或相同身份；配角与对手有独立立场和能力。", "excluded": "固定性别职能、强制反差人格、每人三类生活齐备、必须有爱情线、纯善纯恶禁令和作品节选。", "files": ["references/characters.md"]},
     {"number": 8, "topic": "文笔", "retained": "语言准确、指代清楚、标点和段落可读，再按风格选择细节、感官、情绪和物件意义；细腻不等于罗嗦。", "excluded": "固定句长段长、逗号数量和错字率、密集恐惧等无依据解释、读者性别偏好断言、为字数堆景与作品引用。", "files": ["references/viewpoint-and-language.md", "references/feedback-and-revision.md"]},
     {"number": 9, "topic": "语境", "retained": "狭义场合关系与广义时代经历共同限制词句理解；利用上下文补充潜台词，适当省略并及时恢复指代和对象。", "excluded": "整段教材引文、脱离场景的术语讲解和把歧义一律解释为深意。", "files": ["references/viewpoint-and-language.md"]},
-    {"number": 11, "topic": "情节与版面可读性", "retained": "整体与局部悬念、预知危险与信息发现、延宕的有效增量、突转的因果准备、非线性叙述的返回和合理巧合；按语义分段。", "excluded": "不准确的单复句定义、二十字三百字界限、所有情节等于悬念、无关延宕、作品原文与剧作范例。", "files": ["references/plot-and-payoff.md", "references/viewpoint-and-language.md"]},
+    {"number": 11, "topic": "情节与版面可读性", "retained": "整体与局部悬念、读者和人物知情差异、发现改变认识与突转改变局面的区别；以判断、选择、后果连接揭示与变化，保留延宕的有效增量、突转的因果准备、非线性叙述的返回和合理巧合；按语义分段。", "excluded": "不准确的单复句定义、二十字三百字界限、所有情节等于悬念、无关延宕、作品原文与剧作范例。", "files": ["references/plot-and-payoff.md", "references/viewpoint-and-language.md"]},
     {"number": 12, "topic": "爽点与阅读体验", "retained": "需求决定奖励价值，压力解除与实际用途、开局及阶段承诺、高潮选择与长期成长错开；多线条件交织，任务变式，等级或技能体系的边界与可理解性。", "excluded": "忽视因果迎合读者、所有故事强制金手指与升级、主角不许犯错、队友必须工具化与团灭、人物物化、资源永远独占、固定战斗配置与性别人数、禁止悲剧与道德选择、机械倍数理论、重复创作手法。", "files": ["references/plot-and-payoff.md", "references/characters.md", "references/feedback-and-revision.md"]},
     {"number": 15, "topic": "书评", "retained": "核实意见依据，区分具体问题和审美偏好，结合用户采纳范围修订并检查上下游影响。", "excluded": "按权威身份盲从、固定只改开头三万字、无依据推测评论与成绩、情绪化反驳和擅自删帖。", "files": ["references/feedback-and-revision.md"]},
     {"number": 16, "topic": "历史审核规定", "retained": "仅记录已审阅及不纳入自动创作或审核的边界，不转述为当前法律结论。", "excluded": "历史法规和平台尺度的直接复用、失效与否未经核实的法律结论、身份歧视及把法条转为小说生成指令。", "files": []},
     {"number": 17, "topic": "上架", "retained": "正文不夹杂广告与作者感言，开局有实际内容，阶段兑现后留下可持续的问题，强弱节奏交替。", "excluded": "收费诱导、固定上架字数、强制掐断高潮、爆更配额、促销求票、收益与销量承诺。", "files": ["SKILL.md", "references/plot-and-payoff.md", "references/feedback-and-revision.md"]}
-  ]
+  ],
+  "additional_reviews": ["full-course-distillation.json"]
 }

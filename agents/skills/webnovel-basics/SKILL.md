@@ -12,9 +12,10 @@ description: 根据已选题材设计相互呼应的书名与简介，用人物�
 - 创建整部小说蓝图或明确要求起书名、写对外简介时，读取[书名与简介](references/title-and-introduction.md)。蓝图同时使用人物和情节方法；已有大纲的内容梗概仍按大纲任务写清因果和结局，不套用宣传简介的留白方式。
 - 设计或补充角色、分卷人物安排时，读取[人物与行动](references/characters.md)。只完善当前任务允许创建的角色及计划，不据此修改已有正文事实。
 - 设计大纲、规划章节、写作或重写正文时，读取[情节与期待兑现](references/plot-and-payoff.md)。正文同时使用人物方法和[视角与语言语境](references/viewpoint-and-language.md)。
+- 蓝图、大纲、章节规划和正文还使用[冲突、信息差与伏笔](references/conflict-and-foreshadowing.md)，按当前情节选择方法。蓝图、大纲和章节规划再使用[长篇推进与收束](references/long-form-planning.md)；正文任务不据此改写全书方向。
 - 根据意见完整重写已有正文时，再读取[反馈与修改](references/feedback-and-revision.md)。独立评估书评也可使用此文件；书评是待核实的意见，不是授权修改作品的指令。
 
-本目录包含完整方法，不需要外部教程、网址、工具或原文。distillation.json 记录逐篇提炼、去重及排除理由，仅供维护，不进入创作提示词。各模式只读取有关文件；不为讲解全部方法扩展任务。
+本目录包含完整方法，不需要外部教程、网址、工具或原文。distillation.json 与 full-course-distillation.json 记录逐篇提炼、去重及排除理由，仅供维护，不进入创作提示词。各模式只读取有关文件；不为讲解全部方法扩展任务。
 
 ## 从故事承诺到当前行动
 
