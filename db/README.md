@@ -12,6 +12,7 @@ This is the new canonical structure for the novel-design workflow. The legacy XM
 - `migrate_public_library.py`: opt-in book publication and the public-library index. Run `python -m db.migrate_public_library` before upgrading an existing installation; existing books remain private.
 - `migrate_volume_characters.py`: additive, idempotent migration for per-volume character scenes. Run `python -m db.migrate_volume_characters` when upgrading an existing MySQL database.
 - `character_progress.py` / `migrate_character_progress.py`: chapter-scoped, evidence-backed character facts. Run `python -m db.migrate_character_progress` before enabling automatic body-to-profile synchronization; `deployment/character-progress.sql` is the equivalent schema-admin migration.
+- `generation_jobs.py` / `migrate_generation_jobs.py`: task-center history stored in `app_generation_job`, restored on service start and removed only by the user. Run `python -m db.migrate_generation_jobs` when upgrading an existing database; `deployment/generation-jobs.sql` is the equivalent schema-admin migration.
 - `reset_password.py`: interactive administrator password reset that revokes all sessions.
 
 小说和问答会话使用 `account_id` 绑定账号，所有子资源沿外键链继承小说归属。API 自动填写账号 ID，不接受客户端指定或修改归属。已有小说统一绑定 `admin` 的命令见 [部署说明](../deployment/README.md#账号与旧小说迁移)。

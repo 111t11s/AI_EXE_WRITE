@@ -20,11 +20,14 @@ from api.character_progress import replace_progress
 from api.novel_tables import tables
 from api.novel_writing_api import all_context_rows, character_context, generate, load_context, read
 from api.ownership import require_resource
-from api.writing_schemas import ConsistencyReceipt, ConsistencyRequest, ConsistencySuggestion, WritingInput
+from api.writing_schemas import (ConsistencyReceipt, ConsistencyRepairRequest, ConsistencyRequest,
+                                 ConsistencySuggestion, WritingInput)
 from db.connection import legacy_json_columns
+from core.logging import get_logger
 
 
 router = APIRouter(prefix="/writing", tags=["小说一致性核对"])
+logger = get_logger("novel_consistency")
 MAX_CHAPTER_TEXT = 120000
 MAX_CONTEXT = 200000
 CHAPTER_FIELDS = ("id", "project_id", "volume_id", "chapter_number", "title", "summary", "content", "status")
@@ -133,29 +136,58 @@ def reference_label(kind, row, context):
     return row.get("name") or row.get("title") or f"大纲 v{context['outline']['version_no']}"
 
 
+def issue_problem(issue, chapters, references):
+    """返回该问题引文校验失败的原因；通过校验时返回 None。"""
+    for evidence in issue.evidence:
+        chapter = chapters.get(evidence.chapter_id)
+        if chapter is None:
+            return f"引用了未选择的章节 {evidence.chapter_id}"
+        if evidence.quote not in chapter["content"]:
+            return "章节引文无法逐字匹配"
+    basis = issue.basis
+    if basis.field not in BASIS_FIELDS[basis.kind]:
+        return f"不允许引用字段 {basis.field}"
+    row = references.get((basis.kind, basis.record_id))
+    value = row.get(basis.field) if row is not None else None
+    if not isinstance(value, str) or basis.quote not in value:
+        return "对照依据引文无法逐字匹配"
+    if basis.kind == "chapter" and (
+            issue.category != "continuity" or any(evidence.chapter_id == basis.record_id for evidence in issue.evidence)):
+        return "章节不能作为本章自身的对照依据"
+    return None
+
+
 def validate_report(report, context):
+    """逐条校验问题引文，丢弃无法核对的问题，避免一条坏引文作废整次核对。"""
     chapters = {row["id"]: row for row in context["selected_chapters"]}
     references = reference_records(context)
-    error = HTTPException(502, "核对结果包含无效的章节引用、对照依据或结论，请重试核对")
-    if (report.verdict == "consistent" and report.issues) or (report.verdict == "drifted" and not report.issues):
-        raise error
-    used = {}
-    for issue in report.issues:
-        for evidence in issue.evidence:
-            chapter = chapters.get(evidence.chapter_id)
-            if chapter is None or evidence.quote not in chapter["content"]:
-                raise error
+    used, valid, dropped = {}, [], 0
+    for index, issue in enumerate(report.issues):
+        problem = issue_problem(issue, chapters, references)
+        if problem:
+            dropped += 1
+            logger.warning("核对问题未通过引用校验：序号=%s，标题=%s，原因=%s",
+                           index + 1, issue.title, problem)
+            continue
+        valid.append(issue)
         basis = issue.basis
-        row = references.get((basis.kind, basis.record_id))
-        value = row.get(basis.field) if row is not None else None
-        if basis.field not in BASIS_FIELDS[basis.kind] or not isinstance(value, str) or basis.quote not in value:
-            raise error
-        if basis.kind == "chapter" and (
-                issue.category != "continuity" or any(evidence.chapter_id == basis.record_id for evidence in issue.evidence)):
-            raise error
-        label = reference_label(basis.kind, row, context)
-        used[(basis.kind, basis.record_id)] = dict(kind=basis.kind, record_id=basis.record_id, label=label)
-    return list(used.values())
+        row = references[(basis.kind, basis.record_id)]
+        used[(basis.kind, basis.record_id)] = dict(
+            kind=basis.kind, record_id=basis.record_id, label=reference_label(basis.kind, row, context))
+
+    verdict = report.verdict
+    limitations = list(report.limitations)
+    if verdict == "consistent" and valid:
+        verdict = "drifted"
+        limitations.append("模型结论与所列问题不一致，已按可核对的问题判定为发现偏移。")
+    if verdict == "drifted" and not valid:
+        verdict = "insufficient"
+        limitations.append("模型报告的问题依据无法在本次资料中逐字核对，未能确认偏移。")
+    if dropped:
+        limitations.append(f"另有 {dropped} 条问题因章节或档案引文无法逐字核对已忽略。")
+    cleaned = report.model_copy(update={
+        "verdict": verdict, "issues": valid, "limitations": list(dict.fromkeys(limitations))})
+    return cleaned, list(used.values())
 
 
 @router.post("/projects/{project_id}/consistency", response_model=ConsistencyReceipt, summary="核对所选章节的一致性")
@@ -170,7 +202,7 @@ async def check_consistency(project_id: RowId, payload: ConsistencyRequest, user
     checked_at = datetime.now(timezone.utc).isoformat()
     report = await generate(agents.CONSISTENCY, context, payload)
     emit_generation_event("status", message="核对完成，正在校验章节原文及对照依据…")
-    references = validate_report(report, context)
+    report, references = validate_report(report, context)
     values = report.model_dump()
     values["limitations"] = list(dict.fromkeys([*context["scope_notes"], *report.limitations]))
     return ConsistencyReceipt(**values, project_id=project_id, outline_id=payload.outline_id,
@@ -288,6 +320,61 @@ async def repair_issue(engine, project_id, report, approved, user, model=None):
         generated[row["id"]] = artifact.content
     emit_generation_event("status", message="修复完成，正在校验并保存对应章节…")
     return await run_in_threadpool(save_repairs, engine, project_id, report, generated, user.id)
+
+
+@router.post("/projects/{project_id}/consistency/{job_id}/repairs/tasks", status_code=202,
+             summary="批量采纳修复意见并后台修复对应章节")
+async def start_bulk_repair(project_id: RowId, job_id: str, payload: ConsistencyRepairRequest,
+                            user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    report, _ = report_issue(project_id, job_id, 0, user.id)
+    issues = report["issues"]
+    indexes = sorted(set(payload.issue_indexes))
+    if any(index < 0 or index >= len(issues) for index in indexes):
+        raise HTTPException(404, "修复意见不存在")
+    targets = set()
+    for index in indexes:
+        require_editable_issue(issues[index])
+        targets.update(entry["chapter_id"] for entry in issues[index]["evidence"])
+    rows = await run_in_threadpool(validate_repair_chapters, engine, project_id, report, user.id)
+    if any(len(row["content"]) > 30000 for row in rows if row["id"] in targets):
+        raise HTTPException(422, "对应章节超过单次修复上限 30000 字符，请精简后重新核对")
+    repair_report = deepcopy(report)
+    job_ref = {}
+
+    async def operation():
+        completed, results = {}, []
+        for index in indexes:
+            issue = report["issues"][index]
+            approved = {key: value for key, value in issue.items() if not key.startswith("repair_")}
+            try:
+                receipt, fingerprints = await repair_issue(engine, project_id, repair_report, approved, user,
+                                                           payload.model)
+            except Exception as exc:
+                issue["repair_status"] = "failed"
+                results.append({"issue_index": index, "status": "failed",
+                                "message": exc.detail if isinstance(exc, HTTPException) else "修复过程异常"})
+                continue
+            issue["repair_status"] = "completed"
+            issue["repair_job_id"] = job_ref["job"].id
+            # 后续问题以本次修复后的正文为新的核对快照。
+            repair_report["chapter_fingerprints"].update(fingerprints)
+            for row in receipt["chapters"]:
+                completed[row["chapter_id"]] = row
+            results.append({"issue_index": index, "status": "completed", "chapters": receipt["chapters"]})
+        return {"project_id": project_id, "completed_count": len(completed),
+                "chapters": list(completed.values()), "issues": results,
+                "failed_count": sum(1 for row in results if row["status"] == "failed")}
+
+    signature = hashlib.sha256(json.dumps(indexes).encode()).hexdigest()[:16]
+    job = generation_jobs.store.start(
+        account_id=user.id, key=f"consistency-repairs:{job_id}:{signature}", kind="consistency_repair",
+        title=f"一致性修复 · {len(indexes)} 个问题", project_id=project_id,
+        resource_id=issues[indexes[0]]["evidence"][0]["chapter_id"], operation=operation)
+    job_ref["job"] = job
+    for index in indexes:
+        issues[index].update(repair_job_id=job.id, repair_status="running")
+    return job.summary()
 
 
 @router.post("/projects/{project_id}/consistency/{job_id}/issues/{issue_index}/repair/tasks", status_code=202,

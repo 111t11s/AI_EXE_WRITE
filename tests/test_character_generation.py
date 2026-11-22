@@ -33,7 +33,7 @@ def volume_profile(context, actions="协助主角寻找渡口并渡河"):
                 actions=actions, outcome="成功引路并取得主角信任", progress_relation="推动渡河节点，为后续寻脉留下线索；未写部分仍为计划")
 
 
-def cast(role, context):
+def cast(role, context, profile=None):
     request = context["request"]
     if role == agents.CORE_CHARACTERS:
         people = [person(f"主角{i}") for i in range(request["protagonist_count"])]
@@ -99,7 +99,7 @@ def rows(novel):
 def test_two_stages_read_real_scoped_mcp_context_and_save(novel, monkeypatch):
     contexts = []
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         contexts.append(context)
         assert context["world"]["rules"] == "施法消耗灵气"
         assert context["power_system"][0]["limitations"] == "不可无中生水"
@@ -156,7 +156,7 @@ def test_invalid_cast_is_not_partially_saved(novel, monkeypatch, problem, status
     if problem == "existing":
         novel["create"]("characters", project_id=novel["project"], name="主角0", role="已有角色", summary="手写档案")
 
-    def invalid(role, context):
+    def invalid(role, context, profile=None):
         artifact = cast(role, context)
         if problem == "count":
             artifact.characters.pop()
@@ -193,7 +193,7 @@ def test_save_failure_rolls_back_whole_batch(novel, monkeypatch):
 
 @pytest.mark.parametrize("source", ["world", "volume"])
 def test_changed_source_rejects_stale_cast(novel, monkeypatch, source):
-    def edit_and_generate(role, context):
+    def edit_and_generate(role, context, profile=None):
         table = store.tables["novel_world" if source == "world" else "novel_outline_volume"]
         with novel["engine"].begin() as connection:
             connection.execute(table.update().where(table.c.id == novel[source]).values(summary="编辑后的新资料"))
@@ -215,7 +215,7 @@ def test_existing_characters_are_paginated_without_missing_names(novel, monkeypa
                              first_appearance_chapter=None, status="active", **values)
     seen = []
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         seen.extend(row["name"] for row in context["characters"])
         return cast(role, context)
 
@@ -230,7 +230,7 @@ def test_background_character_task_streams_before_saving(novel, monkeypatch, end
     entered, release = threading.Event(), threading.Event()
     original = cast
 
-    def waiting(role, context):
+    def waiting(role, context, profile=None):
         emit_generation_event("thinking", text="核对人物动机")
         emit_generation_event("delta", text='{"characters":[')
         entered.set()
@@ -307,7 +307,7 @@ def test_reuse_keeps_profile_and_previous_scenes_and_reaches_draft(novel, monkey
     assert choices.json()["items"][0]["previous_scenes"][0]["scenes"] == original_scenes[0]["scenes"]
     scenes = "舟客再次出场，带主角潜入渡舟盟，因立场变化引发争执。"
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         if role == agents.DRAFT:
             assignment = next(row for row in context["volume_characters"] if row["character_id"] == character_id)
             assert scenes in assignment["scenes"] and "阶段结果（计划）" in assignment["scenes"]
@@ -419,7 +419,7 @@ def test_reuse_list_is_account_scoped_and_supports_legacy_volume_summaries(novel
     response = client.get(path, headers=novel["headers"]["writer"])
     assert response.status_code == 200, response.text
     assert [row["id"] for row in response.json()["items"]] == [legacy]
-    monkeypatch.setattr(agents, "generate", lambda role, context: CharacterDraftList(characters=[],
+    monkeypatch.setattr(agents, "generate", lambda role, context, profile=None: CharacterDraftList(characters=[],
         reused_characters=[{"character_id": legacy, "scenes": "旧渡客在远行卷再次引路",
             "volume_profiles": [volume_profile(context, "旧渡客在远行卷再次引路")]}]))
     saved = client.post(novel["supporting"], headers=novel["headers"]["writer"],
@@ -449,7 +449,7 @@ def test_draft_without_characters_is_blocked_until_user_generates_them(novel, mo
     client, headers = novel["client"], novel["headers"]["writer"]
     calls = []
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         calls.append(role)
         if role == agents.CORE_CHARACTERS:
             return cast(role, context)

@@ -14,6 +14,7 @@ from core.config import get_settings
 from core.middleware import RequestLoggingMiddleware
 from core.static import FrontendFiles
 from db.connection import get_engine
+from api import generation_jobs
 from api.project_trash_api import purge_expired_projects
 
 logger = get_logger("app")
@@ -29,6 +30,8 @@ async def lifespan(app: FastAPI):
         cleanup.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup
+        with suppress(Exception):
+            await generation_jobs.store.flush()
         logger.info("服务关闭")
 
 
@@ -119,5 +122,8 @@ if __name__ == "__main__":
         browser_host = f"[{browser_host}]"
     browser_origin = f"http://{browser_host}:{settings.PORT}"
     os.environ.setdefault("AITXT_API_BASE_URL", f"{browser_origin}{CRUD_PREFIX}")
+    # 启动前恢复任务中心历史；数据库不可用时退回仅内存模式。
+    with suppress(Exception):
+        generation_jobs.store.bind(get_engine)
     print(f"服务启动后，请在浏览器打开工作台：{browser_origin}/", flush=True)
     uvicorn.run(app, host=settings.HOST, port=settings.PORT, log_config=uvicorn_log_config())

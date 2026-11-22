@@ -4,24 +4,39 @@ import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import uuid4
 from threading import get_ident
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from agents.llm_streaming import GENERATION_EVENTS
 from api.account_api import CurrentAccount
 from api.generation_stream import HEARTBEAT_SECONDS, encode_event
 from core.logging import get_logger
+from db import generation_jobs as job_db
 
 
 logger = get_logger("generation_jobs")
 router = APIRouter(prefix="/generation-jobs", tags=["后台生成任务"])
 TERMINAL = {"completed", "failed"}
 MAX_TEXT = 250_000
+# 与前端任务分类保持一致：把细分任务类型归到页面上的分类。
+CATEGORY_KINDS = {"worldbuilding", "outline", "characters", "draft", "plan", "review", "consistency", "trends"}
+KIND_CATEGORY = {"character_progress": "characters", "batch_draft": "draft", "consistency_repair": "consistency"}
+STATUSES = {"all", "running", "completed", "failed"}
+
+
+def task_category(kind: str) -> str:
+    category = KIND_CATEGORY.get(kind, kind)
+    return category if category in CATEGORY_KINDS else "other"
+
+
+def project_key(project_id) -> str:
+    return "unassigned" if project_id is None else str(project_id)
 
 
 @dataclass
@@ -77,12 +92,159 @@ class JobStore:
         # project deletion can stop its in-flight generation as well as remove
         # the retained progress record.
         self._tasks: dict[str, asyncio.Task] = {}
+        # 任务写入数据库时不在事件循环里做阻塞 IO：统一交给这个队列线程处理。
+        self.engine_factory = None
+        self._queue: asyncio.Queue | None = None
+        self._worker: asyncio.Task | None = None
 
-    def prune(self):
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-        for job_id, job in list(self.jobs.items()):
-            if job.finished_at and job.finished_at < cutoff and not job.listeners:
-                del self.jobs[job_id]
+    def bind(self, engine_factory) -> bool:
+        """启动时恢复历史任务，并把上次未完成的任务标记为中断。"""
+        self.engine_factory = engine_factory
+        engine = self._engine()
+        if engine is None:
+            logger.warning("任务持久化不可用：数据库未配置，任务只在本次运行内保留")
+            return False
+        try:
+            interrupted = job_db.fail_running(engine)
+            rows = job_db.load_rows(engine)
+        except Exception as exc:
+            logger.warning("任务持久化不可用：读取失败，异常类型=%s", type(exc).__name__)
+            return False
+        for row in rows:
+            job = self._restore(row)
+            self.jobs[job.id] = job
+        if interrupted:
+            logger.info("已把 %s 个重启前未完成的任务标记为中断", interrupted)
+        logger.info("已恢复 %s 个历史任务", len(rows))
+        return True
+
+    @staticmethod
+    def _restore(row: dict) -> GenerationJob:
+        resource_id = row["resource_id"]
+        if isinstance(resource_id, str) and resource_id.isdigit():
+            # 与运行中的任务保持一致：章节/分卷等数字 ID 用整数，会话 ID 保持字符串。
+            resource_id = int(resource_id)
+        return GenerationJob(
+            id=row["id"], account_id=row["account_id"], key=row["key"], kind=row["kind"],
+            title=row["title"], project_id=row["project_id"], resource_id=resource_id,
+            status=row["status"], message=row["message"], created_at=row["created_at"],
+            finished_at=row["finished_at"], text=row["text"], thinking=row["thinking"],
+            truncated=row["truncated"], result=row["result"], error=row["error"], sequence=row["sequence"],
+        )
+
+    def _engine(self):
+        if self.engine_factory is None:
+            return None
+        try:
+            return self.engine_factory()
+        except Exception:
+            return None
+
+    def _persist(self, action) -> None:
+        engine = self._engine()
+        if engine is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # 线程池里的同步路由（例如移入回收站）没有事件循环，直接写入即可。
+            try:
+                action(engine)
+            except Exception as exc:
+                logger.warning("任务持久化写入失败：异常类型=%s", type(exc).__name__)
+            return
+        if self._queue is None:
+            self._queue = asyncio.Queue()
+            self._worker = loop.create_task(self._drain())
+        self._queue.put_nowait((engine, action))
+
+    async def _drain(self) -> None:
+        while True:
+            engine, action = await self._queue.get()
+            try:
+                await asyncio.to_thread(action, engine)
+            except Exception as exc:
+                logger.warning("任务持久化写入失败：异常类型=%s", type(exc).__name__)
+            finally:
+                self._queue.task_done()
+
+    async def flush(self, timeout: float = 5) -> None:
+        if self._queue is None:
+            return
+        try:
+            await asyncio.wait_for(self._queue.join(), timeout)
+        except asyncio.TimeoutError:
+            logger.warning("任务持久化仍有未完成的写入")
+
+    def delete(self, job_ids, account_id) -> list[str]:
+        """删除已完成/未完成的任务记录；生成中的任务需先完成。"""
+        removed = []
+        for job_id in job_ids:
+            job = self.jobs.get(job_id)
+            if job is None or job.account_id != account_id or job.status not in TERMINAL:
+                continue
+            del self.jobs[job_id]
+            self._tasks.pop(job_id, None)
+            removed.append(job_id)
+        if removed:
+            self._persist(lambda engine: job_db.delete_rows(engine, removed))
+        return removed
+
+    def page(self, account_id, *, category="all", project_id="all", status="all", limit=50, offset=0):
+        """按分类/项目/状态筛选并分页，返回当前页与各层筛选计数。"""
+        jobs = [job for job in self.jobs.values() if job.account_id == account_id]
+
+        def in_category(job):
+            return category == "all" or task_category(job.kind) == category
+
+        def in_project(job, wanted=None):
+            wanted = project_id if wanted is None else wanted
+            return wanted == "all" or project_key(job.project_id) == str(wanted)
+
+        category_counts = {"all": len(jobs)}
+        category_running = {"all": 0}
+        for job in jobs:
+            key = task_category(job.kind)
+            category_counts[key] = category_counts.get(key, 0) + 1
+            if job.status == "running":
+                category_running["all"] += 1
+                category_running[key] = category_running.get(key, 0) + 1
+
+        project_counts = {"all": 0}
+        for job in jobs:
+            if not in_category(job):
+                continue
+            project_counts["all"] += 1
+            key = project_key(job.project_id)
+            project_counts[key] = project_counts.get(key, 0) + 1
+
+        status_counts = {"all": 0, "running": 0, "completed": 0, "failed": 0}
+        for job in jobs:
+            if not in_category(job) or not in_project(job):
+                continue
+            status_counts["all"] += 1
+            status_counts[job.status] = status_counts.get(job.status, 0) + 1
+
+        filtered = [job for job in jobs if in_category(job) and in_project(job)
+                    and (status == "all" or job.status == status)]
+        # 与页面一致：生成中的任务优先，其余按发起时间倒序。
+        filtered.sort(key=lambda job: (0 if job.status == "running" else 1, -job.created_at.timestamp(), job.id))
+        total = len(filtered)
+        window = filtered[offset:offset + limit]
+        projects = []
+        for key, count in project_counts.items():
+            if key == "all":
+                continue
+            projects.append({"project_id": int(key) if key.isdigit() else None, "count": count})
+        return {
+            "items": [job.summary() for job in window],
+            "limit": limit, "offset": offset, "total": total, "has_more": offset + limit < total,
+            "running": category_running["all"],
+            "completed": sum(1 for job in jobs if job.status == "completed"),
+            "counts": {"category": category_counts, "category_running": category_running,
+                       "project": project_counts, "status": status_counts},
+            "projects": projects,
+        }
 
     def owned(self, job_id, account_id):
         job = self.jobs.get(job_id)
@@ -93,40 +255,36 @@ class JobStore:
     def remove_project(self, project_id):
         """Drop all jobs belonging to a project and cancel active work.
 
-        Generation jobs are process-local, so there is no database cascade to
-        remove them when a novel is moved to the recycle bin.  Cancelling the
-        associated asyncio tasks also prevents a late completion from writing
-        newly generated records back into a deleted project.
+        The jobs are also removed from the persisted history when a novel is
+        moved to the recycle bin; cancelling the asyncio task prevents a late
+        completion from writing new records into a deleted project.
         """
-        removed = 0
+        removed_ids = []
         for job_id, job in list(self.jobs.items()):
             if job.project_id != project_id:
                 continue
-            removed += 1
             task = self._tasks.get(job_id)
             if task is not None and not task.done():
                 task.cancel()
             del self.jobs[job_id]
-        return removed
+            removed_ids.append(job_id)
+        if removed_ids:
+            self._persist(lambda engine: job_db.delete_rows(engine, removed_ids))
+        return len(removed_ids)
 
     def start(self, *, account_id: int, key: str, kind: str, title: str,
               operation: Callable[[], Awaitable], project_id=None, resource_id=None):
-        self.prune()
         active = [job for job in self.jobs.values() if job.account_id == account_id and job.status not in TERMINAL]
         for job in active:
             if job.key == key:
                 return job
         if len(active) >= 3:
             raise HTTPException(429, "已有3个任务正在生成，请等待其中一个完成后再发起")
-        # Bound retained transcripts as well as active work.
-        completed = sorted((job for job in self.jobs.values()
-                            if job.account_id == account_id and job.status in TERMINAL and not job.listeners),
-                           key=lambda job: job.created_at)
-        for old in completed[:-49]:
-            del self.jobs[old.id]
         job = GenerationJob(id=uuid4().hex, account_id=account_id, key=key, kind=kind,
                             title=title, project_id=project_id, resource_id=resource_id)
         self.jobs[job.id] = job
+        initial = job_db.snapshot(job)
+        self._persist(lambda engine: job_db.save_values(engine, initial))
         loop = asyncio.get_running_loop()
         owner_thread = get_ident()
 
@@ -161,6 +319,8 @@ class JobStore:
                 logger.warning("后台生成未完成：任务=%s，异常类型=%s", job.id, type(exc).__name__)
             finally:
                 job.finished_at = datetime.now(timezone.utc)
+                final = job_db.snapshot(job)
+                self._persist(lambda engine: job_db.save_values(engine, final))
                 GENERATION_EVENTS.reset(token)
 
         # create_task copies the request's account/MCP context before it closes.
@@ -178,11 +338,38 @@ store = JobStore()
 
 
 @router.get("")
-async def list_jobs(user: CurrentAccount):
-    store.prune()
-    jobs = sorted((job for job in store.jobs.values() if job.account_id == user.id),
-                  key=lambda job: job.created_at, reverse=True)
-    return {"items": [job.summary() for job in jobs]}
+async def list_jobs(user: CurrentAccount, category: str = "all", project_id: str = "all", status: str = "all",
+                    limit: int = Query(default=50, ge=1, le=100),
+                    offset: int = Query(default=0, ge=0, le=2**31 - 1)):
+    if category != "all" and category != "other" and category not in CATEGORY_KINDS:
+        raise HTTPException(422, "未知的任务分类")
+    if status not in STATUSES:
+        raise HTTPException(422, "未知的任务状态")
+    if project_id not in {"all", "unassigned"} and not project_id.isdigit():
+        raise HTTPException(422, "项目筛选参数无效")
+    return store.page(user.id, category=category, project_id=project_id, status=status,
+                      limit=limit, offset=offset)
+
+
+class DeleteJobsRequest(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=100)
+
+
+@router.delete("/{job_id}", status_code=204)
+def delete_job(job_id: str, user: CurrentAccount):
+    job = store.jobs.get(job_id)
+    if job is None or job.account_id != user.id:
+        raise HTTPException(404, "任务不存在或已删除")
+    if job.status not in TERMINAL:
+        raise HTTPException(409, "任务仍在生成中，完成后才能删除")
+    store.delete([job_id], user.id)
+    return Response(status_code=204)
+
+
+@router.post("/delete")
+def delete_jobs(payload: DeleteJobsRequest, user: CurrentAccount) -> dict:
+    removed = store.delete(payload.ids, user.id)
+    return {"deleted": len(removed), "job_ids": removed}
 
 
 @router.get("/{job_id}")

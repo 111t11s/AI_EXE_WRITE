@@ -127,6 +127,15 @@ class ConsistencySuggestion(BaseModel):
     model: str | None = Field(default=None, max_length=40)
 
 
+class ConsistencyRepairRequest(BaseModel):
+    """批量采纳：按问题序号依次修复，使用各问题当前的修复意见。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issue_indexes: list[int] = Field(min_length=1, max_length=50)
+    model: str | None = Field(default=None, max_length=40)
+
+
 class Generated(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

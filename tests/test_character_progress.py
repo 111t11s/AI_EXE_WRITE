@@ -37,7 +37,7 @@ def artifact(story, action="林川在渡口救起落水的舟客。", state="仍
 
 
 def write(story, monkeypatch, chapter, result=None, rewrite=False, suffix=""):
-    monkeypatch.setattr(agents, "generate", lambda role, context: result or artifact(story))
+    monkeypatch.setattr(agents, "generate", lambda role, context, profile=None: result or artifact(story))
     return story["client"].post(f'/api/v1/writing/chapters/{chapter}/{"rewrite" if rewrite else "draft"}{suffix}',
                                 json={}, headers=story["headers"]["writer"])
 
@@ -70,7 +70,7 @@ def test_following_draft_reads_saved_state_and_excludes_future_facts(story, monk
     write(story, monkeypatch, first).raise_for_status()
     write(story, monkeypatch, future, artifact(story, "林川终于完成突破。", "九章之后已突破")).raise_for_status()
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         assert role is agents.DRAFT
         assert [row["chapter_number"] for row in context["character_progress"]] == [1]
         assert "右臂受伤" in context["character_progress"][0]["current_state"]

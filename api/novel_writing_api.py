@@ -35,7 +35,7 @@ from api.writing_schemas import (
 )
 from api.character_profiles import validate_profiles
 from core.logging import get_logger
-from core.models import ModelProfileError, resolve_profile
+from core.models import ModelProfileError, endpoint_host, resolve_profile, safe_error_reason
 
 
 router = APIRouter(prefix="/writing", tags=["小说写作智能体"])
@@ -416,12 +416,20 @@ async def generate(role, context, payload):
         logger.warning("模型请求超时：任务=%s", role.title)
         raise HTTPException(504, "模型响应超时，请稍后重试") from None
     except (APIConnectionError, httpx.RequestError):
-        logger.warning("模型网关连接失败：任务=%s", role.title)
+        from core.config import get_settings
+        logger.warning("模型网关连接失败：任务=%s，主机=%s", role.title,
+                       endpoint_host(profile.base_url if profile else get_settings().PROXY_URL))
         raise HTTPException(502, "无法连接模型网关，请检查网络或模型服务配置") from None
     except APIStatusError as exc:
-        logger.warning("模型网关请求失败：任务=%s，状态码=%s", role.title, exc.status_code)
+        from core.config import get_settings
+        host = endpoint_host(profile.base_url if profile else get_settings().PROXY_URL)
+        model_name = profile.model if profile else (get_settings().DEEPSEEK_MODEL_NAME)
+        reason = safe_error_reason(exc)
+        logger.warning("模型网关请求失败：任务=%s，模型=%s，主机=%s，状态码=%s，原因=%s",
+                       role.title, model_name, host, exc.status_code, reason or "未提供")
         if exc.status_code in (401, 403):
-            detail = "模型网关拒绝了访问，请检查 API 密钥和模型权限"
+            detail = (f"模型网关拒绝了访问（{exc.status_code}）：请检查 API 密钥、模型权限或 IP 白名单，"
+                      "也可在生成时改用其他已配置模型")
         elif exc.status_code == 429:
             detail = "模型网关限制了请求，请稍后重试或检查额度"
         elif exc.status_code >= 500:

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import threading
+from copy import deepcopy
 
 import httpx
 import pytest
@@ -36,7 +37,7 @@ def selection(novel, monkeypatch):
                           content="林川凭空造出河流。" if number == 1 else f"第{number}章正文，仅选中时可读取。"))
     novel.update(character=character, chapter_ids=ids, path=f'/api/v1/writing/projects/{novel["project"]}/consistency')
     novel["payload"] = {"outline_id": novel["outline"], "chapter_ids": [ids[3], ids[0]]}
-    monkeypatch.setattr(agents, "generate", lambda role, context: report(novel))
+    monkeypatch.setattr(agents, "generate", lambda role, context, profile=None: report(novel))
     return novel
 
 
@@ -59,7 +60,7 @@ def test_review_reads_only_selected_bodies_and_all_reference_material(selection,
     data, seen = selection, []
     before = snapshot(data)
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         assert role == agents.CONSISTENCY and role.tools == ()
         assert [row["chapter_number"] for row in context["selected_chapters"]] == [1, 4]
         assert context["outline"]["id"] == data["outline"]
@@ -100,7 +101,7 @@ def test_full_archives_relationship_pagination_and_other_project_isolation(selec
     data["create"]("character-relationships", source_character_id=foreign_ids[0], target_character_id=foreign_ids[1],
                    relationship_type="秘密关系", description="不应出现在核对资料中")
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         assert next(row for row in context["characters"] if row["id"] == data["character"])["background"] == long_background
         assert len(context["character_relationships"]) == 101
         assert all(row["source_character_id"] == companion for row in context["character_relationships"])
@@ -134,7 +135,7 @@ def test_related_archives_are_validated_as_real_citation_sources(selection, monk
                    relationship_type="伙伴", description="两人是同行伙伴")
     data["create"]("volume-characters", volume_id=data["volume"], character_id=companion, scenes="本卷负责引路")
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         row = (context["character_relationships"][0] if kind == "character_relationship" else
                context["volumes"][0]["cast"][0] if kind == "volume_character" else
                context["power_ranks" if kind == "power_rank" else kind][0])
@@ -165,7 +166,7 @@ def test_archive_read_failure_stops_before_model_instead_of_guessing(selection, 
 
 
 @pytest.mark.parametrize("problem", ["same_chapter", "workflow_status", "character_without_archive"])
-def test_self_citations_and_workflow_metadata_cannot_substitute_for_archives(selection, monkeypatch, problem):
+def test_self_citations_and_workflow_metadata_are_ignored(selection, monkeypatch, problem):
     data = selection
     value = report(data).model_dump()
     issue = value["issues"][0]
@@ -178,7 +179,11 @@ def test_self_citations_and_workflow_metadata_cannot_substitute_for_archives(sel
                           "quote": "林川凭空造出河流。" if chapter_index == 0 else "第4章正文"}
     monkeypatch.setattr(agents, "generate", lambda *args: ConsistencyReport.model_validate(value))
     response = data["client"].post(data["path"], json=data["payload"], headers=data["headers"]["writer"])
-    assert response.status_code == 502, response.text
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["issues"] == [] and result["references"] == []
+    assert result["verdict"] == "insufficient"
+    assert any("无法在本次资料中逐字核对" in note for note in result["limitations"])
 
 
 def test_continuity_can_cite_another_selected_chapter(selection, monkeypatch):
@@ -234,7 +239,7 @@ def test_missing_material_and_large_input_do_not_call_model(selection, monkeypat
 
 
 @pytest.mark.parametrize("problem", ["chapter", "quote", "basis_id", "basis_quote", "basis_field", "verdict", "empty_drift"])
-def test_hallucinated_citations_and_contradictory_conclusions_are_rejected(selection, monkeypatch, problem):
+def test_invalid_citations_are_dropped_without_failing_the_report(selection, monkeypatch, problem):
     data = selection
     value = report(data).model_dump()
     issue = value["issues"][0]
@@ -247,7 +252,33 @@ def test_hallucinated_citations_and_contradictory_conclusions_are_rejected(selec
     else: value["issues"] = []
     monkeypatch.setattr(agents, "generate", lambda *args: ConsistencyReport.model_validate(value))
     response = data["client"].post(data["path"], json=data["payload"], headers=data["headers"]["writer"])
-    assert response.status_code == 502, response.text
+    assert response.status_code == 200, response.text
+    result = response.json()
+    if problem == "verdict":
+        # 结论说“未发现偏移”，但给出了可核对的问题：按问题判定为发现偏移。
+        assert result["verdict"] == "drifted" and len(result["issues"]) == 1
+        assert any("结论与所列问题不一致" in note for note in result["limitations"])
+    else:
+        assert result["issues"] == []
+        assert result["verdict"] == "insufficient"
+        assert any("逐字核对" in note or "可核对的问题依据" in note for note in result["limitations"])
+
+
+def test_mixed_valid_and_invalid_issues_keep_only_verified_ones(selection, monkeypatch):
+    data = selection
+    value = report(data).model_dump()
+    second = deepcopy(value["issues"][0])
+    second["title"] = "虚构问题"
+    second["evidence"][0]["quote"] = "虚构原文"
+    value["issues"].append(second)
+    monkeypatch.setattr(agents, "generate", lambda *args: ConsistencyReport.model_validate(value))
+    response = data["client"].post(data["path"], json=data["payload"], headers=data["headers"]["writer"])
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["verdict"] == "drifted" and len(result["issues"]) == 1
+    assert result["issues"][0]["title"] == "凭空造水超出能力边界"
+    assert any("另有 1 条问题" in note for note in result["limitations"])
+    assert len(result["references"]) == 1
 
 
 @pytest.mark.parametrize("verdict", ["consistent", "insufficient"])
@@ -277,7 +308,7 @@ def test_background_review_is_explicit_streamed_deduplicated_and_account_scoped(
     entered, release = threading.Event(), threading.Event()
     calls = []
 
-    def waiting(role, context):
+    def waiting(role, context, profile=None):
         calls.append(1)
         emit_generation_event("thinking", text="核对能力与剧情方向")
         emit_generation_event("delta", text='{"summary":"发现能力偏移')
@@ -375,6 +406,43 @@ def repair_result(data, response):
     return client.get(f"/api/v1/generation-jobs/{job_id}", headers=headers).json()
 
 
+def test_bulk_adoption_repairs_selected_issues_in_one_job(selection, monkeypatch):
+    data = selection
+    value = report(data).model_dump()
+    second = deepcopy(value["issues"][0])
+    second["title"] = "第二处偏移"
+    second["evidence"] = [{"chapter_id": data["chapter_ids"][3], "quote": "第4章正文，仅选中时可读取。"}]
+    second["basis"] = {"kind": "character", "record_id": data["character"], "field": "abilities",
+                       "quote": "不能凭空造水"}
+    value["issues"].append(second)
+
+    def generate(role, context, profile=None):
+        if role is agents.CONSISTENCY_REPAIR:
+            return ChapterContentDraft(content=repaired_body(1))
+        return ConsistencyReport.model_validate(value)
+
+    monkeypatch.setattr(agents, "generate", generate)
+    _, report_data = completed_report(data)
+    report_job = report_data["job_id"]
+    client, headers = data["client"], data["headers"]["writer"]
+    response = client.post(f'{data["path"]}/{report_job}/repairs/tasks',
+                           json={"issue_indexes": [0, 1]}, headers=headers)
+    assert response.status_code == 202, response.text
+    job_id = response.json()["id"]
+    client.get(f"/api/v1/generation-jobs/{job_id}/events", headers=headers)
+    detail = client.get(f"/api/v1/generation-jobs/{job_id}", headers=headers).json()
+    assert detail["status"] == "completed", detail
+    assert detail["result"]["completed_count"] == 2 and detail["result"]["failed_count"] == 0
+    assert [row["status"] for row in detail["result"]["issues"]] == ["completed", "completed"]
+    updated = client.get(f"/api/v1/generation-jobs/{report_job}", headers=headers).json()["result"]
+    assert [issue["repair_status"] for issue in updated["issues"]] == ["completed", "completed"]
+    with data["engine"].begin() as connection:
+        contents = dict(connection.execute(text("SELECT id, content FROM novel_chapter WHERE id IN (:a, :b)"),
+                                           {"a": data["chapter_ids"][0], "b": data["chapter_ids"][3]}).all())
+    assert contents[data["chapter_ids"][0]].startswith("第1章。林川俯身感知已有河水的流向。")
+    assert contents[data["chapter_ids"][3]].startswith("第1章。林川俯身感知已有河水的流向。")
+
+
 def test_edit_suggestion_is_saved_without_writing_chapters_and_adoption_uses_edit(selection, monkeypatch):
     data = selection
     path, receipt = completed_report(data)
@@ -388,7 +456,7 @@ def test_edit_suggestion_is_saved_without_writing_chapters_and_adoption_uses_edi
     assert saved["issues"][0]["suggestion"] == suggestion
     seen = []
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         assert role == agents.CONSISTENCY_REPAIR and role.tools == ()
         assert context["approved_fix"]["suggestion"] == suggestion
         assert context["chapter"]["id"] == data["chapter_ids"][0]
@@ -428,7 +496,7 @@ def test_repair_rejects_changed_source_without_overwriting(selection, monkeypatc
             connection.execute(text("UPDATE novel_chapter SET content='用户的新正文' WHERE id=:id"),
                                {"id": data["chapter_ids"][3]})
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         calls.append(1)
         edit_source()
         return ChapterContentDraft(content=repaired_body())
@@ -459,7 +527,7 @@ def test_multi_chapter_adoption_only_saves_after_every_generation_succeeds(selec
     before = snapshot(data)
     calls = []
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         number = context["chapter"]["chapter_number"]
         calls.append(number)
         if fail_second and number == 4:
@@ -498,7 +566,7 @@ def test_running_repair_is_deduplicated_and_cannot_be_edited(selection, monkeypa
     path, _ = completed_report(data)
     entered, release = threading.Event(), threading.Event()
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         entered.set()
         assert release.wait(15)
         return ChapterContentDraft(content=repaired_body())
@@ -532,7 +600,7 @@ def two_issue_report(data, monkeypatch, same_chapter=False):
 def test_other_suggestions_can_be_adopted_after_a_saved_repair(selection, monkeypatch):
     data = selection
     path, _ = two_issue_report(data, monkeypatch)
-    monkeypatch.setattr(agents, "generate", lambda role, context: ChapterContentDraft(
+    monkeypatch.setattr(agents, "generate", lambda role, context, profile=None: ChapterContentDraft(
         content=repaired_body(context["chapter"]["chapter_number"])))
     for index in (0, 1):
         response = data["client"].post(path[:-1] + str(index) + "/repair/tasks", json={"suggestion": "修复本章能力描述"}, headers=data["headers"]["writer"])
@@ -547,7 +615,7 @@ def test_concurrent_repairs_never_overwrite_a_saved_repair(selection, monkeypatc
     entered = [threading.Event(), threading.Event()]
     release = [threading.Event(), threading.Event()]
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         index = int(context["approved_fix"]["title"] == "另一处能力偏移")
         entered[index].set()
         assert release[index].wait(15)

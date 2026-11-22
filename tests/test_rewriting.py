@@ -54,7 +54,7 @@ def test_outline_rewrite_reads_selected_version_and_keeps_old_story(novel, monke
     old_volume = get(novel, f'outline-volumes/{novel["volume"]}')
     old_chapter = get(novel, f"chapters/{chapter_id}")
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         assert role is agents.OUTLINE_REWRITE
         assert context["outline"]["summary"] == "寻找灵脉"
         assert context["volumes"][0]["beats"][0]["title"] == "渡河"
@@ -78,7 +78,7 @@ def test_outline_rewrite_reads_selected_version_and_keeps_old_story(novel, monke
 def test_body_rewrite_reads_original_and_saves_complete_draft(novel, monkeypatch, suffix):
     chapter_id = prepare(novel, status="reviewed")
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         assert role is agents.DRAFT_REWRITE
         assert context["chapter"]["content"] == ORIGINAL
         assert context["chapter"]["title"] == "渡河"
@@ -122,7 +122,7 @@ def test_body_rewrite_requires_original_characters_and_bounded_context(novel, mo
 def test_changed_chapter_is_never_overwritten(novel, monkeypatch, field, value):
     chapter_id = prepare(novel)
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         with novel["engine"].begin() as connection:
             connection.execute(update(tables["novel_chapter"]).where(
                 tables["novel_chapter"].c.id == chapter_id).values(**{field: value}))
@@ -170,7 +170,7 @@ def test_model_failure_preserves_original(novel, monkeypatch, resource):
 
 @pytest.mark.parametrize("problem", ["count", "changed_outline", "changed_beat"])
 def test_invalid_or_stale_outline_rewrite_has_no_partial_version(novel, monkeypatch, problem):
-    def generate(role, context):
+    def generate(role, context, profile=None):
         if problem != "count":
             table = tables["novel_outline" if problem == "changed_outline" else "novel_plot_beat"]
             with novel["engine"].begin() as connection:

@@ -22,7 +22,7 @@ from agents.webnovel_skills import webnovel_skill_prompt
 from api.writing_schemas import OUTLINE_THEME_LABELS
 from core.config import get_settings
 from core.logging import get_logger
-from core.models import ModelProfileError, resolve_profile
+from core.models import ModelProfileError, endpoint_host, resolve_profile, safe_error_reason
 from db.models import NovelBlueprint
 
 
@@ -329,15 +329,20 @@ class WorldbuildingAssistant:
             logger.warning("世界观模型输出缺少核心内容")
             raise
         except (APITimeoutError, httpx.TimeoutException):
-            logger.warning("世界观模型请求超时")
+            logger.warning("世界观模型请求超时：主机=%s，模型=%s",
+                           endpoint_host(connection["base_url"]), connection["model"])
             raise WorldbuildingGenerationError("模型响应超时，已保留设定，请稍后重试", status=504) from None
         except (APIConnectionError, httpx.RequestError):
-            logger.warning("无法连接世界观模型网关")
+            logger.warning("无法连接世界观模型网关：主机=%s", endpoint_host(connection["base_url"]))
             raise WorldbuildingGenerationError("无法连接模型服务，请检查服务器网络或模型服务地址") from None
         except APIStatusError as exc:
-            logger.warning("世界观模型网关拒绝请求：状态码=%s", exc.status_code)
+            host = endpoint_host(connection["base_url"])
+            reason = safe_error_reason(exc)
+            logger.warning("世界观模型网关拒绝请求：模型=%s，主机=%s，状态码=%s，原因=%s",
+                           connection["model"], host, exc.status_code, reason or "未提供")
             if exc.status_code in (401, 403):
-                message = "模型服务拒绝了访问，请检查 API 密钥和模型权限"
+                message = (f"模型服务拒绝了访问（{exc.status_code}）：请检查 API 密钥、模型权限或 IP 白名单，"
+                           "也可在新建小说时改用其他已配置模型")
             elif exc.status_code == 429:
                 message = "模型服务暂时限流，请稍后重试或检查额度"
             elif exc.status_code >= 500:

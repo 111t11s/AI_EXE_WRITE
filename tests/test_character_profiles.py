@@ -69,7 +69,7 @@ def test_core_generation_rejects_foreign_outline_and_volume_without_outline(nove
 
 @pytest.mark.parametrize("problem", ["missing", "wrong_volume", "foreign_beat", "duplicate_volume", "duplicate_beat", "no_node"])
 def test_invalid_dossiers_rejected_before_saving_new_people(novel, monkeypatch, problem):
-    def invalid(role, context):
+    def invalid(role, context, profile=None):
         profile = volume_profile(context)
         profiles = [profile]
         if problem == "missing": profiles = []
@@ -90,7 +90,7 @@ def test_invalid_dossiers_rejected_before_saving_new_people(novel, monkeypatch, 
 def test_outline_wide_generation_persists_each_volume_instead_of_losing_dossiers(novel, monkeypatch):
     second = next_volume(novel)
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         profiles = [volume_profile({**context, "target_volume": volume}) for volume in context["volumes"]]
         return CharacterDraftList(characters=[dict(**person("舟客", "supporting"), volume_profiles=profiles)])
 
@@ -109,7 +109,7 @@ def test_existing_core_and_supporting_profiles_keep_base_and_previous_volume(nov
     old = novel["create"]("volume-characters", volume_id=novel["volume"], character_id=ids[0], scenes="第一卷旧档案")
     second = next_volume(novel)
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         assert role == agents.CHARACTER_PROFILES
         assert [row["id"] for row in context["selected_characters"]] == ids
         assert context["volumes"][0]["cast"][0]["id"] == old
@@ -129,7 +129,7 @@ def test_existing_core_and_supporting_profiles_keep_base_and_previous_volume(nov
 
 def test_maximum_profile_selection_can_be_saved_as_one_batch(novel, monkeypatch):
     ids = [existing(novel, f"人物{number}", "配角") for number in range(20)]
-    monkeypatch.setattr(agents, "generate", lambda role, context: profile_result(context, ids))
+    monkeypatch.setattr(agents, "generate", lambda role, context, profile=None: profile_result(context, ids))
     response = novel["client"].post(path(novel), json={"character_ids": ids}, headers=novel["headers"]["writer"])
     assert response.status_code == 201, response.text
     assert response.json()["profile_character_ids"] == ids
@@ -143,7 +143,7 @@ def test_generation_uses_progress_snapshot_and_directory_tracks_later_drafts(nov
     blank = novel["create"]("chapters", project_id=novel["project"], volume_id=novel["volume"], chapter_number=3,
                             title="未来", content="\n\t　 ")
 
-    def generate(role, context):
+    def generate(role, context, profile=None):
         progress = context["writing_progress"][0]
         assert progress["planned_chapters"] == 2 and progress["written_chapters"] == 1
         assert progress["last_written_chapter"] == 1
@@ -167,7 +167,7 @@ def test_progress_edit_during_generation_preserves_existing_dossier(novel, monke
     novel["create"]("volume-characters", volume_id=novel["volume"], character_id=character, scenes="原档案")
     chapter = novel["create"]("chapters", project_id=novel["project"], volume_id=novel["volume"], chapter_number=1, title="渡河")
 
-    def changed(role, context):
+    def changed(role, context, profile=None):
         with novel["engine"].begin() as connection:
             connection.execute(text("UPDATE novel_chapter SET content='新正文' WHERE id=:id"), {"id": chapter})
         return profile_result(context, [character])
@@ -182,7 +182,7 @@ def test_progress_edit_during_generation_preserves_existing_dossier(novel, monke
 def test_existing_profile_output_must_match_selection(novel, monkeypatch, problem):
     character = existing(novel)
 
-    def invalid(role, context):
+    def invalid(role, context, profile=None):
         ids = [character]
         if problem == "duplicate": ids *= 2
         elif problem == "unknown": ids = [99999]
@@ -249,7 +249,7 @@ def test_background_profile_job_returns_saved_dossier(novel, monkeypatch):
     character = existing(novel)
     entered, release = threading.Event(), threading.Event()
 
-    def waiting(role, context):
+    def waiting(role, context, profile=None):
         entered.set()
         assert release.wait(10)
         return profile_result(context, [character])

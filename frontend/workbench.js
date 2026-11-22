@@ -16,13 +16,15 @@ const initialState = () => ({projects: [], project: null, libraryOwner: 'all', w
   characters: null, characterProfiles: null, characterProgress: null, characterError: null, characterLoading: false, characterOutlineId: null,
   consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
   consistencyOutlineId: null, consistencyReport: null,
+  consistencyIssuePage: 1, consistencySelectedIssues: new Set(), consistencyShowReport: false, consistencyReportKey: null,
   trash: null, trashLoading: false, trashError: null,
   trends: null, trendsLoading: false, trendsError: null, trendsSelection: new Map(),
   trendsManualMode: false, trendsManualText: '', trendsSearched: null, trendsSearchedSelection: new Map(),
   trendSearchLoading: false, trendsGenre: '', trendsAudience: '',
   trendsNote: '', trendsModel: '',
   taskCategory: 'all', taskProjectId: 'all', taskStatus: 'all', taskPage: 1, taskPageSize: 5,
-  taskMenuOpen: false, tasksLoaded: false, tasksError: null,
+  taskMenuOpen: false, tasksLoaded: false, tasksError: null, taskSelection: new Set(),
+  taskMeta: null, completedTotal: 0,
   modelOptions: [], modelChoice: '',
   busy: false, screen: 'project', reviews: new Map()});
 const state = initialState();
@@ -90,27 +92,22 @@ const progressGeneration = createGenerationView($('task-progress-stream'));
 const jobStatuses = {running: '生成中', completed: '已完成', failed: '未完成'};
 const taskCategories = [['all', '全部任务'], ['worldbuilding', '世界观'], ['outline', '大纲'], ['characters', '角色'],
   ['draft', '正文'], ['plan', '章节规划'], ['review', '审读'], ['consistency', '一致性核对'], ['trends', '热点'], ['other', '其他']];
-const knownTaskKinds = new Set(taskCategories.filter(([kind]) => !['all', 'other'].includes(kind)).map(([kind]) => kind));
 const taskKindCategory = kind => kind === 'character_progress' ? 'characters' :
   kind === 'batch_draft' ? 'draft' : kind === 'consistency_repair' ? 'consistency' : kind;
 const taskCategoryName = kind => taskCategories.find(([value]) => value === taskKindCategory(kind))?.[1] || '其他';
-const taskInCategory = (job, category) => category === 'all' || (category === 'other' ? !knownTaskKinds.has(taskKindCategory(job.kind)) : taskKindCategory(job.kind) === category);
-const taskInProject = (job, projectId) => projectId === 'all' ||
-  (projectId === 'unassigned' ? job.project_id == null : String(job.project_id) === String(projectId));
 const taskProjectName = projectId => {
   if (projectId === 'all') return '全部书籍';
   if (projectId === 'unassigned') return '新小说';
   return state.projects.find(project => String(project.id) === String(projectId))?.title || '小说任务';
 };
 const taskProjectOptions = () => {
-  const ids = new Set(jobList.map(job => job.project_id == null ? 'unassigned' : String(job.project_id)));
-  return [['all', '全部书籍'], ...state.projects.filter(project => ids.has(String(project.id)))
-    .map(project => [String(project.id), project.title || '未命名小说']),
-  ...(ids.has('unassigned') ? [['unassigned', '新小说']] : [])];
+  const rows = state.taskMeta?.projects || [];
+  const ids = new Set(rows.map(row => row.project_id == null ? 'unassigned' : String(row.project_id)));
+  return [['all', '全部书籍'],
+    ...state.projects.filter(project => ids.has(String(project.id)))
+      .map(project => [String(project.id), project.title || '未命名小说']),
+    ...(ids.has('unassigned') ? [['unassigned', '新小说']] : [])];
 };
-const sortedJobs = items => [...items].sort((left, right) =>
-  Number(right.status === 'running') - Number(left.status === 'running') ||
-  (Date.parse(right.created_at) || 0) - (Date.parse(left.created_at) || 0) || String(right.id).localeCompare(String(left.id)));
 let jobList = [];
 let jobsTimer = null;
 let jobsLoading = false;
@@ -128,11 +125,42 @@ function stopProgress() {
 
 function jobRow(job) {
   const project = state.projects.find(item => item.id === job.project_id);
+  const terminal = ['completed', 'failed'].includes(job.status);
+  const checkbox = element('input', {type: 'checkbox', class: 'task-select', checked: state.taskSelection.has(job.id),
+    disabled: !terminal, 'aria-label': `选择任务：${job.title}`, change: event => {
+      if (event.target.checked) state.taskSelection.add(job.id);
+      else state.taskSelection.delete(job.id);
+      render();
+    }});
   return element('div', {class: 'task-row', 'data-job-id': job.id},
-    element('div', {}, element('strong', {}, job.title),
+    element('label', {class: 'task-select-box', title: terminal ? `选择任务：${job.title}` : '生成中的任务完成后才能删除'}, checkbox),
+    element('div', {class: 'task-row-main'}, element('strong', {}, job.title),
       element('p', {class: 'muted'}, `${project?.title || (job.kind === 'worldbuilding' ? '新小说' : '小说任务')} · ${taskCategoryName(job.kind)} · ${jobStatuses[job.status] || job.status} · ${job.message}`),
       element('p', {class: 'muted'}, `发起时间：${new Date(job.created_at).toLocaleString()}`)),
-    button('查看进度', () => openProgress(job.id)));
+    actions(button('查看进度', () => openProgress(job.id)),
+      button('删除', () => deleteJobs([job.id]), 'danger', !terminal || state.busy)));
+}
+
+async function deleteJobs(ids) {
+  const unique = [...new Set(ids)];
+  if (!unique.length || state.busy) return;
+  const what = unique.length === 1 ? '这条任务记录' : `选中的 ${unique.length} 条任务记录`;
+  if (!window.confirm(`确定删除${what}吗？删除后不可恢复；已保存的小说内容不受影响。`)) return;
+  setBusy('正在删除任务记录…');
+  try {
+    if (unique.length === 1) await api(`/generation-jobs/${unique[0]}`, {method: 'DELETE'});
+    else await post('/generation-jobs/delete', {ids: unique});
+    for (const id of unique) state.taskSelection.delete(id);
+    jobList = jobList.filter(job => !unique.includes(job.id));
+    state.tasksLoaded = false;
+    notify(`已删除 ${unique.length} 条任务记录。`);
+  } catch (error) {
+    notify(`删除失败：${error.message}`, 'error');
+  } finally {
+    setBusy();
+    renderJobSummary();
+    void loadJobs();
+  }
 }
 
 function renderTaskMenu() {
@@ -140,20 +168,22 @@ function renderTaskMenu() {
   $('generation-tasks').setAttribute('aria-expanded', String(expanded));
   $('generation-tasks').setAttribute('aria-current', ['tasks', 'progress'].includes(state.screen) ? 'page' : 'false');
   const menu = $('task-submenus');
+  const counts = state.taskMeta?.counts?.category || {};
+  const runningCounts = state.taskMeta?.counts?.category_running || {};
   menu.hidden = !expanded;
-  menu.replaceChildren(...taskCategories.filter(([kind]) => kind !== 'other' || jobList.some(job => !knownTaskKinds.has(job.kind)))
+  menu.replaceChildren(...taskCategories.filter(([kind]) => kind !== 'other' || counts.other)
     .map(([kind, title]) => {
-      const jobs = jobList.filter(job => taskInCategory(job, kind));
-      const running = jobs.filter(job => job.status === 'running').length;
+      const total = counts[kind] || 0;
+      const running = runningCounts[kind] || 0;
       return element('button', {type: 'button', class: 'task-menu-item', 'data-task-category': kind,
         'aria-current': ['tasks', 'progress'].includes(state.screen) && state.taskCategory === kind ? 'page' : null,
         click: () => openTasks(kind)}, element('span', {}, title),
-      element('span', {class: 'task-menu-count', 'aria-label': `${running} 个生成中，共 ${jobs.length} 项任务`}, String(jobs.length)));
+      element('span', {class: 'task-menu-count', 'aria-label': `${running} 个生成中，共 ${total} 项任务`}, String(total)));
     }));
 }
 
 function renderJobSummary() {
-  const active = jobList.filter(job => job.status === 'running').length;
+  const active = state.taskMeta?.running ?? jobList.filter(job => job.status === 'running').length;
   $('generation-task-count').textContent = `${active} 进行中`;
   renderTaskMenu();
   const summary = $('task-summary');
@@ -166,23 +196,37 @@ async function loadJobs(quiet = true) {
   const requestingAccount = account;
   const request = key('jobs');
   jobsLoading = true;
+  const limit = state.taskPageSize;
+  const filters = {category: state.taskCategory, project_id: state.taskProjectId,
+    status: state.taskStatus, limit, offset: (state.taskPage - 1) * limit};
   try {
-    const page = await api('/generation-jobs');
+    let page = await api('/generation-jobs', {filters});
     if (account !== requestingAccount || !current('jobs', request)) return;
-    const previous = new Map(jobList.map(job => [job.id, job]));
-    const completed = state.tasksLoaded && page.items.some(job =>
-      job.status === 'completed' && previous.get(job.id)?.status !== 'completed');
-    for (const job of page.items) {
-      if (job.kind === 'draft' && job.status === 'completed' &&
-          jobList.find(item => item.id === job.id)?.status !== 'completed') state.reviews.delete(job.resource_id);
+    if (!page.items.length && page.total > 0 && filters.offset > 0) {
+      // 删除或筛选后页码可能超出范围，退回最后一页重新读取。
+      state.taskPage = Math.max(1, Math.ceil(page.total / limit));
+      page = await api('/generation-jobs', {filters: {...filters, offset: (state.taskPage - 1) * limit}});
+      if (account !== requestingAccount || !current('jobs', request)) return;
     }
     const changed = !state.tasksLoaded || state.tasksError || JSON.stringify(jobList) !== JSON.stringify(page.items);
+    const completed = state.tasksLoaded && (page.completed || 0) > state.completedTotal;
+    const previous = new Map(jobList.map(job => [job.id, job]));
+    if (state.tasksLoaded) {
+      for (const job of page.items) {
+        // 草稿任务刚完成时，本章旧审读建议已失效。
+        if (job.kind === 'draft' && job.status === 'completed' &&
+            previous.get(job.id)?.status !== 'completed') state.reviews.delete(job.resource_id);
+      }
+    }
     jobList = page.items;
-    if (!taskProjectOptions().some(([id]) => String(id) === String(state.taskProjectId))) {
+    state.taskMeta = page;
+    state.completedTotal = page.completed || 0;
+    state.tasksLoaded = true;
+    if (state.taskProjectId !== 'all' &&
+        !(page.projects || []).some(row => String(row.project_id ?? 'unassigned') === String(state.taskProjectId))) {
       state.taskProjectId = 'all';
       state.taskPage = 1;
     }
-    state.tasksLoaded = true;
     if (state.tasksError && state.screen === 'tasks') notify();
     state.tasksError = null;
     if (completed) notify('任务完成，请去任务中心查看。', '', 3000);
@@ -203,6 +247,7 @@ function recordJob(job) {
   jobList = [job, ...jobList.filter(item => item.id !== job.id)];
   renderJobSummary();
   if (state.screen === 'tasks') render();
+  void loadJobs();
 }
 
 function openTasks(category = state.taskCategory, projectId = state.taskProjectId) {
@@ -219,21 +264,26 @@ function openTasks(category = state.taskCategory, projectId = state.taskProjectI
 function taskCenterView() {
   const category = state.taskCategory;
   const projectId = state.taskProjectId;
-  const jobs = sortedJobs(jobList.filter(job => taskInCategory(job, category) && taskInProject(job, projectId)));
-  const filtered = jobs.filter(job => state.taskStatus === 'all' || job.status === state.taskStatus);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / state.taskPageSize));
+  const meta = state.taskMeta || {
+    items: [], total: 0, offset: 0, has_more: false, running: 0,
+    counts: {category: {}, category_running: {}, project: {}, status: {}},
+  };
+  const categoryCounts = meta.counts?.category || {};
+  const projectCounts = meta.counts?.project || {};
+  const statusCounts = meta.counts?.status || {};
+  const pageJobs = jobList;
+  const totalPages = Math.max(1, Math.ceil(meta.total / state.taskPageSize));
   state.taskPage = Math.min(Math.max(1, state.taskPage), totalPages);
-  const offset = (state.taskPage - 1) * state.taskPageSize;
-  const pageJobs = filtered.slice(offset, offset + state.taskPageSize);
+  const offset = meta.offset || 0;
   const categoryFilters = element('nav', {class: 'task-category-filters', 'aria-label': '任务类型'},
-    taskCategories.filter(([kind]) => kind !== 'other' || jobList.some(job => !knownTaskKinds.has(job.kind))).map(([kind, title]) => {
-      const count = jobList.filter(job => taskInCategory(job, kind)).length;
+    taskCategories.filter(([kind]) => kind !== 'other' || categoryCounts.other).map(([kind, title]) => {
+      const count = categoryCounts[kind] || 0;
       return element('button', {type: 'button', class: 'button secondary', 'data-task-category': kind,
         'aria-pressed': String(category === kind), click: () => openTasks(kind)}, `${title}（${count}）`);
     }));
   const projectFilters = element('nav', {class: 'task-project-filters', 'aria-label': '小说'},
     taskProjectOptions().map(([id, title]) => {
-      const count = jobList.filter(job => taskInCategory(job, category) && taskInProject(job, id)).length;
+      const count = projectCounts[id] || 0;
       return element('button', {type: 'button', class: 'button secondary', 'data-task-project': id,
         'aria-pressed': String(String(projectId) === String(id)), click: () => openTasks(category, id)},
       `${title}（${count}）`);
@@ -242,11 +292,13 @@ function taskCenterView() {
   const filters = element('nav', {class: 'task-status-filters', 'aria-label': '任务状态'}, statuses.map(([status, title]) =>
     element('button', {type: 'button', class: 'button secondary', 'data-task-status': status,
       'aria-pressed': String(state.taskStatus === status), click: () => {
-        if (state.taskStatus !== status) state.taskPage = 1;
+        if (state.taskStatus === status) return;
         state.taskStatus = status;
+        state.taskPage = 1;
         render();
+        void loadJobs(false);
       }},
-    `${title}（${jobs.filter(job => status === 'all' || job.status === status).length}）`)));
+    `${title}（${statusCounts[status] || 0}）`)));
   const emptyMessage = !state.tasksLoaded && !state.tasksError ? '正在读取任务…' :
     state.tasksError ? '暂时无法读取任务，请点击刷新任务重试。' :
     state.taskStatus === 'running' ? '此分类暂无正在生成的任务，可切换「全部状态」查看历史任务。' : '此分类暂无符合条件的任务。';
@@ -254,24 +306,38 @@ function taskCenterView() {
     element('strong', {class: 'task-filter-label'}, label), content);
   const taskList = element('div', {class: 'task-list', tabindex: '0', 'aria-label': '任务列表'},
     ...(pageJobs.length ? pageJobs.map(jobRow) : [muted(emptyMessage)]));
+  const deletable = pageJobs.filter(job => ['completed', 'failed'].includes(job.status));
+  const selectedCount = state.taskSelection.size;
+  const selectionBar = actions(
+    button('全选本页', () => {
+      deletable.forEach(job => state.taskSelection.add(job.id));
+      render();
+    }, 'secondary', !deletable.length),
+    button('清空选择', () => { state.taskSelection.clear(); render(); }, 'secondary', !selectedCount),
+    button(`删除所选（${selectedCount}）`, () => deleteJobs([...state.taskSelection]), 'danger',
+      !selectedCount || state.busy),
+    muted('生成中的任务完成后才能删除；删除记录不影响已保存的小说内容。'));
   const pageSizes = element('select', {'aria-label': '每页任务数', change: event => {
     state.taskPageSize = Number(event.target.value);
     state.taskPage = 1;
     render();
+    void loadJobs(false);
   }}, [5, 10, 20].map(size => element('option', {value: size, selected: state.taskPageSize === size}, `每页 ${size} 条`)));
   const pagination = element('nav', {class: 'paging task-pagination', 'aria-label': '任务分页'},
-    element('span', {'aria-live': 'polite'}, `共 ${filtered.length} 条 · ${filtered.length ? offset + 1 : 0}–${offset + pageJobs.length} 条`),
+    element('span', {'aria-live': 'polite'}, `共 ${meta.total} 条 · ${meta.total ? offset + 1 : 0}–${offset + pageJobs.length} 条`),
     actions(pageSizes,
-      button('上一页', () => { state.taskPage -= 1; render(); }, 'secondary', state.taskPage === 1),
+      button('上一页', () => { state.taskPage -= 1; render(); void loadJobs(false); }, 'secondary', state.taskPage === 1),
       element('span', {'aria-current': 'page'}, `第 ${state.taskPage} / ${totalPages} 页`),
-      button('下一页', () => { state.taskPage += 1; render(); }, 'secondary', state.taskPage === totalPages)));
+      button('下一页', () => { state.taskPage += 1; render(); void loadJobs(false); }, 'secondary',
+        state.taskPage >= totalPages || !meta.has_more)));
   const taskProgress = panel(`任务中心 · ${taskCategoryName(category)} · ${taskProjectName(projectId)}`, element('div', {class: 'task-panel-body'},
     element('div', {class: 'task-list-description'},
       muted('汇总当前账号所有小说的后台任务，每 4 秒自动更新；点击查看进度后可查看实时内容和生成结果。'),
       state.tasksError ? prose(`任务刷新失败：${state.tasksError}。下方保留上次读取的任务。`) : null),
+    selectionBar,
     taskList,
     pagination
-  ), `共 ${jobs.length} 项任务，${jobs.filter(job => job.status === 'running').length} 项正在生成。`,
+  ), `共 ${statusCounts.all || 0} 项任务，${statusCounts.running || 0} 项正在生成。`,
   button('刷新任务', () => loadJobs(false)));
   taskProgress.classList.add('task-progress-panel');
   return element('div', {class: 'task-center-layout'},
@@ -298,6 +364,7 @@ function renderTaskResult(job, result) {
     if (job.kind === 'consistency_repair') {
       for (const row of result.chapters) state.reviews.delete(row.chapter_id);
       message = `已按采纳的修复意见保存 ${result.completed_count} 章正文：${result.chapters.map(row => `第 ${row.chapter_number} 章 · ${row.title}`).join('、')}。人物正文进展可重新分析，修复结果可再次核对。`;
+      if (result.failed_count) message += `另有 ${result.failed_count} 条问题未能修复，可在核对报告中查看状态并重试。`;
     }
     if (job.kind === 'batch_draft') message = `已按顺序保存 ${result.completed_count} 章正文，并完成每章人物进展分析。`;
     if (job.kind === 'character_progress') message = `已分析并保存本章 ${result.updated_count} 位角色的人物正文进展。`;
@@ -1048,6 +1115,37 @@ function consistencyView() {
   return stack(controls, directory, state.consistencyReport ? consistencyReportView(state.consistencyReport) : null);
 }
 
+async function adoptConsistencyIssues(report, indexes) {
+  const chosen = [...new Set(indexes)].filter(index => Number.isInteger(index)).sort((left, right) => left - right);
+  if (!chosen.length || state.busy) return;
+  if (!report.job_id) {
+    notify('请从任务中心打开已完成的核对报告后再采纳。', 'error');
+    return;
+  }
+  const chapterIds = new Set();
+  for (const index of chosen) {
+    for (const entry of report.issues[index]?.evidence || []) chapterIds.add(entry.chapter_id);
+  }
+  const chapters = report.chapters.filter(row => chapterIds.has(row.chapter_id));
+  if (!window.confirm(`将按 ${chosen.length} 条意见修复${chapters.map(row => `第 ${row.chapter_number} 章 · ${row.title}`).join('、')}，完成后替换正文并保存为草稿；核对后正文如有变动会停止。`)) return;
+  setBusy('正在提交批量修复…');
+  try {
+    const job = await post(`/writing/projects/${report.project_id}/consistency/${report.job_id}/repairs/tasks`,
+      {issue_indexes: chosen});
+    for (const index of chosen) {
+      const issue = report.issues[index];
+      if (issue) Object.assign(issue, {repair_status: 'running', repair_job_id: job.id});
+    }
+    state.consistencySelectedIssues.clear();
+    recordJob(job);
+    void openProgress(job.id);
+  } catch (error) {
+    notify(`提交失败：${error.message}`, 'error');
+  } finally {
+    setBusy();
+  }
+}
+
 function consistencyReportView(report) {
   const verdicts = {consistent: '所选范围未发现明确偏移', drifted: '发现偏移，建议修正', insufficient: '资料不足，暂无法完整判断'};
   const categories = {plot: '剧情偏移', character: '人物偏移', world: '设定冲突', continuity: '章节衔接'};
@@ -1060,34 +1158,97 @@ function consistencyReportView(report) {
     scenes: '戏份安排', relationship_type: '关系类型', description: '描述', limitations: '限制', capabilities: '能力范围',
     growth_rules: '成长规则', breakthrough_condition: '突破条件', source: '力量来源', functions: '功能', costs: '代价',
     growth_path: '成长路径', story_secret: '剧情秘密', relationships: '势力关系', territory: '领地', status: '人物状态'};
-  return panel('一致性核对报告', stack(prose(report.summary),
-    muted(`对照大纲 v${report.outline_version} · 读取时间：${new Date(report.checked_at).toLocaleString()}`),
-    muted(`核对范围：${report.chapters.map(row => `第 ${row.chapter_number} 章 · ${row.title}`).join('、')}`),
-    report.reference_materials?.length ? details(['已读取的对照档案', report.reference_materials
-      .map(row => `${kinds[row.kind] || row.kind} · ${row.label}`).join('\n')]) : null,
-    ...report.issues.map((issue, index) => {
-      const reference = report.references.find(row => row.kind === issue.basis.kind && row.record_id === issue.basis.record_id);
-      const repair = jobList.find(job => job.id === issue.repair_job_id);
-      const repairStatus = repair?.status || issue.repair_status;
-      const adopted = ['running', 'completed'].includes(repairStatus);
-      return element('section', {class: 'report-issue'}, actions(pill(categories[issue.category]), pill(issue.severity === 'major' ? '主要问题' : '细节建议', true)),
-        element('h3', {}, issue.title),
-        ...issue.evidence.map(evidence => {
-          const chapter = report.chapters.find(row => row.chapter_id === evidence.chapter_id);
-          return stack(muted(`章节依据 · 第 ${chapter.chapter_number} 章 · ${chapter.title}`), element('blockquote', {class: 'prose consistency-quote'}, evidence.quote));
-        }),
-        muted(`对照依据 · ${kinds[issue.basis.kind]} · ${reference?.label || ''} · ${fieldLabels[issue.basis.field] || issue.basis.field}`),
-        element('blockquote', {class: 'prose consistency-quote'}, issue.basis.quote),
-        prose(`偏移说明：${issue.explanation}`), prose(`修复意见：${issue.suggestion}`),
-        report.job_id ? actions(
-          button('编辑修复意见', () => consistencySuggestionDialog(report, index), 'secondary', state.busy || adopted),
-          button(adopted ? (repairStatus === 'completed' ? '已修复' : '修复中') : repairStatus === 'failed' ? '重试修复' : '采纳并修复',
-            () => consistencySuggestionDialog(report, index, true), 'primary', state.busy || adopted),
-          issue.repair_job_id ? button('查看修复进度', () => openProgress(issue.repair_job_id)) : null) : null,
-        repairStatus === 'failed' ? muted('修复未完成，可查看进度中的原因，调整意见后重试。') : null);
-    }),
-    report.limitations.length ? details(['核对范围与限制', report.limitations.join('\n')]) : null),
-    '报告可在任务中心再次查看，记录保留规则与其他后台任务相同。', pill(verdicts[report.verdict], report.verdict !== 'consistent'));
+  const key = report.job_id || 'report';
+  if (state.consistencyReportKey !== key) {
+    state.consistencyReportKey = key;
+    state.consistencyIssuePage = 1;
+    state.consistencySelectedIssues = new Set();
+    state.consistencyShowReport = false;
+  }
+  const issues = report.issues || [];
+  const selected = state.consistencySelectedIssues;
+  for (const index of [...selected]) if (index >= issues.length) selected.delete(index);
+  const root = element('div');
+  const editableIndexes = issues.map((issue, index) => index)
+    .filter(index => !['running', 'completed'].includes(issues[index].repair_status));
+  const paint = () => {
+    const total = Math.max(1, issues.length);
+    const page = Math.min(Math.max(1, state.consistencyIssuePage || 1), total);
+    state.consistencyIssuePage = page;
+    const pageIndex = page - 1;
+    const issue = issues[pageIndex];
+    const chosen = editableIndexes.filter(index => selected.has(index));
+    const selectBox = issue ? element('label', {class: 'task-select-box', title: '选择这条问题后批量采纳'},
+      element('input', {type: 'checkbox', checked: selected.has(pageIndex),
+        disabled: ['running', 'completed'].includes(issue.repair_status),
+        'aria-label': `选择第 ${page} 条问题`, change: event => {
+          if (event.target.checked) selected.add(pageIndex);
+          else selected.delete(pageIndex);
+          paint();
+        }})) : null;
+    const issueActions = issue && report.job_id ? actions(
+      button('编辑修复意见', () => consistencySuggestionDialog(report, pageIndex), 'secondary',
+        state.busy || ['running', 'completed'].includes(issue.repair_status)),
+      button(['running', 'completed'].includes(issue.repair_status) ?
+        (issue.repair_status === 'completed' ? '已修复' : '修复中') :
+        issue.repair_status === 'failed' ? '重试修复' : '采纳并修复',
+      () => consistencySuggestionDialog(report, pageIndex, true), 'primary',
+      state.busy || ['running', 'completed'].includes(issue.repair_status)),
+      issue.repair_job_id ? button('查看修复进度', () => openProgress(issue.repair_job_id)) : null) : null;
+    const bulkBar = issues.length ? actions(
+      muted(`已选择 ${chosen.length} 条问题`),
+      button('全选所有问题', () => {
+        editableIndexes.forEach(index => selected.add(index));
+        paint();
+      }, 'secondary', !editableIndexes.length),
+      button('清空选择', () => { selected.clear(); paint(); }, 'secondary', !selected.size),
+      button(`采纳所选（${chosen.length}）`, () => adoptConsistencyIssues(report, chosen), 'primary',
+        !chosen.length || state.busy),
+      button('一键采纳全部', () => adoptConsistencyIssues(report, editableIndexes), 'primary',
+        !editableIndexes.length || state.busy)) : null;
+    const issueCard = issue ? element('section', {class: 'report-issue'},
+      actions(selectBox, pill(categories[issue.category]), pill(issue.severity === 'major' ? '主要问题' : '细节建议', true)),
+      element('h3', {}, issue.title),
+      ...issue.evidence.map(evidence => {
+        const chapter = report.chapters.find(row => row.chapter_id === evidence.chapter_id);
+        return stack(muted(`章节依据 · 第 ${chapter.chapter_number} 章 · ${chapter.title}`),
+          element('blockquote', {class: 'prose consistency-quote'}, evidence.quote));
+      }),
+      muted(`对照依据 · ${kinds[issue.basis.kind]} · ${report.references.find(row => row.kind === issue.basis.kind && row.record_id === issue.basis.record_id)?.label || ''} · ${fieldLabels[issue.basis.field] || issue.basis.field}`),
+      element('blockquote', {class: 'prose consistency-quote'}, issue.basis.quote),
+      prose(`偏移说明：${issue.explanation}`), prose(`修复意见：${issue.suggestion}`),
+      issueActions,
+      issue.repair_status === 'failed' ? muted('修复未完成，可查看进度中的原因，调整意见后重试。') : null) :
+      muted('未发现需要修复的问题。');
+    root.replaceChildren(panel('一致性核对报告', stack(
+      actions(button(state.consistencyShowReport ? '收起核对报告' : '查看核对报告', () => {
+        state.consistencyShowReport = !state.consistencyShowReport;
+        paint();
+      }, 'secondary'),
+      issues.length ? muted('可逐条查看问题，勾选后批量采纳，或一键采纳全部。') : null),
+      state.consistencyShowReport ? stack(
+        prose(report.summary),
+        muted(`对照大纲 v${report.outline_version} · 读取时间：${new Date(report.checked_at).toLocaleString()}`),
+        muted(`核对范围：${report.chapters.map(row => `第 ${row.chapter_number} 章 · ${row.title}`).join('、')}`),
+        report.reference_materials?.length ? details(['已读取的对照档案', report.reference_materials
+          .map(row => `${kinds[row.kind] || row.kind} · ${row.label}`).join('\n')]) : null,
+        report.limitations.length ? details(['核对范围与限制', report.limitations.join('\n')]) : null) : null,
+      issues.length ? element('nav', {class: 'consistency-issue-nav', 'aria-label': '问题列表'},
+        ...issues.map((row, index) => element('button', {type: 'button',
+          class: 'button secondary consistency-issue-button',
+          'aria-pressed': String(index === pageIndex),
+          click: () => { state.consistencyIssuePage = index + 1; paint(); }}, `${index + 1}`))) : null,
+      bulkBar,
+      issueCard,
+      issues.length > 1 ? element('nav', {class: 'paging consistency-issue-paging'},
+        button('上一条', () => { state.consistencyIssuePage = page - 1; paint(); }, 'secondary', page === 1),
+        element('span', {'aria-current': 'page'}, `第 ${page} / ${total} 条问题`),
+        button('下一条', () => { state.consistencyIssuePage = page + 1; paint(); }, 'secondary', page === total)) : null,
+    ), issues.length ? `共 ${issues.length} 条问题，每页 1 条。` : '未发现需要修复的问题。',
+    pill(verdicts[report.verdict], report.verdict !== 'consistent')));
+  };
+  paint();
+  return root;
 }
 
 function trendReportView(report) {
@@ -1923,8 +2084,11 @@ function syncModelPicker() {
   const select = $('wizard-model');
   const choices = modelChoices();
   control.hidden = choices.length < 2;
+  // 用户选择通过 change 事件写入 state.modelChoice，重绘时据此恢复，
+  // 避免向导刷新把已选模型重置成第一项。
+  const values = choices.map(choice => choice.value);
   select.replaceChildren(...choices.map(choice => element('option', {value: choice.value}, choice.label)));
-  select.value = state.modelChoice || choices[0]?.value || '';
+  select.value = values.includes(state.modelChoice) ? state.modelChoice : (values[0] || '');
   select.disabled = !session.id || session.busy || session.done;
 }
 
@@ -1995,14 +2159,15 @@ function openWizard() {
 
 async function sendMessage(content) {
   if (!content || !session.id || session.busy || session.done) return;
+  const generating = ['确认生成', '确认', '开始生成'].includes(content);
+  // 先读取当前选择：下面 syncWizard() 会重绘下拉框，不能等重绘后再读。
+  const model = generating ? $('wizard-model').value : '';
   const requestingSession = session;
   session.busy = true;
   syncWizard();
   bubble(content, true);
-  const generating = ['确认生成', '确认', '开始生成'].includes(content);
   try {
     const path = `/novel-assistant/sessions/${session.id}/messages`;
-    const model = generating ? $('wizard-model').value : '';
     const data = generating ? {content, outline_theme: $('outline-theme').value, ...(model ? {model} : {})} : {content};
     if (model) state.modelChoice = model;
     const reply = await post(generating ? `${path}/tasks` : path, data);
@@ -2035,6 +2200,7 @@ $('refresh').onclick = () => loadLibrary();
 $('open-trash').onclick = openTrash;
 $('close-wizard').onclick = () => { if (!session.busy) wizard.close(); };
 wizard.addEventListener('cancel', (event) => { if (session.busy) event.preventDefault(); });
+$('wizard-model').addEventListener('change', event => { state.modelChoice = event.target.value; });
 $('restart-wizard').onclick = startConversation;
 $('confirm-world').onclick = () => sendMessage('确认生成');
 $('chat-form').addEventListener('submit', (event) => {

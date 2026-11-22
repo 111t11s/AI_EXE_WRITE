@@ -186,6 +186,7 @@ CONSISTENCY = WritingRole(
     "volume_character 对应 volumes[].cast，character_relationship 对应 character_relationships。"
     "引用包含实际约束的剧情或设定字段，不以大纲或章节的工作流 status、ID 或时间戳为依据。"
     "chapter 类型的对照仅用于 continuity，必须引用另一个所选章节，不能用正文自身作为该正文偏移的对照。"
+    "引用前逐字比对原文，特别是数字、年份、人名和标点；不确定时缩短到能确认的片段，绝不能改写或拼接引文。"
     "explanation 明确说明正文与所引档案的具体冲突；没有有效对照原文时不得列为问题，只在 limitations 说明资料缺口。"
     "suggestion 依据档案给出具体修正办法。"
     "明确偏移返回 drifted 并列出问题；未发现明确偏移返回 consistent 且 issues 为空；不改写正文，不修改任何小说资料。",

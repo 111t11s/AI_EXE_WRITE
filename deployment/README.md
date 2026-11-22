@@ -56,7 +56,7 @@ sudo systemctl reload nginx
 
 世界观、大纲、章节规划、正文和审读均支持后台任务。发起后可以继续操作，通过“生成任务”或任务卡片的“查看进度”打开实时内容。浏览器刷新或关闭进度页不会取消后台生成；重新登录同一账号仍可在任务列表查看。任务按账号隔离，同一目标正在生成时重复提交会返回原任务，每个账号最多同时运行3个任务。
 
-任务进度暂存于当前服务进程，完成后保留24小时，每个账号保留最近约50个任务；服务重启会清除任务与实时片段，已成功保存到数据库的小说内容保留。该版本不支持跨服务重启恢复未完成的生成。
+任务进度保存在数据库的 `app_generation_job` 表中，服务重启后自动恢复，不再按时长或数量自动清空。任务中心支持逐条删除或勾选后批量删除；生成中的任务完成前不能删除，删除记录不影响已保存的小说内容。未完成的任务在重启后会标记为“服务已重启，任务已中断”。升级已有数据库需先执行 `python -m db.migrate_generation_jobs`（或由数据库管理员导入 `deployment/generation-jobs.sql`）。
 
 ~~~bash
 sudo systemctl status aitxt
@@ -123,6 +123,20 @@ sudo .venv/bin/python -m db.reset_password admin
 ```
 
 将 `admin` 替换为要重置的用户名，按提示输入两次新密码，输入不会回显。重置会立即撤销该账号的全部登录会话，旧密码和旧令牌无法继续使用，其他账号与小说数据保持原样。命令只操作已存在的账号，不会创建账号或启用停用账号；无需修改表结构或重启服务。不要将密码写入命令行或聊天记录。
+
+## 更新任务中心持久化（2026-11-22）
+
+把更新包上传到服务器的 `/home/ubuntu/`，在 Ubuntu SSH 终端执行：
+
+```bash
+sudo systemctl stop aitxt
+sudo unzip -o /home/ubuntu/<更新包>.zip -d /opt
+cd /opt/aitxt
+sudo .venv/bin/python -m db.migrate_generation_jobs
+sudo systemctl start aitxt
+```
+
+应用数据库账号缺少 CREATE 权限时，改用数据库管理员导入 `deployment/generation-jobs.sql`。本次只新增任务表，不改动小说、大纲或账号数据；重启后任务中心会恢复历史任务，上次未完成的任务会标记为“服务已重启，任务已中断”。任务不再自动清理，可在页面逐条或批量删除。
 
 ## 更新一致性核对（2026-11-15）
 

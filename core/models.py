@@ -6,12 +6,44 @@
 """
 
 import os
+import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from core.config import get_settings
 
 
 DEFAULT_PROFILE = "default"
+KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]{6,}")
+
+
+def endpoint_host(base_url: str) -> str:
+    """只保留主机名，便于日志定位问题且不泄露完整地址参数。"""
+    try:
+        return urlsplit(base_url).hostname or "-"
+    except ValueError:
+        return "-"
+
+
+def safe_error_reason(exc) -> str:
+    """提取上游错误说明，隐藏密钥后用于日志与提示。"""
+    message = ""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            message = str(error.get("message") or error.get("detail") or "")
+        elif isinstance(error, str):
+            message = error
+        if not message:
+            message = str(body.get("message") or "")
+    elif isinstance(body, str):
+        # Cloudflare 等边缘节点常返回 HTML 错误页，只保留可读文字。
+        message = re.sub(r"<[^>]+>", " ", body)
+    if not message:
+        message = str(getattr(exc, "message", "") or "")
+    message = KEY_PATTERN.sub("sk-***", message)
+    return " ".join(message.split())[:160]
 
 
 class ModelProfileError(LookupError):

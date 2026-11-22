@@ -54,3 +54,15 @@ body{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset
 .reuse-character:last-child{border-bottom:0}.reuse-character input{flex:none;width:18px;height:18px;margin-top:3px}.reuse-character>span{min-width:0;overflow-wrap:anywhere}.reuse-character .muted{margin-top:4px;font-size:.8rem}
 .export-chapters{min-width:0;margin:0;padding:12px;border:1px solid var(--line);border-radius:8px;display:grid;gap:12px}.export-chapters legend{font-size:.88rem;font-weight:650;color:var(--green)}.export-chapters .mini-list{max-height:38dvh;overflow-y:auto;overscroll-behavior-y:contain}
 .character-fact{border:1px solid var(--line);border-radius:8px;padding:12px}.character-fact summary{cursor:pointer;color:var(--green);font-weight:650}.character-fact .details{margin-top:12px}.character-fact .prose,.character-fact dd{white-space:pre-wrap}
+
+/* 任务中心：选择与删除 */
+.task-select-box{display:flex;align-items:center;padding:0 2px;cursor:pointer}
+.task-select{width:18px;height:18px;margin:0}
+.task-row-main{min-width:0;flex:1}
+
+/* 一致性核对：问题按钮与分页 */
+.consistency-issue-nav{display:flex;flex-wrap:wrap;gap:6px}
+.consistency-issue-button{min-width:38px;padding:5px 9px}
+.consistency-issue-button[aria-pressed=true]{background:var(--green);border-color:var(--green);color:#fff}
+.consistency-issue-paging{margin-top:4px}
+

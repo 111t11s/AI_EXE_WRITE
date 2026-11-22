@@ -19,6 +19,18 @@ def settings(**overrides):
     return SimpleNamespace(**values)
 
 
+def test_model_error_diagnostics_hide_keys():
+    exc = SimpleNamespace(body={"error": {"message": "invalid api key sk-abcdef123456 for model gpt-6-sol"}})
+    reason = models.safe_error_reason(exc)
+    assert "invalid api key" in reason and "sk-abcdef" not in reason
+    assert models.endpoint_host("https://www.example.com/v1") == "www.example.com"
+    assert models.endpoint_host("") == "-"
+    assert models.safe_error_reason(SimpleNamespace(body=None, message="")) == ""
+    edge = models.safe_error_reason(SimpleNamespace(
+        body="<html><body><h1>403 Forbidden</h1><p>Cloudflare Ray ID: abc</p></body></html>"))
+    assert "403 Forbidden" in edge and "<" not in edge
+
+
 def test_default_selection_keeps_the_existing_connection(monkeypatch):
     monkeypatch.setattr(models, "get_settings", lambda: settings())
     assert models.resolve_profile(None) is None
