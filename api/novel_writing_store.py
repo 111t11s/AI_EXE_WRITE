@@ -120,7 +120,9 @@ def save_chapter_plan(engine, project_id: int, volume_id: int, start: int,
             chapter.c.project_id == project_id, chapter.c.chapter_number.between(start, start + len(artifact.chapters) - 1),
         ).limit(1))
         if taken is not None:
-            raise HTTPException(409, "规划范围内已有章节，请选择未使用的章号")
+            highest = connection.scalar(select(func.max(chapter.c.chapter_number)).where(
+                chapter.c.project_id == project_id))
+            raise HTTPException(409, f"规划范围内已有章节，请选择未使用的章号；本项目下一个可用章号是 {int(highest or 0) + 1}")
         entries = []
         for number, item in enumerate(artifact.chapters, start):
             chapter_id = insert_row(connection, chapter, project_id=project_id, volume_id=volume_id,
@@ -176,5 +178,6 @@ def save_character_progress(engine, chapter_id: int, original: dict, updates=())
         if any(current[key] != original[key] for key in (
                 "project_id", "volume_id", "chapter_number", "title", "summary", "content", "status")):
             raise HTTPException(409, "分析期间章节发生变化，请刷新后重新分析")
-        replace_progress(connection, current, current["content"], updates)
-        return CharacterProgressReceipt(chapter_id=chapter_id, updated_count=len(updates))
+        problems = replace_progress(connection, current, current["content"], updates, strict=False)
+        return CharacterProgressReceipt(chapter_id=chapter_id, updated_count=len(updates) - len(problems),
+                                        skipped_count=len(problems), warning="；".join(problems))

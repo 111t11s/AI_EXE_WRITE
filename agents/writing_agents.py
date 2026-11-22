@@ -41,6 +41,7 @@ CHAPTER_PROGRESS_RULES = (
     "actions 只记本章已经发生的行动及结果；current_state 写截至本章的处境、伤亡、位置、能力和目标，"
     "衔接 character_progress 中该人物之前的状态，保留未被本章改变的已知事实；relationships 记已知关系和本章变化。"
     "每项 evidence 提供本章 content 中逐字连续的真实原句，至少一条包含人物完整姓名，不能引用前章或大纲。"
+    "引文直接复制正文原句，不改写、不拼接、不用省略号；正文只用代词指代、没有出现姓名的人物不要写入 character_updates。"
     "没有明确写出的变化不推断，梦境、猜测、承诺与未来计划不能记为既成事实；未发生的部分明确未知。"
     "本章没有可记录的已建档人物行动时 character_updates 返回空数组。"
     "character_progress 均来自本章之前的正文；参考记录的章号，不把基础档案的较晚状态倒推到早期章节。"

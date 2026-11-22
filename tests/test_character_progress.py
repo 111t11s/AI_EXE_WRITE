@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 from agents import writing_agents as agents
 from api import character_progress as facts, novel_writing_store as store
 from api.novel_tables import tables
-from api.writing_schemas import ChapterDraft
+from api.writing_schemas import ChapterContentDraft, ChapterDraft, CharacterProgressAnalysis
 from db.character_progress import character_progress
 from db.manage_admin import set_admin
 from db.migrate_character_progress import migrate_schema
@@ -198,3 +198,69 @@ def test_migration_is_additive_and_idempotent(story, monkeypatch):
 def test_generated_schema_requires_explicit_character_updates():
     with pytest.raises(ValidationError):
         ChapterDraft(content="正文" * 100)
+
+def test_analysis_skips_unverifiable_character_and_keeps_others(story, monkeypatch):
+    chapter = planned(story, 1)
+    companion = story["create"]("characters", project_id=story["project"], name="舟客", role="配角", summary="同行")
+    body = "林川在渡口救起落水的舟客。" + "河面的风吹动衣袖，他将湿透的绳索收在船舷。" * 10
+    write(story, monkeypatch, chapter, ChapterDraft(content=body, character_updates=[])).raise_for_status()
+
+    def generate(role, context, profile=None):
+        assert role is agents.CHARACTER_PROGRESS
+        return CharacterProgressAnalysis(character_updates=[
+            dict(character_id=story["person"], actions="救起舟客", current_state="右臂受伤",
+                 evidence=["林川在渡口救起落水的舟客。"]),
+            dict(character_id=companion, actions="收起绳索", current_state="安全",
+                 evidence=["河面的风吹动衣袖"]),
+        ])
+    monkeypatch.setattr(agents, "generate", generate)
+    response = story["client"].post(f'/api/v1/writing/chapters/{chapter}/character-progress', json={},
+                                     headers=story["headers"]["writer"])
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["updated_count"] == 1 and result["skipped_count"] == 1
+    assert "舟客" in result["warning"]
+    assert [row["character_id"] for row in directory(story)["items"]] == [story["person"]]
+
+
+def test_analysis_with_no_verifiable_updates_keeps_previous_facts(story, monkeypatch):
+    chapter = planned(story, 1)
+    write(story, monkeypatch, chapter).raise_for_status()
+    before = directory(story)["items"]
+
+    def generate(role, context, profile=None):
+        return CharacterProgressAnalysis(character_updates=[
+            dict(character_id=story["person"], actions="突破", current_state="成神",
+                 evidence=["林川已经突破成为神明。"])])
+
+    monkeypatch.setattr(agents, "generate", generate)
+    response = story["client"].post(f'/api/v1/writing/chapters/{chapter}/character-progress', json={},
+                                     headers=story["headers"]["writer"])
+    assert response.status_code == 502, response.text
+    assert "林川" in response.json()["detail"]
+    assert directory(story)["items"] == before
+
+
+def test_batch_keeps_saved_body_when_one_progress_analysis_fails(story, monkeypatch):
+    first, second = planned(story, 1), planned(story, 2)
+    body = artifact(story).content
+
+    def generate(role, context, profile=None):
+        if role is agents.DRAFT:
+            return ChapterContentDraft(content=body)
+        assert role is agents.CHARACTER_PROGRESS
+        if context["chapter"]["chapter_number"] == 1:
+            raise HTTPException(502, "原文依据不足")
+        return CharacterProgressAnalysis(character_updates=[])
+
+    monkeypatch.setattr(agents, "generate", generate)
+    response = story["client"].post(
+        f'/api/v1/writing/projects/{story["project"]}/chapters/batch-draft',
+        json={"chapter_ids": [first, second]}, headers=story["headers"]["writer"])
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["completed_count"] == 2 and "第 1 章" in result["warning"]
+    for chapter in (first, second):
+        saved = story["client"].get(f'/api/v1/chapters/{chapter}', headers=story["headers"]["writer"]).json()
+        assert saved["status"] == "draft" and saved["content"]
+

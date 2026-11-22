@@ -174,7 +174,9 @@ export function createGenerationView(root) {
       return !text || structured();
     },
     fail(message) {
-      flush();
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = null;
+      if (!text) output.textContent = '任务未完成，请查看上方提示。';
       status.textContent = message;
       root.dataset.state = 'error';
       root.setAttribute('aria-busy', 'false');

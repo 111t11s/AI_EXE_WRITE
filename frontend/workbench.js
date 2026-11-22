@@ -366,8 +366,15 @@ function renderTaskResult(job, result) {
       message = `已按采纳的修复意见保存 ${result.completed_count} 章正文：${result.chapters.map(row => `第 ${row.chapter_number} 章 · ${row.title}`).join('、')}。人物正文进展可重新分析，修复结果可再次核对。`;
       if (result.failed_count) message += `另有 ${result.failed_count} 条问题未能修复，可在核对报告中查看状态并重试。`;
     }
-    if (job.kind === 'batch_draft') message = `已按顺序保存 ${result.completed_count} 章正文，并完成每章人物进展分析。`;
-    if (job.kind === 'character_progress') message = `已分析并保存本章 ${result.updated_count} 位角色的人物正文进展。`;
+    if (job.kind === 'batch_draft') {
+      message = `已按顺序保存 ${result.completed_count} 章正文。`;
+      if (result.warning) message += '部分章节的人物进展未保存，详见下方提示。';
+      else message += '每章人物进展均已分析。';
+    }
+    if (job.kind === 'character_progress') {
+      message = `已分析并保存本章 ${result.updated_count} 位角色的人物正文进展。`;
+      if (result.skipped_count) message += `另有 ${result.skipped_count} 位角色因原文依据不足未保存。`;
+    }
     if (job.kind === 'characters') {
       const counts = [['protagonist', '主角'], ['important', '重要配角'], ['supporting', '配角']]
         .filter(([kind]) => result.counts[kind]).map(([kind, label]) => `${label} ${result.counts[kind]} 位`).join('、');
@@ -1923,10 +1930,18 @@ async function characterProfileDialog(preferredVolume = null, characterId = null
   openAction(options);
 }
 
-function planDialog(volume) {
+async function planDialog(volume) {
   const page = state.page;
-  const start = page && !page.has_more ? Math.min((page.items.at(-1)?.chapter_number ?? 0) + 1, 4294967295) : 1;
-  openAction({title: '规划章节', description: `把《${volume.title}》的剧情节点拆成章节。章号在全书内唯一，已有章节不会被覆盖。`,
+  let start = page && !page.has_more ? Math.min((page.items.at(-1)?.chapter_number ?? 0) + 1, 4294967295) : 1;
+  if (state.project) {
+    try {
+      const info = await api(`/writing/projects/${state.project.id}/chapter-plan/next`);
+      start = Number(info.next_chapter_number) || start;
+    } catch (error) {
+      // 读取失败时保留本地估算；提交后后端仍会校验并给出可用章号。
+    }
+  }
+  openAction({title: '规划章节', description: `把《${volume.title}》的剧情节点拆成章节。章号在全书内唯一，已有章节不会被覆盖；本项目当前建议从第 ${start} 章开始。`,
     submit: '规划并保存', fields: [numberField('start_chapter', '起始章号', start, 1, 4294967295),
       numberField('chapter_count', '生成章节数', 5, 1, 12), noteField],
     useModel: true,

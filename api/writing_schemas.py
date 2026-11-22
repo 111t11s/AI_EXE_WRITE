@@ -435,6 +435,8 @@ class DraftReceipt(BaseModel):
 class CharacterProgressReceipt(BaseModel):
     chapter_id: RowId
     updated_count: int
+    skipped_count: int = 0
+    warning: str = ""
 
 
 class BatchDraftChapterReceipt(BaseModel):
@@ -449,6 +451,7 @@ class BatchDraftReceipt(BaseModel):
     project_id: RowId
     completed_count: int
     chapters: list[BatchDraftChapterReceipt]
+    warning: str = ""
 
 
 class CharacterReceipt(BaseModel):

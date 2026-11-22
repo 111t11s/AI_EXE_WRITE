@@ -24,7 +24,7 @@ from api.novel_writing_store import require_empty_plan, save_chapter_plan, save_
 from api.novel_writing_store import save_characters, save_rewritten_draft, save_character_progress
 from api.novel_tables import tables
 from api.database import transaction
-from sqlalchemy import select
+from sqlalchemy import func, select
 from db.connection import legacy_json_columns
 from api.writing_schemas import (
     ChapterPlanReceipt, ChapterPlanRequest, DraftReceipt, DraftRequest, OutlineReceipt, OutlineRequest,
@@ -298,13 +298,30 @@ async def previous_chapter(session, project_id, number):
     return {**excerpt(rows[0], "chapter_number", "title", "summary"), "ending": rows[0]["content"][-1200:]}
 
 
-async def plan_context(session, volume_id, start):
+async def plan_context(session, volume_id, start, count=1, next_number=None):
     context = await volume_context(session, volume_id)
     project_id = context["project"]["id"]
-    if await listing(session, "chapter", project_id=project_id, chapter_number=start, limit=1):
-        raise HTTPException(409, "起始章号已使用，请选择未使用的章号")
+    for number in range(start, start + count):
+        if await listing(session, "chapter", project_id=project_id, chapter_number=number, limit=1):
+            hint = f"本项目下一个可用章号是 {next_number}。" if next_number else ""
+            raise HTTPException(409, f"章号 {number} 已被使用，请选择未使用的章号。{hint}")
     context["previous_chapter"] = await previous_chapter(session, project_id, start)
     return context
+
+
+def next_free_chapter_number(engine, project_id):
+    """下一个可用章号按全书最大章号 + 1 计算。"""
+    chapter = tables["novel_chapter"]
+    with engine.connect() as connection:
+        highest = connection.scalar(select(func.max(chapter.c.chapter_number)).where(
+            chapter.c.project_id == project_id))
+    return int(highest or 0) + 1
+
+
+@router.get("/projects/{project_id}/chapter-plan/next", summary="查询下一个可用章号")
+async def next_chapter_number(project_id: RowId, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    return {"next_chapter_number": await run_in_threadpool(next_free_chapter_number, engine, project_id)}
 
 
 async def chapter_context(session, chapter_id, review, rewrite=False):
@@ -466,7 +483,12 @@ async def write_chapter_plan(volume_id: RowId, payload: ChapterPlanRequest, user
     await run_in_threadpool(require_resource, engine, "novel_outline_volume", volume_id, user.id)
     if payload.start_chapter + payload.chapter_count - 1 > 2**32 - 1:
         raise HTTPException(422, "章节规划范围超出允许的章号")
-    context = await load_context(plan_context, volume_id, payload.start_chapter)
+    project_id = await run_in_threadpool(task_project, engine, "novel_outline_volume", volume_id, user.id)
+    try:
+        next_number = await run_in_threadpool(next_free_chapter_number, engine, project_id)
+    except Exception:
+        next_number = None
+    context = await load_context(plan_context, volume_id, payload.start_chapter, payload.chapter_count, next_number)
     artifact = await generate(agents.PLAN, context, payload)
     if len(artifact.chapters) != payload.chapter_count:
         raise HTTPException(502, "模型返回的章节数量与请求不符")
@@ -507,20 +529,31 @@ async def write_batch_drafts(project_id: RowId, payload: BatchDraftRequest,
                              user: CurrentAccount, engine: Database):
     chapters = await run_in_threadpool(validate_batch_chapters, engine, project_id,
                                        payload.chapter_ids, user.id)
-    completed = []
+    completed, warnings = [], []
     for index, chapter in enumerate(chapters, 1):
         emit_generation_event("status", message=f"正在生成第 {chapter['chapter_number']} 章（{index}/{len(chapters)}）…")
         draft = await write_draft(chapter["id"], DraftRequest(
             target_characters=payload.target_characters, instruction=payload.instruction, model=payload.model),
             user, engine)
         emit_generation_event("status", message=f"第 {chapter['chapter_number']} 章正文已保存，正在分析人物进展…")
-        progress = await analyze_character_progress(
-            chapter["id"], WritingInput(instruction=payload.instruction, model=payload.model), user, engine)
+        try:
+            progress = await analyze_character_progress(
+                chapter["id"], WritingInput(instruction=payload.instruction, model=payload.model), user, engine)
+        except HTTPException as exc:
+            # 正文已保存，人物进展失败不应让整批任务作废；保留正文并继续后续章节。
+            progress_count = 0
+            warnings.append(f"第 {chapter['chapter_number']} 章：{exc.detail}")
+            emit_generation_event("status", message=f"第 {chapter['chapter_number']} 章正文已保存，人物进展未保存：{exc.detail}")
+        else:
+            progress_count = progress.updated_count
+            if progress.warning:
+                warnings.append(f"第 {chapter['chapter_number']} 章：{progress.warning}")
+            emit_generation_event("status", message=f"第 {chapter['chapter_number']} 章正文与人物档案已同步保存。")
         completed.append(BatchDraftChapterReceipt(
             chapter_id=chapter["id"], chapter_number=chapter["chapter_number"], title=chapter["title"],
-            word_count=draft.word_count, progress_count=progress.updated_count))
-        emit_generation_event("status", message=f"第 {chapter['chapter_number']} 章正文与人物档案已同步保存。")
-    return BatchDraftReceipt(project_id=project_id, completed_count=len(completed), chapters=completed)
+            word_count=draft.word_count, progress_count=progress_count))
+    return BatchDraftReceipt(project_id=project_id, completed_count=len(completed), chapters=completed,
+                             warning="；".join(warnings))
 
 
 @router.post("/projects/{project_id}/chapters/batch-draft", response_model=BatchDraftReceipt,
