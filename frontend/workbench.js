@@ -135,7 +135,7 @@ function jobRow(job) {
   return element('div', {class: 'task-row', 'data-job-id': job.id},
     element('label', {class: 'task-select-box', title: terminal ? `选择任务：${job.title}` : '生成中的任务完成后才能删除'}, checkbox),
     element('div', {class: 'task-row-main'}, element('strong', {}, job.title),
-      element('p', {class: 'muted'}, `${project?.title || (job.kind === 'worldbuilding' ? '新小说' : '小说任务')} · ${taskCategoryName(job.kind)} · ${jobStatuses[job.status] || job.status} · ${job.message}`),
+      element('p', {class: 'muted'}, `${project?.title || (job.kind === 'worldbuilding' ? '新小说' : '小说任务')} · ${taskCategoryName(job.kind)} · ${jobStatuses[job.status] || '未知状态'} · ${job.message}`),
       element('p', {class: 'muted'}, `发起时间：${new Date(job.created_at).toLocaleString()}`)),
     actions(button('查看进度', () => openProgress(job.id)),
       button('删除', () => deleteJobs([job.id]), 'danger', !terminal || state.busy)));
@@ -941,7 +941,7 @@ function selectedRow(label, sub, isCurrent, click) {
 function hero(project) {
   return element('section', {class: 'hero'}, element('p', {class: 'eyebrow'}, '小说项目'),
     element('h1', {}, project.title || '未命名小说'), project.premise ? element('p', {}, project.premise) : null,
-    element('div', {class: 'hero-meta'}, pill(project.genre || '小说'), pill(statusNames[project.status] ?? project.status),
+    element('div', {class: 'hero-meta'}, pill(project.genre || '小说'), pill(statusNames[project.status] ?? '未知状态'),
       pill(project.is_public ? '已发布到公共书架' : '未发布'),
       project.tone ? pill(project.tone) : null,
       account?.is_admin ? pill(`所属账号：${projectOwner(project)}`) : null),
@@ -1106,7 +1106,7 @@ function consistencyView() {
       element('input', {type: 'checkbox', checked: state.consistencySelection.has(row.id), disabled: !row.content.trim() || state.consistencyLoading,
         'data-chapter-id': row.id, change: (event) => selectConsistencyChapter(row, event.target.checked)}),
       element('span', {}, element('strong', {}, `第 ${row.chapter_number} 章 · ${row.title || '未命名'}`),
-        muted(row.content.trim() ? `${statusNames[row.status] || row.status} · ${row.word_count} 字` : '尚无正文，暂不可核对')))),
+        muted(row.content.trim() ? `${statusNames[row.status] || '未知状态'} · ${row.word_count} 字` : '尚无正文，暂不可核对')))),
     !page.items.length ? muted('还没有章节，请先规划章节并完成正文。') : null,
     page.offset || page.has_more ? element('div', {class: 'paging'},
       button('上一页', () => loadConsistencyChapters(page.offset - pageSize), 'secondary', !page.offset || state.consistencyLoading),
@@ -1207,14 +1207,14 @@ function consistencyReportView(report) {
       button('一键采纳全部', () => adoptConsistencyIssues(report, editableIndexes), 'primary',
         !editableIndexes.length || state.busy)) : null;
     const issueCard = issue ? element('section', {class: 'report-issue'},
-      actions(selectBox, pill(categories[issue.category]), pill(issue.severity === 'major' ? '主要问题' : '细节建议', true)),
+      actions(selectBox, pill(categories[issue.category] || '其他问题'), pill(issue.severity === 'major' ? '主要问题' : '细节建议', true)),
       element('h3', {}, issue.title),
       ...issue.evidence.map(evidence => {
         const chapter = report.chapters.find(row => row.chapter_id === evidence.chapter_id);
         return stack(muted(`章节依据 · 第 ${chapter.chapter_number} 章 · ${chapter.title}`),
           element('blockquote', {class: 'prose consistency-quote'}, evidence.quote));
       }),
-      muted(`对照依据 · ${kinds[issue.basis.kind]} · ${report.references.find(row => row.kind === issue.basis.kind && row.record_id === issue.basis.record_id)?.label || ''} · ${fieldLabels[issue.basis.field] || issue.basis.field}`),
+      muted(`对照依据 · ${kinds[issue.basis.kind] || '对照资料'} · ${report.references.find(row => row.kind === issue.basis.kind && row.record_id === issue.basis.record_id)?.label || ''} · ${fieldLabels[issue.basis.field] || '相关字段'}`),
       element('blockquote', {class: 'prose consistency-quote'}, issue.basis.quote),
       prose(`偏移说明：${issue.explanation}`), prose(`修复意见：${issue.suggestion}`),
       issueActions,
@@ -1231,7 +1231,7 @@ function consistencyReportView(report) {
         muted(`对照大纲 v${report.outline_version} · 读取时间：${new Date(report.checked_at).toLocaleString()}`),
         muted(`核对范围：${report.chapters.map(row => `第 ${row.chapter_number} 章 · ${row.title}`).join('、')}`),
         report.reference_materials?.length ? details(['已读取的对照档案', report.reference_materials
-          .map(row => `${kinds[row.kind] || row.kind} · ${row.label}`).join('\n')]) : null,
+          .map(row => `${kinds[row.kind] || '对照资料'} · ${row.label}`).join('\n')]) : null,
         report.limitations.length ? details(['核对范围与限制', report.limitations.join('\n')]) : null) : null,
       issues.length ? element('nav', {class: 'consistency-issue-nav', 'aria-label': '问题列表'},
         ...issues.map((row, index) => element('button', {type: 'button',
@@ -1245,7 +1245,7 @@ function consistencyReportView(report) {
         element('span', {'aria-current': 'page'}, `第 ${page} / ${total} 条问题`),
         button('下一条', () => { state.consistencyIssuePage = page + 1; paint(); }, 'secondary', page === total)) : null,
     ), issues.length ? `共 ${issues.length} 条问题，每页 1 条。` : '未发现需要修复的问题。',
-    pill(verdicts[report.verdict], report.verdict !== 'consistent')));
+    pill(verdicts[report.verdict] || '核对完成', report.verdict !== 'consistent')));
   };
   paint();
   return root;
@@ -1455,7 +1455,7 @@ function outlineView() {
     '以当前世界观生成第一版大纲，分卷和剧情节点会一并保存。' : '需要先为项目设置唯一的当前世界观。', create);
   const versionSelect = element('select', {'aria-label': '大纲版本', change: (event) => loadOutline(Number(event.target.value))},
     state.outlines.map((row) => element('option', {value: row.id, selected: state.outline?.id === row.id},
-      `版本 ${row.version_no} · ${statusNames[row.status] ?? row.status}`)));
+      `版本 ${row.version_no} · ${statusNames[row.status] ?? '未知状态'}`)));
   const header = panel('大纲版本', state.outline ? details(['全书摘要', state.outline.summary],
     ['核心冲突', state.outline.central_conflict], ['主题', state.outline.themes]) : muted('正在读取大纲…'), null,
   actions(versionSelect, state.outline ? mutationButton('重写大纲', () => outlineRewriteDialog(state.outline), 'secondary',
@@ -1555,7 +1555,7 @@ function chapterView() {
     button('前往大纲与分卷', () => activate('outline'), 'primary'));
   const list = panel('章节目录', stack(element('div', {class: 'mini-list'}, page.items.map((item) =>
     selectedRow(`第 ${item.chapter_number} 章 · ${item.title || '未命名'}`,
-      `${statusNames[item.status] ?? item.status} · ${item.word_count ?? 0} 字`, state.chapterId === item.id, () => loadChapter(item.id)))),
+      `${statusNames[item.status] ?? '未知状态'} · ${item.word_count ?? 0} 字`, state.chapterId === item.id, () => loadChapter(item.id)))),
   page.offset || page.has_more ? element('div', {class: 'paging'},
     button('上一页', () => loadChapters(page.offset - pageSize, null), 'secondary', !page.offset || state.chapterLoading),
     `第 ${Math.floor(page.offset / pageSize) + 1} 页`,
@@ -1569,7 +1569,7 @@ function chapterView() {
   const canEdit = ['planned', 'draft'].includes(chapter.status);
   const section = panel(chapter.title || '未命名章节', stack(details(['章节规划', chapter.summary]), rule(),
     hasContent ? element('article', {class: 'reader', tabindex: 0, 'aria-label': '章节正文'}, chapter.content) : muted('正文还没开始。可以生成初稿，也可以手动写。')),
-  `第 ${chapter.chapter_number} 章 · ${statusNames[chapter.status] ?? chapter.status} · ${chapter.word_count ?? 0} 字`, actions(
+  `第 ${chapter.chapter_number} 章 · ${statusNames[chapter.status] ?? '未知状态'} · ${chapter.word_count ?? 0} 字`, actions(
     !hasContent && chapter.status === 'planned' ? mutationButton('生成正文', () => draftDialog(chapter), 'primary', state.busy || state.worlds.length !== 1) : null,
     hasContent ? mutationButton('重写正文', () => draftDialog(chapter, true), 'primary', state.busy || state.worlds.length !== 1) : null,
     canEdit ? mutationButton('编辑章节', () => editDialog(chapter), 'secondary', state.busy) : null,

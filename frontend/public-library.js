@@ -66,7 +66,7 @@ function shelf(page, offset) {
       node('h1', {}, '公共书架'), node('p', {}, '作者发布的故事都在这里，无需登录即可阅读。')),
     node('section', {class: 'public-grid', 'aria-label': '已发布书籍'}, page.items.length ? page.items.map(book =>
       node('article', {class: 'panel public-book'}, node('h2', {}, book.title),
-        muted(`${book.author} · ${book.genre} · ${names[book.status] || book.status}`),
+        muted(`${book.author} · ${book.genre} · ${names[book.status] || '未知状态'}`),
         node('p', {class: 'book-synopsis'}, book.premise || '作者尚未填写简介。'),
         muted(`${book.chapter_count} 章 · 更新于 ${date(book.updated_at)}`),
         link('阅读书籍', {book: book.id}, 'button primary'))) :

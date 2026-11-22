@@ -97,13 +97,9 @@ export async function watchGeneration(url, onEvent, {signal} = {}) {
 // The same incremental view is used by the worldbuilding and writing dialogs.
 export function createGenerationView(root) {
   const output = root.querySelector('.generation-output');
-  const thinking = root.querySelector('.generation-thinking');
-  const thinkingOutput = thinking.querySelector('pre');
   const status = root.querySelector('[role="status"]');
   let text = '';
-  let thinkingText = '';
   let characters = 0;
-  let thinkingCharacters = 0;
   let frame = null;
   let revealOutput = false;
 
@@ -113,12 +109,16 @@ export function createGenerationView(root) {
     if (pinned) node.scrollTop = node.scrollHeight;
   }
 
+  function structured() {
+    const head = text.trimStart();
+    return head.startsWith('{') || head.startsWith('[');
+  }
+
   function flush() {
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
-    thinking.hidden = !thinkingText;
-    render(thinkingOutput, thinkingText);
-    render(output, formatGenerationText(text) || (thinkingText ? '模型正在思考，正文将实时显示在这里…' : '等待模型返回内容…'));
+    const formatted = structured() ? '' : formatGenerationText(text);
+    render(output, formatted || (structured() ? '正在生成结构化内容，完成后展示结果…' : '等待模型返回内容…'));
     if (revealOutput) {
       (text ? output : root).scrollIntoView({block: 'nearest'});
       revealOutput = false;
@@ -129,25 +129,21 @@ export function createGenerationView(root) {
     hide() {
       if (frame !== null) cancelAnimationFrame(frame);
       frame = null;
-      text = thinkingText = '';
-      characters = thinkingCharacters = 0;
+      text = '';
+      characters = 0;
       revealOutput = false;
-      output.textContent = thinkingOutput.textContent = status.textContent = '';
-      thinking.hidden = true;
+      output.textContent = status.textContent = '';
       root.hidden = true;
       root.setAttribute('aria-busy', 'false');
     },
     begin() {
       text = '';
-      thinkingText = '';
       characters = 0;
-      thinkingCharacters = 0;
       root.hidden = false;
       root.dataset.state = 'running';
       root.setAttribute('aria-busy', 'true');
       status.textContent = '正在连接模型…';
-      thinking.open = true;
-      output.scrollTop = thinkingOutput.scrollTop = 0;
+      output.scrollTop = 0;
       flush();
       revealOutput = true;
       frame = requestAnimationFrame(flush);
@@ -155,25 +151,16 @@ export function createGenerationView(root) {
     event(event, data) {
       if (event === 'snapshot') {
         text = data.text || '';
-        thinkingText = data.thinking || '';
         characters = Array.from(text).length;
-        thinkingCharacters = Array.from(thinkingText).length;
         status.textContent = data.message || '正在生成…';
         if (data.truncated) status.textContent += ' · 仅显示最近生成的内容';
         flush();
-      } else if (event === 'thinking' || event === 'delta') {
+      } else if (event === 'delta') {
         if (typeof data.text !== 'string' || !data.text) return;
-        if (event === 'thinking') {
-          if (!thinkingText) revealOutput = true;
-          thinkingText += data.text;
-          thinkingCharacters += Array.from(data.text).length;
-          status.textContent = `思考中 · 已接收 ${thinkingCharacters} 字符`;
-        } else {
-          if (!text) revealOutput = true;
-          text += data.text;
-          characters += Array.from(data.text).length;
-          status.textContent = `正在生成 · 已接收 ${characters} 字符`;
-        }
+        if (!text) revealOutput = true;
+        text += data.text;
+        characters += Array.from(data.text).length;
+        status.textContent = `正在生成 · 已接收 ${characters} 字符`;
         if (frame === null) frame = requestAnimationFrame(flush);
       } else if (event === 'status') status.textContent = data.message;
     },
@@ -184,7 +171,7 @@ export function createGenerationView(root) {
       root.setAttribute('aria-busy', 'false');
     },
     isEmpty() {
-      return !text && !thinkingText;
+      return !text || structured();
     },
     fail(message) {
       flush();
@@ -207,13 +194,35 @@ const fieldNames = {title: '标题', name: '名称', genre: '小说类型', sett
   central_conflict: '核心冲突', themes: '主题', main_conflict: '主要冲突', climax: '高潮', ending_hook: '结尾悬念',
   foreshadowing: '伏笔', content: '正文', evidence: '文中依据', suggestion: '修改建议', verdict: '审读结论',
   quote: '原文引文', explanation: '偏移说明', kind: '对照类型', field: '对照字段',
-  actions: '本章行动与结果', current_state: '截至本章状态', discussion_hook: '话题点'};
+  actions: '本章行动与结果', current_state: '截至本章状态', discussion_hook: '话题点',
+  chapter: '章节', chapters: '章节', chapter_id: '章节编号', chapter_number: '章节序号', chapter_count: '章节数',
+  start_chapter: '起始章号', volume: '分卷', volumes: '分卷', volume_id: '分卷编号', volume_ids: '分卷编号',
+  outline: '大纲', outline_id: '大纲编号', project: '小说', project_id: '小说编号', job_id: '任务编号',
+  record_id: '档案编号', basis: '对照依据', issues: '问题', references: '引用档案', reference_materials: '对照档案',
+  beats: '剧情节点', cast: '本卷角色', characters: '角色', character_ids: '角色编号', counts: '数量',
+  persistence: '保存结果', warning: '提示', version_no: '大纲版本', completed_count: '完成章节数',
+  updated_count: '更新数量', word_count: '字数', audience: '读者', risks: '风险', requirement_summary: '需求概括'};
+
+const valueNames = {ready: '可用', revise: '建议修改', protagonist: '主角', important: '重要配角', supporting: '配角',
+  consistent: '未发现明确偏移', drifted: '发现偏移', insufficient: '资料不足',
+  plot: '剧情', character: '人物', world: '世界观', continuity: '章节衔接',
+  minor: '细节建议', major: '主要问题',
+  chapter: '章节', plot_beat: '剧情节点', volume: '分卷', outline: '大纲', project: '小说设定',
+  character_relationship: '人物关系', volume_character: '本卷戏份', region: '地域档案',
+  power_system: '力量体系', power_rank: '力量等级', cheat_system: '金手指设定', faction: '势力档案',
+  content: '正文', summary: '概要', abilities: '能力', limitations: '限制', capabilities: '能力范围',
+  description: '描述', scenes: '戏份安排', relationship_type: '关系类型', functions: '功能', costs: '代价',
+  growth_rules: '成长规则', breakthrough_condition: '突破条件', source: '力量来源', growth_path: '成长路径',
+  story_secret: '剧情秘密', territory: '领地', status: '人物状态',
+  planned: '已规划', draft: '草稿', running: '进行中', completed: '已完成', failed: '未完成'};
 
 export function formatGenerationText(text) {
+  // 结构化内容只显示中文进度提示，不把字段名和枚举值直接铺到页面上。
+  if (/^\s*[\[{]/.test(text)) return '';
   const entries = [];
   const fields = /"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\[\s\S]|[^"\\])*)/g;
   for (const match of text.matchAll(fields)) {
-    const label = fieldNames[match[1]] || match[1];
+    const label = fieldNames[match[1]] || '相关内容';
     let raw = match[2];
     let value;
     // An incomplete unicode escape may be at the end of the current packet.
@@ -221,9 +230,7 @@ export function formatGenerationText(text) {
       try { value = JSON.parse(`"${raw}"`); break; }
       catch { raw = raw.slice(0, -1); }
     }
-    if (value) entries.push(`${label}\n${({ready: '可用', revise: '建议修改', protagonist: '主角', important: '重要配角', supporting: '配角',
-      consistent: '所选范围未发现明确偏移', drifted: '发现偏移', insufficient: '资料不足',
-      plot: '剧情', character: '人物', world: '世界观', continuity: '章节衔接', minor: '细节建议', major: '主要问题'})[value] ?? value}`);
+    if (value) entries.push(`${label}\n${valueNames[value] ?? value}`);
   }
   return entries.join('\n\n') || text;
 }

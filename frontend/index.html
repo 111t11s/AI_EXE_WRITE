@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#212b25">
   <title>墨间 · 小说工作台</title>
-  <link rel="stylesheet" href="/workbench.css?v=consistency-issues-20261122">
+  <link rel="stylesheet" href="/workbench.css?v=no-thinking-20261123">
   <script src="/runtime-config.js?v=outline-skills-20261114"></script>
   <script type="importmap">
     {"imports": {
-      "/workbench.js": "/workbench.js?v=consistency-issues-20261122",
+      "/workbench.js": "/workbench.js?v=no-thinking-20261123",
       "/api-client.js": "/api-client.js?v=character-progress-20261116",
-      "/generation-stream.js": "/generation-stream.js?v=trends-brief-20261122"
+      "/generation-stream.js": "/generation-stream.js?v=no-thinking-20261123"
     }}
   </script>
   <script defer src="/bootstrap.js?v=outline-skills-20261114"></script>
@@ -49,7 +49,6 @@
         <p class="muted">离开此页面后任务仍会继续，可随时回来查看。</p>
         <section class="generation-stream" id="task-progress-stream" aria-label="实时生成内容">
           <div class="generation-head"><strong>实时生成</strong><span class="muted" role="status"></span></div>
-          <details class="generation-thinking" hidden open><summary>模型思考</summary><pre tabindex="0" aria-label="模型实时返回的思考内容"></pre></details>
           <pre class="generation-output" tabindex="0" aria-label="模型正在生成的内容"></pre>
         </section>
         <div class="actions progress-actions"><button class="button secondary" type="button" id="reconnect-progress" hidden>重新连接进度</button></div>
