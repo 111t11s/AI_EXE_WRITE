@@ -9,8 +9,10 @@ const statusNames = {planning: '规划中', writing: '写作中', completed: '�
 const labels = {genre: '小说类型', setting: '时代与背景', power_system: '力量体系', cheat: '金手指',
   protagonist: '主角设定', goal: '主角目标', tone: '故事基调', length: '篇幅规划'};
 const pageSize = 15;
+// 分卷目录每页显示的卷数；分卷详情在固定高度的卡片内滚动。
+const volumePageSize = 3;
 const initialState = () => ({projects: [], project: null, libraryOwner: 'all', worlds: [], outlines: [], tab: 'overview',
-  outline: null, volumes: null, volume: null, beats: null, page: null, chapter: null, chapterId: null,
+  outline: null, volumes: null, volume: null, volumePage: 0, beats: null, page: null, chapter: null, chapterId: null,
   characters: null, characterProfiles: null, characterProgress: null, characterError: null, characterLoading: false, characterOutlineId: null,
   consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
   consistencyOutlineId: null, consistencyReport: null,
@@ -440,12 +442,17 @@ function renderLibrary() {
   $('library-owner').value = state.libraryOwner;
   const projects = state.projects.filter(project => !account?.is_admin || state.libraryOwner === 'all' ||
     String(project.account_id ?? 'unassigned') === state.libraryOwner);
-  const projectButton = project => element('button',
-    {type: 'button', class: 'project-link', 'aria-current': String(state.project?.id === project.id),
-      disabled: state.busy, click: () => openProject(project.id)},
-    element('span', {class: 'project-badge', 'aria-hidden': 'true'}, Array.from(project.title || '未')[0]),
-    element('span', {}, element('strong', {}, project.title || '未命名小说'),
-      element('small', {}, `${account?.is_admin ? `${project.genre || '小说'} · ${projectOwner(project)}` : project.genre || '小说'}${project.is_public ? ' · 已公开' : ''}`)));
+  const projectButton = project => {
+    const name = project.title || '未命名小说';
+    const subtitle = `${account?.is_admin ? `${project.genre || '小说'} · ${projectOwner(project)}` : project.genre || '小说'}${project.is_public ? ' · 已公开' : ''}`;
+    // The rail truncates long titles; the tooltip always shows the whole entry.
+    return element('button',
+      {type: 'button', class: 'project-link', title: `${name} · ${subtitle}`,
+        'aria-current': String(state.project?.id === project.id),
+        disabled: state.busy, click: () => openProject(project.id)},
+      element('span', {class: 'project-badge', 'aria-hidden': 'true'}, Array.from(name)[0]),
+      element('span', {}, element('strong', {}, name), element('small', {}, subtitle)));
+  };
   if (!projects.length) {
     $('projects').replaceChildren(element('p', {class: 'rail-note'},
       state.libraryError ? '书架读取失败，点击刷新重试。' : '还没有小说项目。'));
@@ -981,13 +988,16 @@ function profileProgress(progress) {
 async function loadOutline(id, preferredVolume) {
   const token = key('outline');
   key('volume');
-  Object.assign(state, {outline: state.outlines.find((row) => row.id === id), volumes: null, volume: null, beats: null, outlineError: null});
+  Object.assign(state, {outline: state.outlines.find((row) => row.id === id), volumes: null, volume: null, volumePage: 0,
+    beats: null, outlineError: null});
   render();
   try {
     const volumes = await allRows('/outline-volumes', {outline_id: id});
     if (!current('outline', token)) return;
     state.volumes = volumes;
     const next = volumes.find((item) => item.id === preferredVolume) ?? volumes[0];
+    // Keep the requested volume visible by opening the page that contains it.
+    state.volumePage = next ? Math.floor(volumes.indexOf(next) / volumePageSize) : 0;
     if (next) await loadVolume(next.id);
     else render();
   } catch (error) {
@@ -997,6 +1007,8 @@ async function loadOutline(id, preferredVolume) {
 
 async function loadVolume(id) {
   const token = key('volume');
+  const index = state.volumes.findIndex((item) => item.id === id);
+  if (index >= 0) state.volumePage = Math.floor(index / volumePageSize);
   Object.assign(state, {volume: state.volumes.find((item) => item.id === id), beats: null, volumeCast: null, volumeError: null});
   render();
   try {
@@ -1027,20 +1039,48 @@ function outlineView() {
   if (state.outlineError) return stack(header, empty('分卷读取失败', state.outlineError, button('重试', () => loadOutline(state.outline.id))));
   if (!state.volumes) return stack(header, empty('正在读取分卷', '请稍候。'));
   if (!state.volumes.length) return stack(header, empty('这一版没有分卷', '可生成新大纲，或通过接口补充分卷。'));
-  const volumeList = panel('分卷目录', element('div', {class: 'mini-list'}, state.volumes.map((item) =>
-    selectedRow(`第 ${item.volume_number} 卷 · ${item.title}`, null, state.volume?.id === item.id, () => loadVolume(item.id)))));
+  const total = state.volumes.length;
+  const pageCount = Math.max(1, Math.ceil(total / volumePageSize));
+  const pageIndex = Math.min(Math.max(state.volumePage ?? 0, 0), pageCount - 1);
+  const first = pageIndex * volumePageSize;
+  const pageVolumes = state.volumes.slice(first, first + volumePageSize);
+  const goToVolumePage = (target) => {
+    const nextPage = Math.min(Math.max(target, 0), pageCount - 1);
+    if (nextPage === pageIndex) return;
+    // A page always shows its first volume so the detail pane matches the list.
+    const volume = state.volumes[nextPage * volumePageSize];
+    if (volume) loadVolume(volume.id);
+    else { state.volumePage = nextPage; render(); }
+  };
+  const volumeList = panel('分卷目录', stack(
+    element('div', {class: 'mini-list'}, pageVolumes.map((item) =>
+      selectedRow(`第 ${item.volume_number} 卷 · ${item.title}`, null, state.volume?.id === item.id, () => loadVolume(item.id)))),
+    element('div', {class: 'paging outline-paging'},
+      button('上一页', () => goToVolumePage(pageIndex - 1), 'secondary', pageIndex === 0),
+      `第 ${pageIndex + 1} / ${pageCount} 页 · 共 ${total} 卷`,
+      button('下一页', () => goToVolumePage(pageIndex + 1), 'secondary', pageIndex >= pageCount - 1))));
   const v = state.volume;
   const beats = state.volumeError ? stack(muted(state.volumeError), button('重试节点', () => loadVolume(v.id))) : state.beats === null ?
     muted('正在读取剧情节点…') : state.beats.length ? element('ol', {class: 'numbered'}, state.beats.map((beat) =>
       element('li', {}, element('strong', {}, beat.title), prose(beat.summary), beat.foreshadowing ? prose(`伏笔：${beat.foreshadowing}`) : null))) : muted('这一卷暂无剧情节点。');
-  const detail = v ? panel(v.title, stack(details(['分卷摘要', v.summary], ['主角目标', v.protagonist_goal], ['主要冲突', v.main_conflict],
-    ['高潮', v.climax], ['结尾悬念', v.ending_hook]), rule(), element('h3', {}, '剧情节点'), beats,
-    state.volumeCast?.length ? stack(rule(), element('h3', {}, '本卷角色阶段档案'),
-      ...state.volumeCast.map(row => stack(element('strong', {}, row.name), prose(row.scenes)))) : null), `第 ${v.volume_number} 卷`,
-  actions(mutationButton('生成本卷配角', () => supportingCharacterDialog(v), 'secondary', state.busy || state.worlds.length !== 1),
-    mutationButton('生成已有角色阶段档案', () => characterProfileDialog(v), 'secondary', state.busy || state.worlds.length !== 1),
-    mutationButton('规划章节 →', () => planDialog(v), 'primary', state.busy || state.worlds.length !== 1))) : empty('请选择分卷', '打开一卷查看剧情节点。');
+  const detail = v ? outlineDetail(v, beats) : empty('请选择分卷', '打开一卷查看剧情节点。');
   return stack(header, element('div', {class: 'layout reading'}, volumeList, detail));
+}
+
+function outlineDetail(volume, beats) {
+  const cast = state.volumeCast?.length ? stack(rule(), element('h3', {}, '本卷角色阶段档案'),
+    ...state.volumeCast.map(row => stack(element('strong', {}, row.name), prose(row.scenes)))) : null;
+  const section = panel(volume.title, element('div', {class: 'outline-detail-body', tabindex: 0},
+    stack(details(['分卷摘要', volume.summary], ['主角目标', volume.protagonist_goal], ['主要冲突', volume.main_conflict],
+      ['高潮', volume.climax], ['结尾悬念', volume.ending_hook]), rule(), element('h3', {}, '剧情节点'), beats, cast)),
+  `第 ${volume.volume_number} 卷`,
+  actions(mutationButton('生成本卷配角', () => supportingCharacterDialog(volume), 'secondary', state.busy || state.worlds.length !== 1),
+    mutationButton('生成已有角色阶段档案', () => characterProfileDialog(volume), 'secondary', state.busy || state.worlds.length !== 1),
+    mutationButton('规划章节 →', () => planDialog(volume), 'primary', state.busy || state.worlds.length !== 1)));
+  // The card keeps a fixed height; only the body scrolls, so the title and
+  // actions stay reachable while long summaries or beat lists scroll inside.
+  section.classList.add('outline-detail');
+  return section;
 }
 
 async function loadChapters(offset = 0, selectedId = state.chapterId) {

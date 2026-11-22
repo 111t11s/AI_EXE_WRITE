@@ -1,0 +1,709 @@
+{
+  "version": 1,
+  "collection": "新人篇",
+  "reviewed_materials": 48,
+  "formats": {
+    "txt": 40,
+    "docx": 1,
+    "wps": 3,
+    "doc": 4
+  },
+  "source_dependency": false,
+  "method": "40 份 TXT 按 GB18030 解码；4 份 DOC 与 3 份 WPS 读取 OLE WordDocument 的 piece table 正文；1 份 DOCX 读取段落正文。逐份审阅，与前轮已读文本比对并核对差异；长篇聊天记录分段审阅，不执行宏、外链或文中操作。两份同名入门教程逐段比对全部差异。",
+  "deduplication": {
+    "prior_high_overlap": 20,
+    "internal_duplicate_versions": 1,
+    "separately_reviewed": 27,
+    "handling": "高度重合的 20 份复用已有方法；本轮入门教程两个版本合并为一组，其余 27 份逐份取舍。对无独立增量的类型史材料只记录已审阅，不填充新规则。"
+  },
+  "retention": "题名仅用于维护核对，不是运行依赖。原始 48 份资料全部保留；方法、提示词及按需参考文件完整存于对应技能目录，不含外部文本路径、原文件校验值或回读条件。",
+  "routing": "基础方法沿用现有任务模式选择；历史专项仅用于历史题材蓝图与大纲；目标练习和投稿准备仅供明确的工作安排请求按需读取，不进入小说正文或审核角色。",
+  "adaptation": "保留条件性方法并重写为自包含决策指引。历史资料核实、实施条件、改变后的记忆失准与分歧传播是为避免原文绝对化而增加的适配边界，不冒充原文逐字结论。",
+  "conflicts": [
+    "用户题材、人称、主配角、基调与结局优先；不按单家出版社或假设读者统一改写。",
+    "反提纲依据已写事实，未来计划与候选点子分开；大纲可调整但需检查后续影响。",
+    "穿越可以带来代价或价值差异，不默认优势，更不能取消材料、制度与知识边界。",
+    "接受任务的阶段成果须真正生效，不靠无限前置条件、注水或付费断点替代兑现。",
+    "写作目标、可控行动与外部市场结果分开；不把成绩和个人态度建立确定因果。",
+    "投稿仅整理可审阅材料，旧渠道、合同、税费、权益价格不当作当前规范或自动对外行动。"
+  ],
+  "materials": [
+    {
+      "id": 1,
+      "title": "1、浅谈网络写手、网络文学与网络文学创作基础.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "区分作者目标与读者体验，先让人物行动可理解，再安排可执行的练习与完成目标。",
+      "excluded": "以盈利定义作者、固定百万字与日更配额、禁止悲剧和成功保证。",
+      "outputs": {
+        "webnovel-basics": [
+          "SKILL.md",
+          "references/plot-and-payoff.md"
+        ],
+        "serial-writing-workflow": [
+          "references/goals-and-practice.md"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "title": "2、给你的作品换件衣服，你会发现，你什么题材都可以写.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "题材迁移先识别人物问题，再按新世界的资源、制度和后果重新推演。",
+      "excluded": "题材只是换皮、所有主线都等于升级、角色必须符合单一气质及物化收集。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/long-form-planning.md"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "title": "3、网络小说完本的重要性和完本后如何开新书.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "阶段收束、完本复盘与下一部选择由用户目标和实际稿件决定。",
+      "excluded": "不完本不进步、禁止续集与旧题材销量断言。",
+      "outputs": {
+        "serial-writing-workflow": [
+          "SKILL.md"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "title": "4、如果让你优化你的前六万字作品，你打算从几个方面入手？.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "从已写开头提取实际主线，先核对准备、行动和人物辨识度，再修表达。",
+      "excluded": "固定六万字窗口、姓名与形容词限额、单一性格及强制添加伏笔引子。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/feedback-and-revision.md",
+          "references/long-form-planning.md",
+          "references/characters.md"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "title": "5、速度，网络文学创作的唯一秘诀.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "区分初稿、可交付产能、发布速度与故事节奏，按实际能力安排。",
+      "excluded": "速度是唯一秘诀、固定日更与以注水增加产量。",
+      "outputs": {
+        "serial-writing-workflow": [
+          "SKILL.md"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "title": "6、如何抓住读者心理.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "从人物需求、阻力和变化建立阅读期待，奖励须有实际用途。",
+      "excluded": "通用读者心理定律、固定性别偏好与靠拖延诱导追读。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/plot-and-payoff.md",
+          "references/characters.md"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "title": "7、上架作品更新秘诀：凤头猪肚麒麟尾.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "阶段兑现、下一目标承接和支线返回后的实际影响；存稿覆盖已知缺口。",
+      "excluded": "把中段当灌水、付费掐断、固定更新配额及副本字数、必得奖励与物化角色。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/plot-and-payoff.md",
+          "references/long-form-planning.md"
+        ],
+        "serial-writing-workflow": [
+          "SKILL.md"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "title": "8、墨武讲课记录.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "按可观察能力与代价比较多体系，分层细化大纲；历史年表、人物状态与事件联系支持规划。",
+      "excluded": "完整聊天与联系方式、主角性别与后宫模板、固定字数与市场判断、复制他作关系和现实科学任意化。",
+      "outputs": {
+        "outline-xuanhuan": [
+          "SKILL.md"
+        ],
+        "outline-history": [
+          "SKILL.md"
+        ],
+        "webnovel-basics": [
+          "references/long-form-planning.md"
+        ],
+        "serial-writing-workflow": [
+          "references/goals-and-practice.md"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "title": "9、写作目的和心态的问题.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "目标决定取舍，把外部成绩与可执行行动分开；大纲、反馈和阶段复盘辅助推进。",
+      "excluded": "收入比例与成功者归因、抽鞭子式补更、未完稿不准改、万能引子和牺牲配角破局。",
+      "outputs": {
+        "serial-writing-workflow": [
+          "references/goals-and-practice.md",
+          "SKILL.md"
+        ],
+        "webnovel-basics": [
+          "references/long-form-planning.md",
+          "references/feedback-and-revision.md"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "title": "10、网络小说大纲和细纲的作用.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "大纲作可调整的记忆与决策辅助，从已写章反提行动结果简记，再规划下一段。",
+      "excluded": "固定摘要字数、速度收益、所有故事必须升级及全文一次规划到位。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/long-form-planning.md"
+        ],
+        "serial-writing-workflow": [
+          "references/goals-and-practice.md"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "title": "11、从标题党看网络文学创作手法中的诱惑性创作(1).txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "标题、简介和正文对应同一真实承诺，信息留白有边界。",
+      "excluded": "擦边标题欺骗、蹭名、故意误导与无关情节拖延。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/title-and-introduction.md",
+          "references/plot-and-payoff.md"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "title": "12、剖析网络游戏的卖点，讲解网络小说创作利用网游模式写作方法.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "成长、资源、冲突与支线相互提供条件，新阶段改变行动选择。",
+      "excluded": "游戏五要素普适化、把人才当装备、灌水副本、无限循环与必火结论。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/plot-and-payoff.md",
+          "references/long-form-planning.md"
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "title": "13、网络文学创作的几个误区.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "明确目标、保持因果和知情边界，人物行动不被套路清单替代。",
+      "excluded": "固定人称和出场人数、禁止慢热与全部读者口味一致的断言。",
+      "outputs": {
+        "webnovel-basics": [
+          "SKILL.md",
+          "references/characters.md",
+          "references/viewpoint-and-language.md",
+          "references/plot-and-payoff.md"
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "title": "14、网络文学实体书出版的那些事儿.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "稿件可读性、阶段承诺和投稿对象适配分别处理，准备材料便于审阅。",
+      "excluded": "旧出版社名单、税率稿酬、出版路线优劣与自动成功保证，强制力量等级。",
+      "outputs": {
+        "serial-writing-workflow": [
+          "references/submission-preparation.md"
+        ],
+        "webnovel-basics": [
+          "references/viewpoint-and-language.md",
+          "references/plot-and-payoff.md"
+        ]
+      }
+    },
+    {
+      "id": 15,
+      "title": "15、顺眼——谈文章的画面感.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "按行动、话题与观察重点分段，选择有效细节建立画面。",
+      "excluded": "屏幕行数、句段硬限制、未经证实的生理解释和全体读者扫读比例。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/viewpoint-and-language.md"
+        ]
+      }
+    },
+    {
+      "id": 16,
+      "title": "17、文笔在网络文学创作上的作用.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "准确语言和适量细节服务当前体验。",
+      "excluded": "文笔无用或越华丽越好、固定错字比例、靠堆字形成文笔。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/viewpoint-and-language.md"
+        ]
+      }
+    },
+    {
+      "id": 17,
+      "title": "17编辑讲课记录.docx",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "作品展示元素对应实际内容，记录世界规则与人物状态；带问题阅读并做自己的练习。",
+      "excluded": "固定网文包装与改名成绩因果、只保留好评、名字必火、救人即得爱情和拼贴摘录。",
+      "outputs": {
+        "serial-writing-workflow": [
+          "references/submission-preparation.md",
+          "references/goals-and-practice.md"
+        ],
+        "webnovel-basics": [
+          "references/title-and-introduction.md",
+          "references/characters.md",
+          "references/plot-and-payoff.md"
+        ],
+        "outline-xuanhuan": [
+          "SKILL.md"
+        ]
+      }
+    },
+    {
+      "id": 18,
+      "title": "18、创作会经常遇到的问题.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "有限范围查找卡文原因与后续影响，按目标修订，不扩大清空故事。",
+      "excluded": "盲目换地图、清除人物、无理由削弱能力和历史成绩推断。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/long-form-planning.md",
+          "references/feedback-and-revision.md"
+        ]
+      }
+    },
+    {
+      "id": 19,
+      "title": "19、从信昌出版社出版要求，分析网络文学创作.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "先交代理解行动所需信息，详略服务场景；接收方偏好作为具体投稿条件。",
+      "excluded": "单家出版偏好泛化、禁止悲剧推理武侠等类型、固定对白比例、旧市场趋势及成绩保证。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/plot-and-payoff.md",
+          "references/viewpoint-and-language.md"
+        ],
+        "serial-writing-workflow": [
+          "references/submission-preparation.md"
+        ]
+      }
+    },
+    {
+      "id": 20,
+      "title": "20、仙侠类题材作品的创作要点及卖点.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "长期求道与短期行动衔接，制作过程的选择、用途和代价支持成长。",
+      "excluded": "东方纯度禁令、必须制造收集、市场疲软断言、以天劫强制道德报应及物化角色。",
+      "outputs": {
+        "outline-xianxia": [
+          "SKILL.md"
+        ],
+        "webnovel-basics": [
+          "references/plot-and-payoff.md"
+        ]
+      }
+    },
+    {
+      "id": 21,
+      "title": "22、期待感，让你的作品能够引人入胜.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "长短目标互相支持，前置任务完成后给予真实用途和阶段兑现。",
+      "excluded": "把悬念伏笔目标混为一谈、反复附加条件、强制复仇创伤与永远不兑现。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/plot-and-payoff.md",
+          "references/conflict-and-foreshadowing.md"
+        ]
+      }
+    },
+    {
+      "id": 22,
+      "title": "23、网文分段技巧详谈.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "依语义、发言人和行动变化组织段落，保留可读的因果。",
+      "excluded": "固定行数与字数、错用单复句定义和机械拆句。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/viewpoint-and-language.md"
+        ]
+      }
+    },
+    {
+      "id": 23,
+      "title": "25、都市类小说类的创作要点.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "从具体遗憾或愿望建立都市重生动机，改变记忆时间跨度后推演条件与后果。",
+      "excluded": "以年龄阶层定义读者欲望、暴力与后宫当通用爽点、注水和固定日更。",
+      "outputs": {
+        "outline-urban": [
+          "SKILL.md"
+        ],
+        "serial-writing-workflow": [
+          "references/goals-and-practice.md"
+        ]
+      }
+    },
+    {
+      "id": 24,
+      "title": "26、如何用性格突出角色，用角色吸引读者.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "少量可辨认特征在行动中反复变化，人物变化有触发和过渡。",
+      "excluded": "性格标签复读、固定角色数、外貌形容词限额和只许由坏变好。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/characters.md"
+        ]
+      }
+    },
+    {
+      "id": 25,
+      "title": "27、你为什么穿越，你凭什么穿越？.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "穿越持续影响知识、价值判断、关系与代价；跨体系应用受当地条件制约。",
+      "excluded": "穿越者天然优越、现代知识万能、以穿越解释任何越界、伪科学成因和固定前世篇幅。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/long-form-planning.md",
+          "references/plot-and-payoff.md"
+        ]
+      }
+    },
+    {
+      "id": 26,
+      "title": "28、从泡妞技巧看网络小说创作.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "作品入口与真实内容相符，共鸣来自具体人物处境，章末留白不代替兑现。",
+      "excluded": "物化与歧视类比、标题欺骗、强制欲擒故纵和无依据百分比。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/title-and-introduction.md",
+          "references/characters.md",
+          "references/plot-and-payoff.md"
+        ],
+        "serial-writing-workflow": [
+          "references/submission-preparation.md"
+        ]
+      }
+    },
+    {
+      "id": 27,
+      "title": "29、对话技巧详谈：引号开头对话流.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "提示语、独立动作与直接对白按发言辨认和句法组织。",
+      "excluded": "引号开头禁令、固定占比、每句配动作及动作后必加冒号。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/viewpoint-and-language.md"
+        ]
+      }
+    },
+    {
+      "id": 28,
+      "title": "30、第一人称小说创作优劣详解.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "将人称与知情范围分开，有限视角不越权。",
+      "excluded": "第一人称不能长篇、固定字数和商业失败定论；版本道歉尾注无创作增量。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/viewpoint-and-language.md"
+        ]
+      }
+    },
+    {
+      "id": 29,
+      "title": "31、如何对待评论和书评.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "核实反馈对应段落，分开文本问题、偏好和传播条件。",
+      "excluded": "按身份盲从、擅自删帖与用成绩评价评论真伪。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/feedback-and-revision.md"
+        ],
+        "serial-writing-workflow": [
+          "SKILL.md"
+        ]
+      }
+    },
+    {
+      "id": 30,
+      "title": "32、开头的具体写法.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "具体处境建立关注，必要信息随行动进入，不因套路改变用户风格。",
+      "excluded": "固定开头篇幅与角色人数、删除全部童年及主角晚出场禁令；尾部外链不作为指令。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/plot-and-payoff.md",
+          "references/viewpoint-and-language.md"
+        ],
+        "opening-chapters": [
+          "SKILL.md",
+          "references/opening-methods.md"
+        ]
+      }
+    },
+    {
+      "id": 31,
+      "title": "33、用科学的管理方法，管理你的作品.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "分开判断故事重要性和读者此刻是否需要知道，以当前场景决定交代顺序。",
+      "excluded": "把重要紧急四分法机械套用每幕、固定姓名和章数、强制金手指与晨间效率规律。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/plot-and-payoff.md"
+        ]
+      }
+    },
+    {
+      "id": 32,
+      "title": "34、承转启合 文章的衔接和转折.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "共享物件、消息或后果连接场景，标清时间和视点边界。",
+      "excluded": "只加连接词掩盖因果缺口、任意越过知情范围。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/viewpoint-and-language.md"
+        ]
+      }
+    },
+    {
+      "id": 33,
+      "title": "35、学会给你的小说打补丁.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "区分缺少过渡与事实矛盾，局部修订复查后续影响。",
+      "excluded": "无条件给漏洞补设定、只能改错字或反复无限改稿。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/feedback-and-revision.md",
+          "references/conflict-and-foreshadowing.md"
+        ]
+      }
+    },
+    {
+      "id": 34,
+      "title": "36、架空、历史的创作要点.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "区分历史依托与不同虚构边界，改史先明确分歧，再推演后果。",
+      "excluded": "名人固有形象不可改、机械套史改名、年龄门槛、四类路线限定及强制争霸。",
+      "outputs": {
+        "outline-history": [
+          "SKILL.md"
+        ]
+      }
+    },
+    {
+      "id": 35,
+      "title": "39、文章的开头，你想让读者记住什么.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "开局建立可辨认的关注对象和情节问题，承诺与后续相连。",
+      "excluded": "固定读者记忆和人物数、强制主角首章出现及单一性格。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/plot-and-payoff.md",
+          "references/characters.md"
+        ],
+        "opening-chapters": [
+          "SKILL.md"
+        ]
+      }
+    },
+    {
+      "id": 36,
+      "title": "40、网络小说的爽点是什么.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "需求、行动和兑现相连，区分发现与逆转，保留能力与关系的边界。",
+      "excluded": "大量固定桥段、物化奖励、资源永远独占、团灭和无条件打脸及商业保证。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/plot-and-payoff.md",
+          "references/characters.md",
+          "references/conflict-and-foreshadowing.md"
+        ]
+      }
+    },
+    {
+      "id": 37,
+      "title": "43、人物刻画的几点心得.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "目标、动机与经历支撑行为，移情不等于身份相同或道德赞同。",
+      "excluded": "固定人物模板、性别职能、每人经历齐全及照搬作品节选。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/characters.md"
+        ]
+      }
+    },
+    {
+      "id": 38,
+      "title": "44、如何在网络小说上架前后提升作品的吸引力.txt",
+      "prior_coverage": "前轮已审阅资料高度重合，核对差异后复用",
+      "retained": "开局与阶段承诺对应实际内容，张弛与有效变化支持连载。",
+      "excluded": "收费诱导、固定上架字数、爆更配额、求票广告和收益预测。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/plot-and-payoff.md",
+          "references/feedback-and-revision.md"
+        ],
+        "serial-writing-workflow": [
+          "SKILL.md"
+        ]
+      }
+    },
+    {
+      "id": 39,
+      "title": "关于小说写作.txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "选择聚焦细节与叙事形式来服务感受，避免手法反复遮蔽人物事件。",
+      "excluded": "个人文艺观绝对化、作家生平轶事当事实、哲学与生理假说、固定结局规划及大量引文。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/viewpoint-and-language.md"
+        ]
+      }
+    },
+    {
+      "id": 40,
+      "title": "初涉小说创作时要注意的一些问题.wps",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "人称与知情范围、风格与时代词语相互核对，真实典故注意出处与可知条件。",
+      "excluded": "第一人称长度禁令、第三人称等于全知、心理描写禁令、单主角九成笔墨及单一语言纯度。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/viewpoint-and-language.md",
+          "references/characters.md"
+        ],
+        "outline-history": [
+          "SKILL.md"
+        ]
+      }
+    },
+    {
+      "id": 41,
+      "title": "初识玄幻小说.doc",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "已完整审阅；以类型史、人物轶事、作品评论和互相冲突的分类为主，无独立可执行增量，不新增技能规则。",
+      "excluded": "未经核实的类型起源和文学史定论、读者年龄与民族偏好、销量与科技决定论、无原则创作论。",
+      "outputs": {}
+    },
+    {
+      "id": 42,
+      "title": "小说写作新手上路(基本写作教程).txt",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "朗读辅助检查语感与节拍；评价依照具体目标和文本效果，保留表达方式选择。",
+      "excluded": "强制通感与人物极端化、作品原句和词义拆解当语言学、文学价值绝对标准、权威营销。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/viewpoint-and-language.md",
+          "references/feedback-and-revision.md"
+        ]
+      }
+    },
+    {
+      "id": 43,
+      "title": "尾号五新人指南.doc",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "分清作品主线与真实看点，带具体材料和问题沟通，编辑意见由作者取舍。",
+      "excluded": "旧尾号分组、封面尺寸、合同流转、付款日期门槛、后台锁定及推荐流程。",
+      "outputs": {
+        "serial-writing-workflow": [
+          "references/submission-preparation.md",
+          "references/goals-and-practice.md"
+        ],
+        "webnovel-basics": [
+          "references/title-and-introduction.md",
+          "references/long-form-planning.md"
+        ]
+      }
+    },
+    {
+      "id": 44,
+      "title": "新人完美投稿计划.doc",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "明确署名、稿件信息、梗概与完成状态，规范章节和格式，按接收方要求组织沟通材料。",
+      "excluded": "真实联系方式复制、强制单文件与固定排版、个人信息越多越好、固定价格和权益让渡。",
+      "outputs": {
+        "serial-writing-workflow": [
+          "references/submission-preparation.md"
+        ]
+      }
+    },
+    {
+      "id": 45,
+      "title": "新手上路(基本写作教程).txt",
+      "prior_coverage": "与本轮《小说写作新手上路(基本写作教程)》版本重合，核对全部差异后复用",
+      "retained": "复用本轮入门教程中朗读与按表达目标评价的方法；差异仅标题、标点、书名字符和结尾叙述。",
+      "excluded": "不重复建立同一教程，排除原文引用、艺术判断定律和权威经营套路。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/viewpoint-and-language.md",
+          "references/feedback-and-revision.md"
+        ]
+      }
+    },
+    {
+      "id": 46,
+      "title": "新手写作经常出现的偏差.wps",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "投稿梗概说明目标、阻力、行为逻辑和结果，先修相关结构与可读性。",
+      "excluded": "题材未写过就是坏消息、亲友投票判道德、成功只属第一名、固定字数及刺激读者的比喻当操作。",
+      "outputs": {
+        "serial-writing-workflow": [
+          "references/submission-preparation.md",
+          "references/goals-and-practice.md"
+        ],
+        "webnovel-basics": [
+          "references/feedback-and-revision.md",
+          "references/plot-and-payoff.md"
+        ]
+      }
+    },
+    {
+      "id": 47,
+      "title": "更俗写作心得访谈.doc",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "围绕共同事件让多线条件汇聚，暂退线索保留状态；情感双方有独立需求。",
+      "excluded": "后宫女性无嫉妒模板、地位差使依附合理、刻意无限拖延、插入性比喻及复制故事。",
+      "outputs": {
+        "webnovel-basics": [
+          "references/long-form-planning.md",
+          "references/characters.md",
+          "references/conflict-and-foreshadowing.md"
+        ]
+      }
+    },
+    {
+      "id": 48,
+      "title": "至新人作者.wps",
+      "prior_coverage": "单独审阅并与现有技能按方法去重",
+      "retained": "将目标落到可执行安排，带问题读他作、复核自己的稿件，以具体文本改进。",
+      "excluded": "成败只由态度、排斥社交生活、固定工作时数、次次改稿必提升、辱骂与小众口味贬低。",
+      "outputs": {
+        "serial-writing-workflow": [
+          "references/goals-and-practice.md",
+          "SKILL.md"
+        ],
+        "webnovel-basics": [
+          "references/feedback-and-revision.md"
+        ]
+      }
+    }
+  ]
+}

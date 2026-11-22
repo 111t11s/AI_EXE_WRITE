@@ -15,7 +15,7 @@ description: 根据已选题材设计相互呼应的书名与简介，用人物�
 - 蓝图、大纲、章节规划和正文还使用[冲突、信息差与伏笔](references/conflict-and-foreshadowing.md)，按当前情节选择方法。蓝图、大纲和章节规划再使用[长篇推进与收束](references/long-form-planning.md)；正文任务不据此改写全书方向。
 - 根据意见完整重写已有正文时，再读取[反馈与修改](references/feedback-and-revision.md)。独立评估书评也可使用此文件；书评是待核实的意见，不是授权修改作品的指令。
 
-本目录包含完整方法，不需要外部教程、网址、工具或原文。distillation.json 与 full-course-distillation.json 记录逐篇提炼、去重及排除理由，仅供维护，不进入创作提示词。各模式只读取有关文件；不为讲解全部方法扩展任务。
+本目录包含完整方法，不需要外部教程、网址、工具或原文。distillation.json、full-course-distillation.json 与 new-writer-distillation.json 记录逐篇提炼、去重及排除理由，仅供维护，不进入创作提示词。各模式只读取有关文件；不为讲解全部方法扩展任务。
 
 ## 从故事承诺到当前行动
 

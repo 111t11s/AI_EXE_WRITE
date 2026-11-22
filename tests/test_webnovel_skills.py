@@ -117,6 +117,37 @@ def test_serial_workflow_is_portable_and_absent_from_creative_prompts(tmp_path, 
     assert body in prompt
     assert not any(value in prompt for value in ("meterials", "http://", "https://"))
 
+    # Optional workflows must remain usable after the whole skill is copied.
+    for reference in ("references/goals-and-practice.md", "references/submission-preparation.md"):
+        assert reference in prompt
+        selected = _skill_text(root, "serial-writing-workflow", ("SKILL.md", reference), "连载创作安排")
+        assert (root / reference).read_text(encoding="utf-8").strip() in selected
+        assert not any(value in selected for value in ("meterials", "http://", "https://"))
+
+
+def test_new_writer_review_accounts_for_all_sources_and_packaged_destinations():
+    root = skills.SKILL_ROOT
+    entry = json.loads((root / "distillation.json").read_text(encoding="utf-8"))
+    filename = "new-writer-distillation.json"
+    assert filename in entry["additional_reviews"]
+    review = json.loads((root / filename).read_text(encoding="utf-8"))
+    materials = review["materials"]
+    assert review["source_dependency"] is False
+    assert review["reviewed_materials"] == len(materials) == 48
+    assert len({item["id"] for item in materials}) == 48
+    assert len({item["title"] for item in materials}) == 48
+    assert review["formats"] == {"txt": 40, "doc": 4, "wps": 3, "docx": 1}
+    counts = review["deduplication"]
+    assert counts["prior_high_overlap"] + counts["internal_duplicate_versions"] + counts["separately_reviewed"] == 48
+    for item in materials:
+        assert item["prior_coverage"] and item["retained"] and item["excluded"]
+        for name, files in item["outputs"].items():
+            destination = root.parent / name
+            assert destination.is_dir() and files
+            for reference in files:
+                path = (destination / reference).resolve()
+                assert path.is_relative_to(destination.resolve()) and path.is_file()
+
 
 @pytest.mark.parametrize("reference,available,unavailable", [
     (skills.DEVELOPMENT, ("characters", "draft", "rewrite"), ("blueprint", "outline", "plan")),

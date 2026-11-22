@@ -48,5 +48,5 @@
     {"number": 16, "topic": "历史审核规定", "retained": "仅记录已审阅及不纳入自动创作或审核的边界，不转述为当前法律结论。", "excluded": "历史法规和平台尺度的直接复用、失效与否未经核实的法律结论、身份歧视及把法条转为小说生成指令。", "files": []},
     {"number": 17, "topic": "上架", "retained": "正文不夹杂广告与作者感言，开局有实际内容，阶段兑现后留下可持续的问题，强弱节奏交替。", "excluded": "收费诱导、固定上架字数、强制掐断高潮、爆更配额、促销求票、收益与销量承诺。", "files": ["SKILL.md", "references/plot-and-payoff.md", "references/feedback-and-revision.md"]}
   ],
-  "additional_reviews": ["full-course-distillation.json"]
+  "additional_reviews": ["full-course-distillation.json", "new-writer-distillation.json"]
 }

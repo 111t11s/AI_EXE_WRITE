@@ -44,6 +44,7 @@ SPECIALISTS = (
     OutlineSkill("outline-urban", "都市小说大纲设计技能", "事业推进、城市关系与利益冲突", ("都市",)),
     OutlineSkill("outline-wuxia", "武侠小说大纲设计技能", "江湖恩怨、师承与侠义选择", ("武侠",)),
     OutlineSkill("outline-xianxia", "仙侠小说大纲设计技能", "求道目标、修炼代价与宗门因果", ("仙侠", "修真", "修仙")),
+    OutlineSkill("outline-history", "历史与架空历史大纲设计技能", "事件年表、时代条件与历史分歧的后果", ("历史",)),
 )
 
 
