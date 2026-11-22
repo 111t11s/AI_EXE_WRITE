@@ -55,6 +55,7 @@ from api.novel_export_api import router as export_router
 from api.public_library_api import router as public_library_router
 from api.account_api import CurrentAccount, router as account_router
 from api.generation_jobs import router as jobs_router
+from api.model_api import router as model_router
 
 app = FastAPI(
     title="AI 小说工程 API",
@@ -91,6 +92,7 @@ def access(user: CurrentAccount):
 # 注册小说设定助手 API，并提供一个可直接操作的浏览器页面。
 app.include_router(assistant_router, prefix="/api/v1", tags=["小说设定助手"])
 app.include_router(account_router, prefix="/api/v1")
+app.include_router(model_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(public_library_router, prefix=CRUD_PREFIX)
 app.include_router(project_trash_router, prefix=CRUD_PREFIX)

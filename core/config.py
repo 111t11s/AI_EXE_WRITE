@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     QWEN_MODEL_NAME: str = "qwen3.6-plus"
     KIMI_MODEL_NAME: str = "kimi-k2.6"
 
+    # 可选模型配置：DeepSeek 使用独立密钥与地址，供生成时按需选择。
+    # 主模型仍使用 API_KEY / PROXY_URL / MODEL_NAME。
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_PROXY_URL: str = ""
+
     # 日志配置
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

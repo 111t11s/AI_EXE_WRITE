@@ -22,6 +22,7 @@ from agents.webnovel_skills import webnovel_skill_prompt
 from api.writing_schemas import OUTLINE_THEME_LABELS
 from core.config import get_settings
 from core.logging import get_logger
+from core.models import ModelProfileError, resolve_profile
 from db.models import NovelBlueprint
 
 
@@ -179,17 +180,22 @@ class WorldbuildingAssistant:
         state.history.append({"role": "assistant", "content": message})
         return message
 
-    async def confirm(self, state: ConversationState, outline_theme: str = "development") -> dict[str, Any]:
+    async def confirm(self, state: ConversationState, outline_theme: str = "development",
+                      model: str | None = None) -> dict[str, Any]:
         async with state.confirmation_lock:
             if state.result is not None:
                 return state.result
             if state.missing:
                 raise ValueError(f"还缺少：{SLOT_LABELS[state.missing[0]]}")
+            try:
+                profile = resolve_profile(model)
+            except ModelProfileError as exc:
+                raise WorldbuildingGenerationError(str(exc), status=422) from None
             state.confirmed = True
             state.outline_theme = outline_theme
             try:
                 blueprint = await run_in_threadpool(
-                    self._generate_with_crewai, {**state.values, "outline_theme": state.outline_theme})
+                    self._generate_with_crewai, {**state.values, "outline_theme": state.outline_theme}, profile)
             except WorldbuildingGenerationError as exc:
                 state.confirmed = False
                 state.generation_error = str(exc)
@@ -256,18 +262,22 @@ class WorldbuildingAssistant:
             return collect_chat_text(completion)
 
     @staticmethod
-    def _generate_with_crewai(values: dict[str, str]) -> NovelBlueprint:
+    def _generate_with_crewai(values: dict[str, str], profile=None) -> NovelBlueprint:
         """Generate and validate a blueprint before any database writes."""
         settings = get_settings()
-        if not settings.API_KEY.strip():
-            logger.warning("世界观生成失败：未配置模型 API 密钥")
-            raise WorldbuildingGenerationError("模型服务尚未配置，请联系管理员", status=503)
-        connection = {
-            "model": os.getenv("MODEL_NAME") or settings.DEEPSEEK_MODEL_NAME,
-            "api_key": settings.API_KEY,
-            "base_url": settings.PROXY_URL,
-            "timeout": settings.REQUEST_TIMEOUT or 120,
-        }
+        if profile is not None:
+            connection = profile.connection()
+            logger.info("世界观生成使用模型配置：%s（%s）", profile.id, profile.model)
+        else:
+            if not settings.API_KEY.strip():
+                logger.warning("世界观生成失败：未配置模型 API 密钥")
+                raise WorldbuildingGenerationError("模型服务尚未配置，请联系管理员", status=503)
+            connection = {
+                "model": os.getenv("MODEL_NAME") or settings.DEEPSEEK_MODEL_NAME,
+                "api_key": settings.API_KEY,
+                "base_url": settings.PROXY_URL,
+                "timeout": settings.REQUEST_TIMEOUT or 120,
+            }
         try:
             skill_prompt = outline_skill_prompt(values.get("genre"))
             skill_prompt += webnovel_skill_prompt("blueprint")

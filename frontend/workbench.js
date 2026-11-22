@@ -12,13 +12,14 @@ const pageSize = 15;
 // 分卷目录每页显示的卷数；分卷详情在固定高度的卡片内滚动。
 const volumePageSize = 3;
 const initialState = () => ({projects: [], project: null, libraryOwner: 'all', worlds: [], outlines: [], tab: 'overview',
-  outline: null, volumes: null, volume: null, volumePage: 0, beats: null, page: null, chapter: null, chapterId: null,
+  outline: null, volumes: null, volume: null, volumePage: 0, volumeChapters: null, beats: null, page: null, chapter: null, chapterId: null,
   characters: null, characterProfiles: null, characterProgress: null, characterError: null, characterLoading: false, characterOutlineId: null,
   consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
   consistencyOutlineId: null, consistencyReport: null,
   trash: null, trashLoading: false, trashError: null,
   taskCategory: 'all', taskProjectId: 'all', taskStatus: 'all', taskPage: 1, taskPageSize: 5,
   taskMenuOpen: false, tasksLoaded: false, tasksError: null,
+  modelOptions: [], modelChoice: '',
   busy: false, screen: 'project', reviews: new Map()});
 const state = initialState();
 let account = null;
@@ -887,6 +888,7 @@ function consistencySuggestionDialog(report, index, adopt = false) {
       '保存后可再次编辑；点击「采纳并修复」才会修改对应章节正文。',
     submit: adopt ? '采纳并开始修复' : '保存修复意见',
     fields: [{name: 'suggestion', label: '修复意见', type: 'textarea', value: issue.suggestion, rows: 7, maxlength: 4000, required: true}],
+    useModel: adopt,
     send: data => adopt ? post(`${path}/repair/tasks`, data) : api(path, {method: 'PATCH', data}),
     success: () => adopt ? '已采纳修复意见，正在后台修复对应章节。' : '修复意见已保存。',
     after: async receipt => {
@@ -989,7 +991,7 @@ async function loadOutline(id, preferredVolume) {
   const token = key('outline');
   key('volume');
   Object.assign(state, {outline: state.outlines.find((row) => row.id === id), volumes: null, volume: null, volumePage: 0,
-    beats: null, outlineError: null});
+    beats: null, volumeCast: null, volumeChapters: null, outlineError: null});
   render();
   try {
     const volumes = await allRows('/outline-volumes', {outline_id: id});
@@ -1009,19 +1011,22 @@ async function loadVolume(id) {
   const token = key('volume');
   const index = state.volumes.findIndex((item) => item.id === id);
   if (index >= 0) state.volumePage = Math.floor(index / volumePageSize);
-  Object.assign(state, {volume: state.volumes.find((item) => item.id === id), beats: null, volumeCast: null, volumeError: null});
+  Object.assign(state, {volume: state.volumes.find((item) => item.id === id), beats: null, volumeCast: null,
+    volumeChapters: null, volumeError: null});
   render();
   try {
-    const [beats, cast, characters] = await Promise.all([
+    const [beats, cast, characters, chapters] = await Promise.all([
       allRows('/plot-beats', {volume_id: id}), allRows('/volume-characters', {volume_id: id}),
-      allRows('/characters', {project_id: state.project.id})]);
+      allRows('/characters', {project_id: state.project.id}), allRows('/chapters', {volume_id: id})]);
     if (current('volume', token)) {
       state.beats = beats;
       state.characters = characters;
       state.volumeCast = cast.map(row => ({...row, name: characters.find(person => person.id === row.character_id)?.name || '角色已移除'}));
+      state.volumeChapters = chapters;
     }
   } catch (error) {
-    if (current('volume', token)) state.volumeError = error.message;
+    // A failed read must not hide the planning entry: fall back to no chapter data.
+    if (current('volume', token)) { state.volumeError = error.message; state.volumeChapters = []; }
   } finally { if (current('volume', token)) render(); }
 }
 
@@ -1070,13 +1075,19 @@ function outlineView() {
 function outlineDetail(volume, beats) {
   const cast = state.volumeCast?.length ? stack(rule(), element('h3', {}, '本卷角色阶段档案'),
     ...state.volumeCast.map(row => stack(element('strong', {}, row.name), prose(row.scenes)))) : null;
+  // Once a volume holds generated bodies, planning is done for it; only offer
+  // the entry while its chapters are still unplanned-or-unwritten.
+  const chapters = state.volumeChapters;
+  const planButton = chapters && !chapters.some(row => (row.content || '').trim())
+    ? mutationButton('规划章节 →', () => planDialog(volume), 'primary', state.busy || state.worlds.length !== 1)
+    : null;
   const section = panel(volume.title, element('div', {class: 'outline-detail-body', tabindex: 0},
     stack(details(['分卷摘要', volume.summary], ['主角目标', volume.protagonist_goal], ['主要冲突', volume.main_conflict],
       ['高潮', volume.climax], ['结尾悬念', volume.ending_hook]), rule(), element('h3', {}, '剧情节点'), beats, cast)),
   `第 ${volume.volume_number} 卷`,
   actions(mutationButton('生成本卷配角', () => supportingCharacterDialog(volume), 'secondary', state.busy || state.worlds.length !== 1),
     mutationButton('生成已有角色阶段档案', () => characterProfileDialog(volume), 'secondary', state.busy || state.worlds.length !== 1),
-    mutationButton('规划章节 →', () => planDialog(volume), 'primary', state.busy || state.worlds.length !== 1)));
+    planButton));
   // The card keeps a fixed height; only the body scrolls, so the title and
   // actions stay reachable while long summaries or beat lists scroll inside.
   section.classList.add('outline-detail');
@@ -1164,6 +1175,11 @@ const outlineThemeField = {name: 'outline_theme', label: '本版大纲主题', t
   {value: 'custom', label: '自定义主题（请在补充要求中说明）'},
 ]};
 const numberField = (name, label, value, min, max) => ({name, label, value, min, max, type: 'number', required: true});
+const modelChoices = () => state.modelOptions.map(item => ({value: item.id, label: `${item.label} · ${item.model}`}));
+const modelSelectable = () => state.modelOptions.length > 1;
+const modelField = () => ({name: 'model', label: '调用模型', type: 'select',
+  value: state.modelChoice || modelChoices()[0]?.value || '',
+  choices: modelChoices()});
 
 function openAction(options) {
   if (state.busy) return;
@@ -1172,7 +1188,9 @@ function openAction(options) {
   $('action-description').textContent = options.description;
   $('action-error').hidden = true;
   $('action-submit').textContent = options.submit;
-  $('action-fields').replaceChildren(...options.fields.map(({label, type, value, choices, change, ...attributes}, index) => {
+  // 只有配置了多个模型时才显示选择项，避免单模型部署多一个无意义的下拉。
+  const fields = options.useModel && modelSelectable() ? [...options.fields, modelField()] : options.fields;
+  $('action-fields').replaceChildren(...fields.map(({label, type, value, choices, change, ...attributes}, index) => {
     const input = type === 'select' ? element('select', {...attributes, change}, choices.map(choice =>
       element('option', {value: choice.value}, choice.label))) :
       type === 'textarea' ? element('textarea', attributes) : element('input', {...attributes, type});
@@ -1205,6 +1223,7 @@ $('action-form').addEventListener('submit', async (event) => {
     if (field.type === 'number') data[field.name] = Number(data[field.name]);
     else if (field.name !== 'content') data[field.name] = data[field.name].trim();
   }
+  if (data.model) state.modelChoice = String(data.model);
   $('action-error').hidden = true;
   setBusy(submitted.taskPath ? '正在提交后台任务…' : (submitted.pending || '正在保存…'));
   setActionBusy(true);
@@ -1247,6 +1266,7 @@ async function outlineDialog() {
   if (account !== requestingAccount || state.project?.id !== id) return;
   openAction({title: '生成新大纲', description: `根据当前世界观创建一个新版本，已有大纲会保留。${selection.notice}。`,
     submit: '生成并保存', fields: [numberField('volume_count', '分卷数', 3, 1, 5), outlineThemeField, noteField],
+    useModel: true,
     taskPath: `/writing/projects/${id}/outline/tasks`,
   });
 }
@@ -1373,6 +1393,7 @@ function outlineRewriteDialog(outline) {
   openAction({title: '重写大纲', description: `基于大纲 v${outline.version_no}、现有角色和世界观重写全书结构，结果保存为新版本。原大纲、已有章节和原卷戏份保留在原版本中。`,
     submit: '重写并保存新版本', fields: [numberField('volume_count', '重写后的分卷数', Math.min(5, state.volumes.length), 1, 5), outlineThemeField,
       {...noteField, label: '重写要求（可选）', placeholder: '例如：保留主线，加强第二卷冲突，调整结尾伏笔'}],
+    useModel: true,
     taskPath: `/writing/outlines/${outline.id}/rewrite/tasks`});
 }
 
@@ -1390,6 +1411,7 @@ function coreCharacterDialog() {
       const {outline_id, ...values} = data;
       return outline_id ? {...values, outline_id: Number(outline_id)} : values;
     },
+    useModel: true,
     taskPath: `/writing/projects/${state.project.id}/characters/core/tasks`});
 }
 
@@ -1414,6 +1436,7 @@ async function supportingCharacterDialog(preferredVolume) {
         choices: volumes.map(row => ({value: row.id, label: `第 ${row.volume_number} 卷 · ${row.title}`})),
         change: event => loadReuse(Number(event.target.value))},
       numberField('supporting_count', '新增配角数', 6, 0, 12), noteField], extra: reuse,
+    useModel: true,
     taskPath: `/writing/outlines/${outlineId}/characters/supporting/tasks`,
     payload: (data, form) => {
       if (!selectionReady) throw new Error('请等待前卷配角读取完成。');
@@ -1472,10 +1495,11 @@ async function characterProfileDialog(preferredVolume = null, characterId = null
         choices: volumes.map(row => ({value: row.id, label: `第 ${row.volume_number} 卷 · ${row.title}`})),
         change: event => { options.taskPath = `/writing/volumes/${Number(event.target.value)}/character-profiles/tasks`; }}, noteField], extra: choices,
     taskPath: `/writing/volumes/${selected.id}/character-profiles/tasks`,
+    useModel: true,
     payload: (data, form) => {
       const ids = form.getAll('profile_character_ids').map(Number);
       if (!ids.length || ids.length > 20) throw new Error('请选择 1—20 位角色。');
-      return {character_ids: ids, instruction: data.instruction || ''};
+      return {character_ids: ids, instruction: data.instruction || '', model: data.model};
     }};
   openAction(options);
 }
@@ -1486,6 +1510,7 @@ function planDialog(volume) {
   openAction({title: '规划章节', description: `把《${volume.title}》的剧情节点拆成章节。章号在全书内唯一，已有章节不会被覆盖。`,
     submit: '规划并保存', fields: [numberField('start_chapter', '起始章号', start, 1, 4294967295),
       numberField('chapter_count', '生成章节数', 5, 1, 12), noteField],
+    useModel: true,
     taskPath: `/writing/volumes/${volume.id}/chapter-plan/tasks`,
   });
 }
@@ -1509,11 +1534,13 @@ async function draftDialog(chapter, rewrite = false) {
       submit: '重写并替换正文', fields: [numberField('target_characters', '目标篇幅（字符）',
         Math.min(6000, Math.max(300, chapter.word_count || 2000)), 300, 6000),
         {...noteField, label: '重写要求（可选）', placeholder: '例如：保留情节，加强人物对话，减少重复描写'}],
+      useModel: true,
       taskPath: `/writing/chapters/${chapter.id}/rewrite/tasks`});
     return;
   }
   openAction({title: '生成正文', description: `角色信息已就绪，为第 ${chapter.chapter_number} 章生成初稿。正文保存后，可单独分析本章人物进展。`,
     submit: '写作并保存', fields: [numberField('target_characters', '目标篇幅（字符）', 2000, 300, 6000), noteField],
+    useModel: true,
     taskPath: `/writing/chapters/${chapter.id}/draft/tasks`,
   });
 }
@@ -1523,6 +1550,7 @@ function progressAnalysisDialog(chapter) {
     description: `只读取第 ${chapter.chapter_number} 章已保存正文，提取已发生的人物行动、截至本章状态和关系变化。分析不会续写或修改正文。`,
     submit: '后台开始分析', fields: [{...noteField, label: '分析要求（可选）',
       placeholder: '例如：重点核对行动结果、位置变化和人物关系'}],
+    useModel: true,
     taskPath: `/writing/chapters/${chapter.id}/character-progress/tasks`,
   });
 }
@@ -1565,6 +1593,7 @@ async function batchDraftDialog() {
     description: `从已有章节规划中选择多章，系统会按章号依次写作；每章正文保存并完成独立人物进展分析后才会进入下一章。`,
     submit: '后台开始批量写作', fields: [numberField('target_characters', '每章目标篇幅（字符）', 2000, 300, 6000), noteField],
     extra: choices,
+    useModel: true,
     taskPath: `/writing/projects/${projectId}/chapters/batch-draft/tasks`,
     payload: (data, form) => {
       const ids = form.getAll('chapter_ids').map(Number);
@@ -1576,7 +1605,8 @@ async function batchDraftDialog() {
 
 function reviewDialog(chapter) {
   openAction({title: '审读本章', description: '检查世界规则、人物动机、前文衔接和章节目标。审读只给建议，不会修改正文。',
-    submit: '开始审读', fields: [noteField], taskPath: `/writing/chapters/${chapter.id}/review/tasks`,
+    submit: '开始审读', fields: [noteField], useModel: true,
+    taskPath: `/writing/chapters/${chapter.id}/review/tasks`,
   });
 }
 
@@ -1587,6 +1617,7 @@ function consistencyDialog() {
   const outline = state.outlines.find(row => row.id === outlineId);
   openAction({title: '开始一致性核对', description: `对照大纲 v${outline.version_no} 核对 ${chapters.map(row => `第 ${row.chapter_number} 章`).join('、')}，报告会给出偏移依据与修改建议。`,
     submit: '后台开始核对', fields: [{...noteField, placeholder: '例如：重点核对主角动机、能力边界和大纲推进方向'}],
+    useModel: true,
     taskPath: `/writing/projects/${state.project.id}/consistency/tasks`,
     payload: data => ({...data, outline_id: outlineId, chapter_ids: chapters.map(row => row.id)})});
 }
@@ -1618,6 +1649,27 @@ async function refreshChapter(id) {
 const wizard = $('wizard');
 let session = {id: null, values: {}, question: null, custom: false, done: false, busy: false};
 
+async function loadModels() {
+  try {
+    const result = await api('/models');
+    state.modelOptions = result.items || [];
+  } catch {
+    // 读取失败时按单模型处理，生成入口保持原样。
+    state.modelOptions = [];
+  }
+  syncModelPicker();
+}
+
+function syncModelPicker() {
+  const control = $('wizard-model-control');
+  const select = $('wizard-model');
+  const choices = modelChoices();
+  control.hidden = choices.length < 2;
+  select.replaceChildren(...choices.map(choice => element('option', {value: choice.value}, choice.label)));
+  select.value = state.modelChoice || choices[0]?.value || '';
+  select.disabled = !session.id || session.busy || session.done;
+}
+
 function syncWizard() {
   const {id, values, question, custom, done, busy} = session;
   const count = Object.keys(labels).filter((name) => values[name]).length;
@@ -1647,6 +1699,7 @@ function syncWizard() {
   $('confirm-world').textContent = busy && count === Object.keys(labels).length ? '处理中…' : '确认并生成';
   $('restart-wizard').disabled = busy;
   $('close-wizard').disabled = busy;
+  syncModelPicker();
 }
 
 function bubble(text, user = false) {
@@ -1691,7 +1744,9 @@ async function sendMessage(content) {
   const generating = ['确认生成', '确认', '开始生成'].includes(content);
   try {
     const path = `/novel-assistant/sessions/${session.id}/messages`;
-    const data = generating ? {content, outline_theme: $('outline-theme').value} : {content};
+    const model = generating ? $('wizard-model').value : '';
+    const data = generating ? {content, outline_theme: $('outline-theme').value, ...(model ? {model} : {})} : {content};
+    if (model) state.modelChoice = model;
     const reply = await post(generating ? `${path}/tasks` : path, data);
     if (session !== requestingSession) return;
     if (generating) {
@@ -1794,7 +1849,7 @@ async function enterAccount(user) {
   notify();
   clearInterval(jobsTimer);
   jobsTimer = setInterval(() => { void loadJobs(); }, 4000);
-  await Promise.all([loadLibrary(), loadJobs()]);
+  await Promise.all([loadLibrary(), loadJobs(), loadModels()]);
 }
 
 function setRegistrationMode(value) {

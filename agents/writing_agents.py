@@ -236,14 +236,19 @@ def _parse_output(role: WritingRole, raw: str) -> BaseModel:
     return role.output.model_validate_json(raw)
 
 
-def generate(role: WritingRole, context: dict) -> BaseModel:
+def generate(role: WritingRole, context: dict, profile=None) -> BaseModel:
     settings = get_settings()
-    connection = {
-        "model": os.getenv("MODEL_NAME") or settings.DEEPSEEK_MODEL_NAME,
-        "api_key": settings.API_KEY,
-        "base_url": settings.PROXY_URL,
-        "timeout": settings.REQUEST_TIMEOUT or 120,
-    }
+    if profile is not None:
+        # 选定模型配置：密钥与地址来自该档案，不再读取主模型环境变量。
+        connection = profile.connection()
+        logger.info("使用模型配置：%s（%s）", profile.id, profile.model)
+    else:
+        connection = {
+            "model": os.getenv("MODEL_NAME") or settings.DEEPSEEK_MODEL_NAME,
+            "api_key": settings.API_KEY,
+            "base_url": settings.PROXY_URL,
+            "timeout": settings.REQUEST_TIMEOUT or 120,
+        }
     if role.output is ChapterContentDraft:
         output_format = "直接返回完整的小说正文纯文本，保留段落换行，不要 JSON、Markdown 围栏、章节标题或创作说明。"
         expected_output = "完整的小说正文纯文本"

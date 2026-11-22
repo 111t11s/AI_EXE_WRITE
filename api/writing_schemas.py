@@ -31,6 +31,8 @@ class WritingInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     instruction: str = Field(default="", max_length=2000)
+    # 可选模型配置 ID（GET /api/v1/models）；省略时使用主模型。
+    model: str | None = Field(default=None, max_length=40)
 
 
 class OutlineRequest(WritingInput):
@@ -120,6 +122,8 @@ class ConsistencySuggestion(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     suggestion: Detail
+    # 采纳修复时使用的模型配置；编辑意见可省略。
+    model: str | None = Field(default=None, max_length=40)
 
 
 class Generated(BaseModel):

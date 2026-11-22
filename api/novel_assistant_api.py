@@ -32,6 +32,8 @@ def get_outline_skills(user: CurrentAccount, genre: str = Query(default="", max_
 class MessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
     outline_theme: OutlineTheme = "development"
+    # 可选模型配置 ID（GET /api/v1/models）；省略时使用主模型。
+    model: str | None = Field(default=None, max_length=40)
 
 
 @router.post("/sessions")
@@ -52,7 +54,7 @@ async def send_message(session_id: str, request: MessageRequest, user: CurrentAc
     message = request.content.strip()
     if message in {"确认生成", "确认", "开始生成"}:
         try:
-            result = await _assistant.confirm(state, request.outline_theme)
+            result = await _assistant.confirm(state, request.outline_theme, request.model)
         except WorldbuildingGenerationError as exc:
             raise HTTPException(exc.status, str(exc)) from None
         except ValueError as exc:

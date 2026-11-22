@@ -262,7 +262,7 @@ def save_repairs(engine, project_id, report, generated, account_id):
     return dict(project_id=project_id, completed_count=len(completed), chapters=completed), fingerprints
 
 
-async def repair_issue(engine, project_id, report, approved, user):
+async def repair_issue(engine, project_id, report, approved, user, model=None):
     await run_in_threadpool(validate_repair_chapters, engine, project_id, report, user.id)
     payload = ConsistencyRequest(outline_id=report["outline_id"], chapter_ids=[row["chapter_id"] for row in report["chapters"]])
     emit_generation_event("status", message="正在读取核对范围的正文与档案，按采纳的意见修复…")
@@ -283,7 +283,8 @@ async def repair_issue(engine, project_id, report, approved, user):
         if row["id"] not in targets:
             continue
         emit_generation_event("status", message=f"正在修复第 {row['chapter_number']} 章…")
-        artifact = await generate(agents.CONSISTENCY_REPAIR, {**context, "chapter": row, "approved_fix": approved}, WritingInput())
+        artifact = await generate(agents.CONSISTENCY_REPAIR, {**context, "chapter": row, "approved_fix": approved},
+                                  WritingInput(model=model))
         generated[row["id"]] = artifact.content
     emit_generation_event("status", message="修复完成，正在校验并保存对应章节…")
     return await run_in_threadpool(save_repairs, engine, project_id, report, generated, user.id)
@@ -310,7 +311,7 @@ async def start_repair(project_id: RowId, job_id: str, issue_index: int, payload
 
     async def operation():
         try:
-            receipt, fingerprints = await repair_issue(engine, project_id, repair_report, approved, user)
+            receipt, fingerprints = await repair_issue(engine, project_id, repair_report, approved, user, payload.model)
         except Exception:
             issue["repair_status"] = "failed"
             raise

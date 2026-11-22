@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#212b25">
   <title>墨间 · 小说工作台</title>
-  <link rel="stylesheet" href="/workbench.css?v=rail-books-20261122">
+  <link rel="stylesheet" href="/workbench.css?v=plan-entry-20261122">
   <script src="/runtime-config.js?v=outline-skills-20261114"></script>
   <script type="importmap">
     {"imports": {
-      "/workbench.js": "/workbench.js?v=rail-books-20261122",
+      "/workbench.js": "/workbench.js?v=model-select-20261122",
       "/api-client.js": "/api-client.js?v=character-progress-20261116",
       "/generation-stream.js": "/generation-stream.js?v=character-progress-20261116"
     }}
@@ -106,7 +106,7 @@
         <div class="question-picker" id="question-picker" hidden><p class="muted" id="question-label"></p><div class="question-options" id="question-options" role="group" aria-labelledby="question-label"></div></div>
         <form class="composer" id="chat-form" hidden><label class="sr-only" for="chat-input">自定义设定或修改已收集设定</label><input id="chat-input" required maxlength="4000" autocomplete="off" placeholder="输入自定义设定…"><button class="button primary" type="submit" id="chat-send">发送</button></form>
       </div>
-      <aside class="wizard-settings"><h3>已收集设定 <span id="slot-count" class="muted"></span></h3><dl class="slots" id="slots"></dl><p class="muted" id="outline-skill" role="status" aria-live="polite">选择小说类型后自动加载大纲设计技能。</p><label class="control">本版大纲主题<select id="outline-theme"><option value="development">发育（成长推进）</option><option value="comeback">逆袭</option><option value="ending">结尾收束</option><option value="survival">逃杀（生存竞逐）</option><option value="revenge">复仇</option><option value="mystery">揭秘</option><option value="relationship">关系推进</option><option value="custom">自定义主题（结合上方设定）</option></select></label><button class="button primary" type="button" id="confirm-world" disabled>确认并生成</button></aside>
+      <aside class="wizard-settings"><h3>已收集设定 <span id="slot-count" class="muted"></span></h3><dl class="slots" id="slots"></dl><p class="muted" id="outline-skill" role="status" aria-live="polite">选择小说类型后自动加载大纲设计技能。</p><label class="control">本版大纲主题<select id="outline-theme"><option value="development">发育（成长推进）</option><option value="comeback">逆袭</option><option value="ending">结尾收束</option><option value="survival">逃杀（生存竞逐）</option><option value="revenge">复仇</option><option value="mystery">揭秘</option><option value="relationship">关系推进</option><option value="custom">自定义主题（结合上方设定）</option></select></label><label class="control" id="wizard-model-control" hidden>调用模型<select id="wizard-model" aria-label="调用模型"></select></label><button class="button primary" type="button" id="confirm-world" disabled>确认并生成</button></aside>
     </div>
     <footer class="dialog-foot"><button class="button secondary" type="button" id="restart-wizard">开始新对话</button></footer>
   </dialog>

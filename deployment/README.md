@@ -15,7 +15,7 @@ sudo bash deployment/install.sh
 sudo nano /opt/aitxt/.env
 ~~~
 
-install.sh 创建独立运行用户和虚拟环境、安装 Linux 依赖，并注册 systemd 服务，但不会立即启动。修改 .env 的 DB_HOST、DB_PORT、DB_USER、DB_PASSWORD、DB_NAME，以及 API_KEY、PROXY_URL、MODEL_NAME。不要把本机 .venv 或原始 Windows requirements.txt 上传用于安装。
+install.sh 创建独立运行用户和虚拟环境、安装 Linux 依赖，并注册 systemd 服务，但不会立即启动。修改 .env 的 DB_HOST、DB_PORT、DB_USER、DB_PASSWORD、DB_NAME，以及 API_KEY、PROXY_URL、MODEL_NAME。若要在页面里选择第二个模型，再补齐 DEEPSEEK_API_KEY、DEEPSEEK_PROXY_URL、DEEPSEEK_MODEL_NAME；三项齐全后，新建小说向导和各生成对话框会出现「调用模型」。不要把本机 .venv 或原始 Windows requirements.txt 上传用于安装。
 
 通过 Git 部署时，将仓库克隆到 /opt/aitxt 后执行同一个 install.sh，无需解压。脚本优先复用已有的兼容虚拟环境，再使用系统 python3.12，否则将 uv 和 Python 安装到 /opt/aitxt/.build-tools/。自动下载需要访问 Astral/GitHub；下载失败时可以先自行安装兼容 Python，再运行 `sudo env PYTHON_BIN=/实际路径/python3.12 bash deployment/install.sh`。不要把运行时安装在 /root 下，服务的 ProtectHome 设置会阻止访问该目录。已有不兼容虚拟环境会使安装停止，需要先备份并移走 .venv 后重新安装。
 

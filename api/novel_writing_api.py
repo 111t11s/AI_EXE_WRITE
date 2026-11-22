@@ -35,6 +35,7 @@ from api.writing_schemas import (
 )
 from api.character_profiles import validate_profiles
 from core.logging import get_logger
+from core.models import ModelProfileError, resolve_profile
 
 
 router = APIRouter(prefix="/writing", tags=["小说写作智能体"])
@@ -372,12 +373,18 @@ async def load_context(loader, *args):
 
 async def generate(role, context, payload):
     try:
+        profile = resolve_profile(payload.model)
+    except ModelProfileError as exc:
+        raise HTTPException(422, str(exc)) from None
+    try:
         request = payload.model_dump()
+        # 模型配置只用于选择调用参数，不进入发给模型的资料。
+        request.pop("model", None)
         # Keep omitted theme fields out of the context for older callers while
         # agents.generate supplies the backwards-compatible default guidance.
         if isinstance(payload, OutlineRequest) and "outline_theme" not in payload.model_fields_set:
             request.pop("outline_theme", None)
-        return await run_in_threadpool(agents.generate, role, {**context, "request": request})
+        return await run_in_threadpool(agents.generate, role, {**context, "request": request}, profile)
     except (OutlineSkillError, ProseSkillError) as exc:
         raise HTTPException(503, str(exc)) from None
     except (APITimeoutError, httpx.TimeoutException):
@@ -468,10 +475,11 @@ async def write_batch_drafts(project_id: RowId, payload: BatchDraftRequest,
     for index, chapter in enumerate(chapters, 1):
         emit_generation_event("status", message=f"正在生成第 {chapter['chapter_number']} 章（{index}/{len(chapters)}）…")
         draft = await write_draft(chapter["id"], DraftRequest(
-            target_characters=payload.target_characters, instruction=payload.instruction), user, engine)
+            target_characters=payload.target_characters, instruction=payload.instruction, model=payload.model),
+            user, engine)
         emit_generation_event("status", message=f"第 {chapter['chapter_number']} 章正文已保存，正在分析人物进展…")
         progress = await analyze_character_progress(
-            chapter["id"], WritingInput(instruction=payload.instruction), user, engine)
+            chapter["id"], WritingInput(instruction=payload.instruction, model=payload.model), user, engine)
         completed.append(BatchDraftChapterReceipt(
             chapter_id=chapter["id"], chapter_number=chapter["chapter_number"], title=chapter["title"],
             word_count=draft.word_count, progress_count=progress.updated_count))
