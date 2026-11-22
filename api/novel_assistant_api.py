@@ -3,9 +3,9 @@
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from agents.worldbuilding_agent import ConversationState, WorldbuildingAssistant, WorldbuildingGenerationError
+from agents.worldbuilding_agent import SLOT_LABELS, ConversationState, WorldbuildingAssistant, WorldbuildingGenerationError
 from api.generation_stream import generation_response
 from api import generation_jobs
 from api.account_api import CurrentAccount
@@ -34,6 +34,13 @@ class MessageRequest(BaseModel):
     outline_theme: OutlineTheme = "development"
     # 可选模型配置 ID（GET /api/v1/models）；省略时使用主模型。
     model: str | None = Field(default=None, max_length=40)
+
+
+class PrefillRequest(BaseModel):
+    """用热点选题推荐预填问答设定；只接受既有设定项。"""
+
+    model_config = ConfigDict(extra="forbid")
+    values: dict[str, str] = Field(default_factory=dict, max_length=8)
 
 
 @router.post("/sessions")
@@ -89,6 +96,30 @@ def get_session(session_id: str, user: CurrentAccount) -> dict:
         "warning": state.generation_error,
         "persistence": state.persistence,
         "done": state.result is not None and not state.confirmation_lock.locked(),
+        "outline_skill": skill_selection(state.values.get("genre")),
+        "outline_theme": state.outline_theme,
+    }
+
+
+@router.post("/sessions/{session_id}/prefill", summary="用热点选题推荐预填基础设定")
+def prefill_session(session_id: str, request: PrefillRequest, user: CurrentAccount) -> dict:
+    state = _sessions.get(session_id)
+    if state is None or state.account_id != user.id:
+        raise HTTPException(404, "会话不存在或已过期")
+    if state.result is not None or state.confirmation_lock.locked():
+        raise HTTPException(409, "当前会话已开始生成，请先点击「开始新对话」")
+    for key, value in request.values.items():
+        if key not in SLOT_LABELS:
+            raise HTTPException(422, f"未知的设定项：{key}")
+        text = str(value).strip()
+        if not text:
+            continue
+        if len(text) > 500:
+            raise HTTPException(422, f"{SLOT_LABELS[key]}内容过长")
+        state.values[key] = text
+    message = _assistant.next_question(state)
+    return {
+        "message": message, "values": state.values, "question": state.question, "done": False,
         "outline_skill": skill_selection(state.values.get("genre")),
         "outline_theme": state.outline_theme,
     }

@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_PROXY_URL: str = ""
 
+    # 热点选题：抓取公开热搜时的缓存分钟数、超时秒数与额外的 JSON 数据源（逗号分隔）
+    TREND_CACHE_MINUTES: int = Field(default=30, ge=1, le=1440)
+    TREND_TIMEOUT: int = Field(default=8, ge=1, le=60)
+    TREND_SOURCE_URLS: str = ""
+
     # 日志配置
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

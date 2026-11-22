@@ -371,6 +371,31 @@ async def load_context(loader, *args):
     raise HTTPException(problem.status, "相关小说记录不存在" if problem.status == 404 else str(problem)) from None
 
 
+TREND_FIELD_LABELS = {
+    "overview": "总览", "ideas": "推荐方案", "genre": "类型", "setting": "时代背景",
+    "power_system": "力量体系", "cheat": "金手指", "protagonist": "主角设定", "goal": "主角目标",
+    "tone": "基调", "length": "篇幅", "title": "参考书名", "premise": "一句话梗概",
+    "core_conflict": "核心冲突", "discussion_hook": "话题点", "selling_points": "卖点",
+    "reference_topics": "参考热点", "risks": "风险提示",
+}
+
+
+def trend_problem(fields: list[str]) -> str:
+    """把 Schema 字段路径转成作者看得懂的说明。"""
+    if not fields:
+        return "缺少必要内容"
+    parts = fields[0].split(".")
+    label = TREND_FIELD_LABELS.get(parts[-1], parts[-1])
+    if len(parts) >= 3 and parts[0] == "ideas":
+        try:
+            index = int(parts[1]) + 1
+        except ValueError:
+            index = 0
+        if index:
+            return f"第 {index} 条推荐的{label}不符合要求"
+    return f"{label}不符合要求"
+
+
 async def generate(role, context, payload):
     try:
         profile = resolve_profile(payload.model)
@@ -406,8 +431,11 @@ async def generate(role, context, payload):
         raise HTTPException(502, detail) from None
     except IncompleteGenerationError as exc:
         raise HTTPException(502, str(exc)) from None
-    except ValidationError:
-        logger.warning("模型输出未通过内容校验：任务=%s", role.title)
+    except ValidationError as exc:
+        fields = [".".join(str(part) for part in error["loc"]) for error in exc.errors(include_input=False)]
+        logger.warning("模型输出未通过内容校验：任务=%s，字段=%s", role.title, fields[:3])
+        if role is agents.TREND_ANALYST:
+            raise HTTPException(502, f"模型返回的题材格式不符合要求：{trend_problem(fields)}，请重试生成") from None
         raise HTTPException(502, "模型已返回内容，但格式未通过校验，请重试生成") from None
     except Exception as exc:
         logger.warning("写作智能体生成失败：任务=%s，异常类型=%s", role.title, type(exc).__name__)

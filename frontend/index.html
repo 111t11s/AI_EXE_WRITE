@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#212b25">
   <title>墨间 · 小说工作台</title>
-  <link rel="stylesheet" href="/workbench.css?v=plan-entry-20261122">
+  <link rel="stylesheet" href="/workbench.css?v=trends-brief-20261122">
   <script src="/runtime-config.js?v=outline-skills-20261114"></script>
   <script type="importmap">
     {"imports": {
-      "/workbench.js": "/workbench.js?v=model-select-20261122",
+      "/workbench.js": "/workbench.js?v=trends-search-20261122",
       "/api-client.js": "/api-client.js?v=character-progress-20261116",
-      "/generation-stream.js": "/generation-stream.js?v=character-progress-20261116"
+      "/generation-stream.js": "/generation-stream.js?v=trends-brief-20261122"
     }}
   </script>
   <script defer src="/bootstrap.js?v=outline-skills-20261114"></script>
@@ -29,6 +29,7 @@
       <header class="brand"><span class="brand-mark" aria-hidden="true">墨</span><div><strong>墨间</strong><small>小说工作台</small></div></header>
       <div class="account-bar"><span id="account-name"></span><span class="account-actions"><button type="button" class="account-logout" id="account-password-change">修改密码</button><button type="button" class="account-logout" id="account-logout">退出账号</button></span></div>
       <button class="button primary new-project" type="button" id="new-project"><span aria-hidden="true">＋</span> 新建小说</button>
+      <button class="button secondary" type="button" id="open-trends">热点选题</button>
       <a class="button secondary" href="/public.html">公共书架 ↗</a>
       <div class="task-navigation"><button class="button secondary" type="button" id="generation-tasks" aria-expanded="false" aria-controls="task-submenus">任务中心 <span id="generation-task-count">0</span></button>
         <nav id="task-submenus" class="task-submenus" aria-label="任务分类" hidden></nav>

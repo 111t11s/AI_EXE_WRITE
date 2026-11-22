@@ -1,5 +1,6 @@
 """Inputs, generated artifacts and receipts for the novel writing workflow."""
 
+import re
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -313,6 +314,87 @@ class ConsistencyReceipt(ConsistencyReport):
     limitations: list[Detail] = Field(max_length=20)
     job_id: str | None = None
     chapter_fingerprints: dict[str, str] = Field(default_factory=dict)
+
+
+class TrendRequest(WritingInput):
+    """热点选题分析：可手动提供热点，也可使用服务端抓取的列表。"""
+
+    topics: list[Annotated[str, Field(min_length=2, max_length=200)]] = Field(default_factory=list, max_length=40)
+    # 手动粘贴的选题要求（不是热点标题时），先理解要求再从热点中挑选相关条目。
+    brief: str = Field(default="", max_length=1000)
+    genre_preference: str = Field(default="", max_length=40)
+    audience: str = Field(default="", max_length=40)
+    idea_count: int = Field(default=4, ge=2, le=5)
+
+
+class TrendIdea(Generated):
+    # 热点推荐由模型自由发挥：字段先全部收下，再由业务层丢弃缺字段的半成品，
+    # 避免一条不完整的方案让整份结果作废。
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    genre: str = Field(default="", max_length=40)
+    setting: str = Field(default="", max_length=300)
+    power_system: str = Field(default="", max_length=400)
+    cheat: str = Field(default="", max_length=240)
+    protagonist: str = Field(default="", max_length=400)
+    goal: str = Field(default="", max_length=240)
+    tone: str = Field(default="", max_length=60)
+    length: str = Field(default="", max_length=80)
+    title: str = Field(default="", max_length=80)
+    premise: str = Field(default="", max_length=600)
+    core_conflict: str = Field(default="", max_length=600)
+    # 热梗/可讨论点：为什么有人愿意转发、站队或玩梗。
+    discussion_hook: str = Field(default="", max_length=400)
+    selling_points: list[Annotated[str, Field(min_length=1, max_length=160)]] = Field(default_factory=list, max_length=5)
+    reference_topics: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(default_factory=list, max_length=5)
+    risks: str = Field(default="", max_length=400)
+
+    @field_validator("selling_points", "reference_topics", mode="before")
+    @classmethod
+    def wrap_single_value(cls, value):
+        """模型偶尔把列表写成一段文字；按行拆分后仍可使用。"""
+        if isinstance(value, str):
+            parts = [part.strip() for part in re.split(r"[\n;；]+", value) if part.strip()]
+            return parts or [value.strip()]
+        return value
+
+    @field_validator("risks", mode="before")
+    @classmethod
+    def empty_risks(cls, value):
+        return "" if value is None else value
+
+
+class TrendReport(Generated):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    overview: str = Field(min_length=1, max_length=800)
+    # 对手动选题要求（brief）的解读；没有 brief 时为空。
+    requirement_summary: str = Field(default="", max_length=400)
+    ideas: list[TrendIdea] = Field(min_length=2, max_length=6)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_common_shapes(cls, value):
+        """兼容模型只返回方案数组、或漏写总览的常见写法。"""
+        fallback = "以下方案根据本次热点提炼，可按需调整。"
+        if isinstance(value, list):
+            return {"overview": fallback, "ideas": value}
+        if isinstance(value, dict):
+            data = dict(value)
+            if "ideas" not in data:
+                for key in ("recommendations", "results", "plans"):
+                    if isinstance(data.get(key), list):
+                        data["ideas"] = data[key]
+                        break
+            data.setdefault("overview", fallback)
+            return data
+        return value
+
+
+class TrendReceipt(TrendReport):
+    generated_at: str
+    topics: list[str]
+    sources: list[str] = Field(default_factory=list)
 
 
 class OutlineReceipt(BaseModel):

@@ -44,6 +44,10 @@ body{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset
 .outline-detail-body:focus-visible{outline:3px solid #a66d3c;outline-offset:3px}
 .outline-paging{flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--line)}
 
+/* 热点选题：列表行与热度信息 */
+.trend-row{display:grid;gap:3px;min-width:0}
+.trend-meta{color:var(--muted);font-size:.75rem;overflow-wrap:anywhere}
+
 .reuse-characters{min-width:0;margin:0;padding:12px;border:1px solid var(--line);border-radius:8px;max-height:38dvh;overflow-y:auto;overscroll-behavior-y:contain}
 .reuse-characters legend{font-size:.88rem;font-weight:650;color:var(--green)}
 .reuse-character{display:flex;align-items:flex-start;gap:10px;padding:12px 0;cursor:pointer;border-bottom:1px solid var(--line)}

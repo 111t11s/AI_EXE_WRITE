@@ -17,6 +17,10 @@ const initialState = () => ({projects: [], project: null, libraryOwner: 'all', w
   consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
   consistencyOutlineId: null, consistencyReport: null,
   trash: null, trashLoading: false, trashError: null,
+  trends: null, trendsLoading: false, trendsError: null, trendsSelection: new Map(),
+  trendsManualMode: false, trendsManualText: '', trendsSearched: null, trendsSearchedSelection: new Map(),
+  trendSearchLoading: false, trendsGenre: '', trendsAudience: '',
+  trendsNote: '', trendsModel: '',
   taskCategory: 'all', taskProjectId: 'all', taskStatus: 'all', taskPage: 1, taskPageSize: 5,
   taskMenuOpen: false, tasksLoaded: false, tasksError: null,
   modelOptions: [], modelChoice: '',
@@ -85,7 +89,7 @@ const post = (path, data = {}) => api(path, {method: 'POST', data});
 const progressGeneration = createGenerationView($('task-progress-stream'));
 const jobStatuses = {running: '生成中', completed: '已完成', failed: '未完成'};
 const taskCategories = [['all', '全部任务'], ['worldbuilding', '世界观'], ['outline', '大纲'], ['characters', '角色'],
-  ['draft', '正文'], ['plan', '章节规划'], ['review', '审读'], ['consistency', '一致性核对'], ['other', '其他']];
+  ['draft', '正文'], ['plan', '章节规划'], ['review', '审读'], ['consistency', '一致性核对'], ['trends', '热点'], ['other', '其他']];
 const knownTaskKinds = new Set(taskCategories.filter(([kind]) => !['all', 'other'].includes(kind)).map(([kind]) => kind));
 const taskKindCategory = kind => kind === 'character_progress' ? 'characters' :
   kind === 'batch_draft' ? 'draft' : kind === 'consistency_repair' ? 'consistency' : kind;
@@ -284,6 +288,7 @@ function renderTaskResult(job, result) {
   const content = [];
   if (job.kind === 'review') content.push(reviewView(result));
   else if (job.kind === 'consistency') content.push(consistencyReportView(result));
+  else if (job.kind === 'trends') content.push(trendReportView(result));
   else {
     let message = '生成结果已保存，可打开小说查看。';
     if (job.kind === 'worldbuilding') message = result.persistence?.world_id ? '世界观已保存。' : '生成已完成，请核对保存状态。';
@@ -369,6 +374,8 @@ async function openProgress(id) {
     }, {signal: controller.signal});
     if (progressAbort !== controller || account !== requestingAccount) return;
     progressGeneration.finish(result.warning || '生成完成');
+    // 非流式返回（或模型没有输出分片）时不留一个空的“等待模型返回内容”框。
+    if (progressGeneration.isEmpty()) progressGeneration.hide();
     $('task-progress-description').textContent = '已完成';
     renderTaskResult(job, result);
     void loadJobs();
@@ -566,6 +573,207 @@ function trashView() {
   ), '小说删除后可在这里恢复。', button('刷新回收站', loadTrash, 'secondary', state.busy));
 }
 
+function openTrends() {
+  stopProgress();
+  state.screen = 'trends';
+  render();
+  if (!state.trends) void loadTrends();
+}
+
+async function loadTrends(refresh = false) {
+  const token = key('trends');
+  state.trendsLoading = true;
+  state.trendsError = null;
+  render();
+  try {
+    const data = await api(`/trends${refresh ? '?refresh=1' : ''}`);
+    if (!current('trends', token)) return;
+    state.trends = data;
+    if (!state.trendsSelection.size) {
+      // 默认选中前 20 条，避免用户每次都要手动勾选全部。
+      data.items.slice(0, 20).forEach(item => state.trendsSelection.set(item.title, item));
+    }
+  } catch (error) {
+    if (current('trends', token)) state.trendsError = error.message;
+  } finally {
+    if (current('trends', token)) { state.trendsLoading = false; render(); }
+  }
+}
+
+function trendManualPayload() {
+  const lines = state.trendsManualText.split(/\r?\n/).map(line => line.trim()).filter(line => line.length >= 2);
+  // 多行短句按热点标题处理；单行或整段文字按“选题要求”处理。
+  if (lines.length >= 2 && lines.every(line => line.length <= 60)) return {topics: lines, brief: ''};
+  return {topics: [], brief: state.trendsManualText.trim()};
+}
+
+function startTrendAnalysis() {
+  if (state.busy) return;
+  let topics = [...state.trendsSelection.keys()];
+  let brief = '';
+  if (state.trendsManualMode) {
+    const manual = trendManualPayload();
+    brief = manual.brief;
+    // 选题要求模式：优先使用用户查询并勾选的相关热搜；没查询时交给服务端自动检索。
+    topics = brief ? [...state.trendsSearchedSelection.keys()] : manual.topics;
+  }
+  if (!topics.length && !brief) {
+    notify('请至少选择热点，或写一段选题要求。', 'error');
+    return;
+  }
+  if (!brief && topics.length < 2) {
+    notify('请至少选择或粘贴两条热点新闻。', 'error');
+    return;
+  }
+  const payload = {topics, brief, genre_preference: state.trendsGenre.trim(),
+    audience: state.trendsAudience.trim(), instruction: state.trendsNote.trim(), idea_count: 4};
+  if (modelSelectable() && state.trendsModel) payload.model = state.trendsModel;
+  setBusy('正在提交热点分析…');
+  post('/trends/analyze/tasks', payload).then(job => {
+    recordJob(job);
+    void openProgress(job.id);
+  }).catch(error => notify(`提交失败：${error.message}`, 'error'))
+    .finally(() => setBusy());
+}
+
+function toggleTrendMode() {
+  state.trendsManualMode = !state.trendsManualMode;
+  if (!state.trendsManualMode) state.trendsSearched = null;
+  render();
+}
+
+async function searchManualTrends() {
+  const query = state.trendsManualText.trim();
+  if (query.length < 2) {
+    notify('请先输入选题要求或热点标题，再查询相关热搜。', 'error');
+    return;
+  }
+  const token = key('trendSearch');
+  state.trendSearchLoading = true;
+  render();
+  try {
+    const data = await api('/trends/search', {filters: {q: query, genre: state.trendsGenre.trim()}});
+    if (!current('trendSearch', token)) return;
+    state.trendsSearched = data;
+    state.trendsSearchedSelection = new Map();
+    data.items.slice(0, 20).forEach(item => state.trendsSearchedSelection.set(item.title, item));
+  } catch (error) {
+    if (current('trendSearch', token)) notify(`查询相关热搜失败：${error.message}`, 'error');
+  } finally {
+    if (current('trendSearch', token)) { state.trendSearchLoading = false; render(); }
+  }
+}
+
+function trendRow(item, updateCount, selection = state.trendsSelection) {
+  const checked = selection.has(item.title);
+  return element('label', {class: 'reuse-character'},
+    element('input', {type: 'checkbox', checked, 'aria-label': `选择热点：${item.title}`, change: event => {
+      if (event.target.checked) selection.set(item.title, item);
+      else selection.delete(item.title);
+      updateCount();
+    }}),
+    element('span', {class: 'trend-row'}, element('strong', {}, item.title),
+      element('small', {class: 'trend-meta'}, item.source || '热点',
+        item.heat ? ` · 热度 ${Number(item.heat).toLocaleString()}` : '')));
+}
+
+function trendsView() {
+  if (!state.trends && state.trendsLoading) return empty('正在读取最近热点', '首次抓取可能需要几秒钟；也可以切换为手动粘贴。');
+  if (state.trendsError) {
+    return panel('热点选题', stack(prose(`读取失败：${state.trendsError}`),
+      actions(button('重新读取', () => loadTrends(true), 'primary'), button('返回书架', () => { state.screen = 'project'; render(); }, 'secondary'))),
+    '热点只作为选题灵感，不会直接改编真实事件或人物。');
+  }
+  const count = muted('');
+  const updateCount = () => {
+    count.textContent = `已选择 ${state.trendsSelection.size} 条热点（最多发送 40 条）`;
+  };
+  const items = state.trends?.items || [];
+  const list = state.trendsManualMode
+    ? (() => {
+      const area = element('textarea', {rows: 10, maxlength: 8000, 'aria-label': '选题要求或热点标题',
+        placeholder: '例如：\n嫁金钗，穿越男主，三观正，以实力为尊，但不缺阴谋\n\n也可以每行粘贴一条热搜标题。'});
+      area.value = state.trendsManualText;
+      const mode = muted('');
+      const update = () => {
+        const manual = trendManualPayload();
+        mode.textContent = manual.brief
+          ? '将按选题要求分析：先读懂要求，再检索相关热点；可先点「查询相关热搜」预览。'
+          : `将按粘贴的 ${manual.topics.length} 条热点分析。`;
+      };
+      area.addEventListener('input', () => { state.trendsManualText = area.value; update(); });
+      update();
+      const searched = state.trendsSearched;
+      let searchedBlock = null;
+      if (searched) {
+        const count = muted(`已选择 ${state.trendsSearchedSelection.size} 条相关热搜`);
+        const refresh = () => {
+          count.textContent = `已选择 ${state.trendsSearchedSelection.size} 条相关热搜`;
+        };
+        searchedBlock = stack(
+          element('h3', {}, '相关热搜'),
+          muted(`根据「${searched.query}」检索到 ${searched.items.length} 条${searched.sources?.length ? `（${searched.sources.join('、')}）` : ''}。`),
+          searched.items.length ? stack(count, element('fieldset', {class: 'reuse-characters'},
+            element('legend', {}, '可勾选要引用的相关热搜'),
+            ...searched.items.map(item => trendRow(item, refresh, state.trendsSearchedSelection)))) :
+            muted('没有检索到相关热搜；分析时会直接按选题要求生成。'));
+      }
+      return stack(muted('只写一段选题要求时，会先读懂要求，再检索相关热搜做题材分析；如果每行一条短标题，则按粘贴的热点直接分析。'), area, mode,
+        actions(button('查询相关热搜', searchManualTrends, 'primary', state.trendSearchLoading || state.busy),
+          button('使用抓取的热搜', toggleTrendMode, 'secondary')),
+        searchedBlock);
+    })()
+    : items.length ? stack(count, element('fieldset', {class: 'reuse-characters'},
+      element('legend', {}, '最近热点'),
+      ...items.map(item => trendRow(item, updateCount)))) :
+      stack(muted('暂时没有抓到热点，可切换到手动粘贴，再填写标题。'));
+  updateCount();
+  const left = panel('热点来源', stack(list,
+    state.trendsManualMode ? null : actions(button('手动粘贴热点', toggleTrendMode, 'secondary'),
+      button('刷新热搜', () => loadTrends(true), 'secondary', state.trendsLoading),
+      button('全选', () => {
+        items.slice(0, 40).forEach(item => state.trendsSelection.set(item.title, item));
+        render();
+      }, 'secondary'), button('清空选择', () => {
+        state.trendsSelection.clear();
+        render();
+      }, 'secondary'))),
+  state.trends?.updated_at ? `更新时间：${new Date(state.trends.updated_at).toLocaleString()}${state.trends.sources?.length ? ` · 来源：${state.trends.sources.join('、')}` : ''}${state.trends.cached ? ' · 缓存结果' : ''}${state.trends.errors?.length ? ` · 抓取失败：${state.trends.errors.join('；')}` : ''}` :
+    '点击刷新可重新抓取；抓取失败时仍可使用手动粘贴。');
+
+  const genre = element('input', {maxlength: 40, placeholder: '如：都市、仙侠，可留空'});
+  genre.value = state.trendsGenre;
+  genre.addEventListener('input', event => { state.trendsGenre = event.target.value; });
+  const audience = element('input', {maxlength: 40, placeholder: '如：男生/女生/全年龄，可留空'});
+  audience.value = state.trendsAudience;
+  audience.addEventListener('input', event => { state.trendsAudience = event.target.value; });
+  const note = element('textarea', {rows: 4, maxlength: 2000, placeholder: '例如：想要轻松向、主角不要无敌、避免现实案件细节'});
+  note.value = state.trendsNote;
+  note.addEventListener('input', event => { state.trendsNote = event.target.value; });
+  const fields = [element('label', {class: 'control'}, '类型偏好', genre),
+    element('label', {class: 'control'}, '目标读者', audience),
+    element('label', {class: 'control'}, '补充要求（可选）', note)];
+  if (modelSelectable()) {
+    const model = element('select', {'aria-label': '调用模型'},
+      modelChoices().map(choice => element('option', {value: choice.value}, choice.label)));
+    model.value = state.trendsModel || state.modelChoice || modelChoices()[0]?.value || '';
+    state.trendsModel = model.value;
+    model.addEventListener('change', event => { state.trendsModel = event.target.value; });
+    fields.push(element('label', {class: 'control'}, '调用模型', model));
+  }
+  const right = panel('分析设置', stack(...fields,
+    actions(button('分析并推荐题材', startTrendAnalysis, 'primary', state.busy || state.trendsLoading)),
+    muted('热点只用于提炼情绪与冲突，方案会改写成虚构世界与人物，不直接改编真实事件、人物或案件细节。分析在后台运行，完成后可在此页打开结果。')),
+  '给出可直接开写的题材方向。');
+  return element('div', {}, stack(
+    panel('热点选题', muted(`从最近热搜中寻找读者当下关心的情绪，再把它变成可持续写下去的小说题材。${
+      state.trendsManualMode
+        ? '当前为手动填写：可每行粘贴热点标题，或写一段选题要求。'
+        : items.length ? `当前抓取到 ${items.length} 条热点，可在左侧勾选。` : '暂时没有抓到热点，可切换到手动填写。'}`),
+      null, actions(button('返回书架', () => { state.screen = 'project'; render(); }, 'secondary'))),
+    element('div', {class: 'layout'}, left, right)));
+}
+
 function rememberedProject() {
   try { return Number(localStorage.getItem(`mojian-project-${account.id}`)); } catch { return null; }
 }
@@ -738,6 +946,10 @@ function render() {
     view.replaceChildren(trashView());
     return;
   }
+  if (state.screen === 'trends') {
+    view.replaceChildren(trendsView());
+    return;
+  }
   view.setAttribute('aria-busy', String(Boolean(state.projectLoading)));
   if (!state.project) {
     view.replaceChildren(empty(state.libraryError ? '暂时打不开书架' : '开始一本新小说',
@@ -876,6 +1088,52 @@ function consistencyReportView(report) {
     }),
     report.limitations.length ? details(['核对范围与限制', report.limitations.join('\n')]) : null),
     '报告可在任务中心再次查看，记录保留规则与其他后台任务相同。', pill(verdicts[report.verdict], report.verdict !== 'consistent'));
+}
+
+function trendReportView(report) {
+  const cards = report.ideas.map((idea, index) => panel(idea.title, stack(
+    element('div', {class: 'hero-meta'}, pill(idea.genre), pill(idea.length), pill(idea.tone)),
+    details(['一句话梗概', idea.premise], ['话题点', idea.discussion_hook], ['时代背景', idea.setting],
+      ['力量体系', idea.power_system], ['金手指', idea.cheat], ['主角设定', idea.protagonist],
+      ['主角目标', idea.goal], ['核心冲突', idea.core_conflict]),
+    element('h3', {}, '卖点'),
+    element('ol', {class: 'numbered'}, idea.selling_points.map(point => element('li', {}, point))),
+    idea.reference_topics.length ? stack(element('h3', {}, '参考热点'),
+      element('ol', {class: 'numbered'}, idea.reference_topics.map(topic => element('li', {}, topic)))) :
+      muted('本次热点与这个选题要求关联较弱，未借用热点标题。'),
+    idea.risks ? muted(`风险提示：${idea.risks}`) : null,
+    actions(button('用此题材新建小说', () => startFromTrend(idea), 'primary'))),
+  `推荐 ${index + 1}`));
+  return stack(panel('热点题材推荐', stack(
+    report.requirement_summary ? stack(element('h3', {}, '选题要求解读'), prose(report.requirement_summary), rule()) : null,
+    prose(report.overview),
+    details(['本次参考的热点', report.topics.join('\n')]),
+    muted(`生成时间：${new Date(report.generated_at).toLocaleString()}${report.sources?.length ? ` · 来源：${report.sources.join('、')}` : ''}`)),
+  '选一条直接进入新建小说，预填后仍可继续调整。'), ...cards);
+}
+
+async function startFromTrend(idea) {
+  const values = {};
+  for (const key of ['genre', 'setting', 'power_system', 'cheat', 'protagonist', 'goal', 'tone', 'length']) {
+    if (idea[key]) values[key] = String(idea[key]);
+  }
+  if (!wizard.open) wizard.showModal();
+  if (!session.id || session.done) {
+    await startConversation();
+    if (!session.id) { notify('无法开始新对话，请重试。', 'error'); return; }
+  }
+  try {
+    const reply = await post(`/novel-assistant/sessions/${session.id}/prefill`, {values});
+    session.values = reply.values;
+    session.question = reply.question;
+    session.outlineSkill = reply.outline_skill;
+    session.custom = false;
+    bubble(reply.message);
+    syncWizard();
+    notify('已按热点题材预填设定，可继续调整后确认生成。');
+  } catch (error) {
+    notify(`预填失败：${error.message}`, 'error');
+  }
 }
 
 function consistencySuggestionDialog(report, index, adopt = false) {
@@ -1772,6 +2030,7 @@ async function sendMessage(content) {
 }
 
 $('new-project').onclick = openWizard;
+$('open-trends').onclick = openTrends;
 $('refresh').onclick = () => loadLibrary();
 $('open-trash').onclick = openTrash;
 $('close-wizard').onclick = () => { if (!session.busy) wizard.close(); };

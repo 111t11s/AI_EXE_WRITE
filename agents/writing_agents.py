@@ -14,7 +14,7 @@ from agents.prose_skills import opening_skill_prompt, prose_skill_prompt
 from agents.webnovel_skills import webnovel_skill_prompt
 from api.writing_schemas import (ChapterContentDraft, ChapterPlanDraft, OutlineDraft, ReviewReport,
                                  CharacterDraftList, ConsistencyReport, CharacterProfileList,
-                                 CharacterProgressAnalysis, OUTLINE_THEME_LABELS)
+                                 CharacterProgressAnalysis, TrendReport, OUTLINE_THEME_LABELS)
 from core.config import get_settings
 from core.logging import get_logger
 
@@ -192,6 +192,34 @@ CONSISTENCY = WritingRole(
     ConsistencyReport, (),
 )
 
+TREND_ANALYST = WritingRole(
+    "网文热点选题策划",
+    "阅读本次提供的最新热点标题和用户偏好，输出可直接开写的中文网文题材方案，数量与 preferences.idea_count 一致。"
+    "如果提供了 brief（用户手动粘贴的选题要求），先读懂它：题材偏好、主角与关系、基调、必须保留与必须避免的点，"
+    "把理解写进 requirement_summary（没有 brief 时返回空字符串）；brief 是硬约束，方案不得擅自更换题材、主角性别或基调。"
+    "此时 topics 是按该要求检索到的相关新闻/热点（也可能是热搜榜单）：只有确实能借势（情绪、处境或人物关系相通）时才引用；"
+    "如果本次热点与要求关联较弱，reference_topics 返回空数组，并在 risks 说明“本次热点与选题要求关联较弱”，"
+    "绝不能为了凑引用而牵强附会。没有 brief 时，方案必须逐字引用本次热点，至少一条。"
+    "选题明显偏向热梗、网络流行语和能出话题的社会情绪：消费降级、职场憋屈、代际冲突、情感选择、城市生活、"
+    "科技日常、人情世故等普通人能对号入座的话题优先；硬新闻只提供背景情绪，不复述事件、不消费当事人。"
+    "每个方案都要考虑传播：它能被概括成一句梗吗？读者会在评论区站队、吐槽或转发吗？没有讨论空间的方案不要输出。"
+    "热点只提供情绪切入点与时代细节：不得直接改编真实事件、真实人物或复述新闻正文，"
+    "涉及政治、军事、外交、灾难、案件、医疗、未成年人等敏感内容时只取普遍情绪，改成虚构世界与虚构人物；"
+    "不写犯罪手法，不消费当事人，不编造未提供的事实，也不承诺流量或签约。"
+    "每个方案给出类型 genre、时代背景 setting、力量体系 power_system、金手指 cheat、主角设定 protagonist、"
+    "主角目标 goal、基调 tone、篇幅 length，以及参考书名 title、一句话梗概 premise、核心冲突 core_conflict、"
+    "话题点 discussion_hook、两三条卖点 selling_points、参考热点 reference_topics 和风险提示 risks。"
+    "discussion_hook 要写清可传播的梗、争议点或共鸣点，以及读者会站哪一边；不能只写“有话题”“很爽”。"
+    "reference_topics 必须逐字引用本次提供列表中的标题，至少一条，不能改写、概括或编造热点；"
+    "优先引用生活、消费、科技、文化、体育、娱乐类热点，避免把政治、灾难、案件、医疗、军事或当事人隐私类标题作为参考热点；"
+    "如果列表里缺少这类条目，就选争议度较低、能安全虚构化的条目，并在 risks 说明处理方式。"
+    "说明热点中的哪种情绪（焦虑、补偿、好奇、愤怒、期待）转化为人物目标与冲突，不能只把热点标题当标签。"
+    "方案之间要有明显差异，避免同一套路换皮；genre 使用常见网文类型名称；title 要像真实书名，避免标题党与夸大承诺。"
+    "每个方案必须完整填写所有字段；如果输出长度受限，宁可只给 2 个完整方案，也不要返回缺字段的半成品。"
+    "若提供了类型偏好、目标读者或补充要求，要据此取舍。只输出符合 Schema 的 JSON，不写分析过程。",
+    TrendReport, (),
+)
+
 
 def create_agent(role: WritingRole, llm):
     from crewai import Agent
@@ -215,6 +243,18 @@ def _request_without_tools(*, model, api_key, base_url, timeout, role, prompt) -
         return collect_chat_text(completion)
 
 
+def _extract_json(raw: str) -> str:
+    """取正文中的第一个 JSON 对象，忽略模型在前后添加的说明文字。"""
+    start = min((index for index in (raw.find("{"), raw.find("[")) if index >= 0), default=-1)
+    if start < 0:
+        return raw
+    try:
+        _, end = json.JSONDecoder().raw_decode(raw, start)
+    except ValueError:
+        return raw
+    return raw[start:end]
+
+
 def _parse_output(role: WritingRole, raw: str) -> BaseModel:
     raw = raw.strip()
     # Keep structured responses strict. Only chapter bodies may arrive as prose;
@@ -233,7 +273,7 @@ def _parse_output(role: WritingRole, raw: str) -> BaseModel:
     structured |= raw.startswith(("{", "[", '"'))
     if role.output is ChapterContentDraft and not structured:
         return ChapterContentDraft(content=raw)
-    return role.output.model_validate_json(raw)
+    return role.output.model_validate_json(_extract_json(raw))
 
 
 def generate(role: WritingRole, context: dict, profile=None) -> BaseModel:
