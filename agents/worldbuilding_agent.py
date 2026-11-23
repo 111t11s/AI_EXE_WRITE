@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from asyncio import CancelledError, Lock
 from dataclasses import dataclass, field
@@ -273,7 +272,7 @@ class WorldbuildingAssistant:
                 logger.warning("世界观生成失败：未配置模型 API 密钥")
                 raise WorldbuildingGenerationError("模型服务尚未配置，请联系管理员", status=503)
             connection = {
-                "model": os.getenv("MODEL_NAME") or settings.DEEPSEEK_MODEL_NAME,
+                "model": getattr(settings, "MODEL_NAME", "") or settings.DEEPSEEK_MODEL_NAME,
                 "api_key": settings.API_KEY,
                 "base_url": settings.PROXY_URL,
                 "timeout": settings.REQUEST_TIMEOUT or 120,

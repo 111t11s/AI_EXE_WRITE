@@ -38,6 +38,20 @@ def test_default_selection_keeps_the_existing_connection(monkeypatch):
     assert models.resolve_profile("default") is None
 
 
+def test_gemini_flash_is_default_and_pro_shares_its_credentials(monkeypatch):
+    configured = settings(GEMINI_API_KEY="gem-key", GEMINI_PROXY_URL="https://gemini.test/v1",
+                         GEMINI_3_8_FLASH="gemini-3.8-flash", GEMINI_3_1_PRO="gemini-3.1-pro-preview")
+    monkeypatch.setattr(models, "get_settings", lambda: configured)
+
+    default = models.resolve_profile(None)
+    assert default.connection() == {"model": "gemini-3.8-flash", "api_key": "gem-key",
+                                    "base_url": "https://gemini.test/v1", "timeout": 40}
+    assert default.public() == {"id": "default", "label": "Gemini 3.8 Flash", "model": "gemini-3.8-flash"}
+    pro = models.resolve_profile("gemini-pro")
+    assert pro.connection() == {"model": "gemini-3.1-pro-preview", "api_key": "gem-key",
+                                "base_url": "https://gemini.test/v1", "timeout": 40}
+
+
 def test_selected_profile_carries_its_own_credentials(monkeypatch):
     monkeypatch.setenv("MODEL_NAME", "gpt-test")
     monkeypatch.setattr(models, "get_settings", lambda: settings())
@@ -64,6 +78,15 @@ def test_model_endpoint_lists_available_profiles_without_secrets(monkeypatch):
         {"id": "deepseek", "label": "DeepSeek", "model": "deepseek-flash"},
     ]
     assert payload["default"] == "default"
+    assert all("api_key" not in item and "base_url" not in item for item in payload["items"])
+
+    monkeypatch.setattr(models, "get_settings", lambda: settings(
+        GEMINI_API_KEY="gem-key", GEMINI_PROXY_URL="https://gemini.test/v1",
+        GEMINI_3_8_FLASH="gemini-3.8-flash", GEMINI_3_1_PRO="gemini-3.1-pro-preview"))
+    payload = model_api.list_models(object())
+    assert [item["id"] for item in payload["items"]] == ["default", "gemini-pro", "deepseek"]
+    assert payload["items"][0]["label"] == "Gemini 3.8 Flash"
+    assert payload["items"][1]["label"] == "Gemini 3.1 Pro Preview"
     assert all("api_key" not in item and "base_url" not in item for item in payload["items"])
 
     monkeypatch.setattr(models, "get_settings", lambda: settings(DEEPSEEK_API_KEY=""))

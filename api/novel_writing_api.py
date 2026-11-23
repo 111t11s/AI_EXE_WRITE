@@ -21,7 +21,8 @@ from agents.mcp.worldbuilding import NovelToolError, call_novel_tool, novel_sess
 from api.novel_crud_api import Database, get_row, response_row
 from api.novel_schemas import RowId
 from api.novel_writing_store import require_empty_plan, save_chapter_plan, save_draft, save_outline
-from api.novel_writing_store import save_characters, save_rewritten_draft, save_character_progress
+from api.novel_writing_store import (save_characters, save_rewritten_draft, save_character_progress,
+                                     save_continued_draft)
 from api.novel_tables import tables
 from api.database import transaction
 from sqlalchemy import func, select
@@ -440,7 +441,8 @@ async def generate(role, context, payload):
     except APIStatusError as exc:
         from core.config import get_settings
         host = endpoint_host(profile.base_url if profile else get_settings().PROXY_URL)
-        model_name = profile.model if profile else (get_settings().DEEPSEEK_MODEL_NAME)
+        model_name = profile.model if profile else (
+            get_settings().MODEL_NAME or get_settings().DEEPSEEK_MODEL_NAME)
         reason = safe_error_reason(exc)
         logger.warning("模型网关请求失败：任务=%s，模型=%s，主机=%s，状态码=%s，原因=%s",
                        role.title, model_name, host, exc.status_code, reason or "未提供")
@@ -450,7 +452,7 @@ async def generate(role, context, payload):
         elif exc.status_code == 429:
             detail = "模型网关限制了请求，请稍后重试或检查额度"
         elif exc.status_code >= 500:
-            detail = "模型网关暂时不可用，请稍后重试"
+            detail = f"模型服务 {host} 返回 {exc.status_code}，上游暂时不可用，请稍后重试或切换模型"
         else:
             detail = "模型网关拒绝了生成请求，请检查模型和服务地址配置"
         raise HTTPException(502, detail) from None
@@ -585,6 +587,34 @@ async def rewrite_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentA
                                    getattr(artifact, "character_updates", ()))
 
 
+@router.post("/chapters/{chapter_id}/polish", response_model=DraftReceipt, summary="润色章节正文并保存为草稿")
+async def polish_chapter(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    return await polish_draft(chapter_id, payload, user, engine)
+
+
+@router.post("/chapters/{chapter_id}/continue", response_model=DraftReceipt, summary="续写章节并追加到原正文")
+async def continue_chapter(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    return await continue_draft(chapter_id, payload, user, engine)
+
+
+async def polish_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
+    context = await load_context(chapter_context, chapter_id, False, True)
+    artifact = await generate(agents.DRAFT_POLISH, context, payload)
+    emit_generation_event("status", message="正文润色完成，正在核对原文并保存…")
+    return await run_in_threadpool(save_rewritten_draft, engine, chapter_id, artifact.content,
+                                   context["chapter"], getattr(artifact, "character_updates", ()))
+
+
+async def continue_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
+    context = await load_context(chapter_context, chapter_id, False, True)
+    artifact = await generate(agents.DRAFT_CONTINUE, context, payload)
+    emit_generation_event("status", message="续写完成，正在核对章节原文并追加保存…")
+    return await run_in_threadpool(save_continued_draft, engine, chapter_id, artifact.content,
+                                   context["chapter"])
+
+
 @router.post("/chapters/{chapter_id}/character-progress", response_model=CharacterProgressReceipt,
              summary="分析已保存章节中的人物正文进展")
 async def analyze_character_progress(chapter_id: RowId, payload: WritingInput, user: CurrentAccount, engine: Database):
@@ -606,6 +636,18 @@ async def stream_rewrite_outline(outline_id: RowId, payload: OutlineRequest, use
 async def stream_rewrite_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     return generation_response(lambda: rewrite_draft(chapter_id, payload, user, engine))
+
+
+@router.post("/chapters/{chapter_id}/polish/stream", summary="实时润色章节正文")
+async def stream_polish_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
+    return generation_response(lambda: polish_draft(chapter_id, payload, user, engine))
+
+
+@router.post("/chapters/{chapter_id}/continue/stream", summary="实时续写章节正文并追加保存")
+async def stream_continue_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
+    return generation_response(lambda: continue_draft(chapter_id, payload, user, engine))
 
 
 @router.post("/chapters/{chapter_id}/review", response_model=ReviewReport, summary="审读章节正文并返回修改建议")
@@ -714,6 +756,22 @@ async def start_rewrite_draft(chapter_id: RowId, payload: DraftRequest, user: Cu
     return generation_jobs.store.start(account_id=user.id, key=f"draft:{chapter_id}", kind="draft",
         title="重写章节正文", project_id=project_id, resource_id=chapter_id,
         operation=lambda: rewrite_draft(chapter_id, payload, user, engine)).summary()
+
+
+@router.post("/chapters/{chapter_id}/polish/tasks", status_code=202, summary="后台润色正文")
+async def start_polish_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    project_id = await run_in_threadpool(task_project, engine, "novel_chapter", chapter_id, user.id)
+    return generation_jobs.store.start(account_id=user.id, key=f"polish:{chapter_id}", kind="draft",
+        title="润色章节正文", project_id=project_id, resource_id=chapter_id,
+        operation=lambda: polish_draft(chapter_id, payload, user, engine)).summary()
+
+
+@router.post("/chapters/{chapter_id}/continue/tasks", status_code=202, summary="后台续写正文并追加保存")
+async def start_continue_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
+    project_id = await run_in_threadpool(task_project, engine, "novel_chapter", chapter_id, user.id)
+    return generation_jobs.store.start(account_id=user.id, key=f"continue:{chapter_id}", kind="draft",
+        title="续写章节正文", project_id=project_id, resource_id=chapter_id,
+        operation=lambda: continue_draft(chapter_id, payload, user, engine)).summary()
 
 
 @router.post("/chapters/{chapter_id}/review/tasks", status_code=202, summary="后台审读正文")

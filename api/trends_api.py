@@ -14,7 +14,7 @@ from api import generation_jobs
 from api.account_api import CurrentAccount
 from api.generation_stream import generation_response
 from api.novel_writing_api import generate
-from api.writing_schemas import TrendReceipt, TrendRequest, WritingInput
+from api.writing_schemas import DEFAULT_TREND_INSTRUCTION, TrendReceipt, TrendRequest, WritingInput
 
 
 router = APIRouter(prefix="/trends", tags=["热点选题"])
@@ -50,16 +50,27 @@ def rank_topics(topics: list[str], brief: str) -> list[str]:
 
 def resolve_topics(payload: TrendRequest) -> tuple[list[str], list[str]]:
     """优先使用用户粘贴的热点；有选题要求时先按它检索相关热点，再退回热搜榜单。"""
+    user_preferences = " ".join((payload.brief, payload.genre_preference, payload.audience))
+    custom_instruction = payload.instruction != DEFAULT_TREND_INSTRUCTION and payload.instruction
+    if (trend_source.contains_political_content(user_preferences)
+            or custom_instruction and trend_source.contains_political_content(custom_instruction)):
+        raise HTTPException(422, "热点选题不接受政治或时政相关要求，请改为 AI、数码或娱乐方向")
     if payload.topics:
-        return normalize_topics(payload.topics), []
+        safe_items = trend_source.filter_political_items([{"title": title} for title in payload.topics])
+        topics = normalize_topics([item["title"] for item in safe_items])
+        if not topics:
+            raise HTTPException(422, "选择的热点均为政治或时政内容，请改选一条 AI、数码、娱乐或其他非政治热点")
+        return topics, []
     brief = payload.brief.strip()
     if brief:
         searched = trend_source.search_related(brief, payload.genre_preference)
+        searched = trend_source.filter_political_items(searched)
         if len(searched) >= 2:
             sources = list(dict.fromkeys(row["source"] for row in searched))
             return normalize_topics([row["title"] for row in searched]), sources
     data = trend_source.collect_trends()
-    topics = normalize_topics([row["title"] for row in data["items"]])
+    safe_items = trend_source.filter_political_items(data["items"])
+    topics = normalize_topics([row["title"] for row in safe_items])
     return rank_topics(topics, brief), list(data.get("sources", []))
 
 
@@ -79,8 +90,15 @@ def clean_report(report, topics: list[str], require_reference: bool = True):
 
     返回 None 表示可用方案不足两条，调用方会重试一次。
     """
+    if any(trend_source.contains_political_content(value)
+           for value in (report.overview, report.requirement_summary)):
+        return None
     ideas = []
     for idea in report.ideas:
+        if any(trend_source.contains_political_content(value)
+               for field in idea.model_dump().values()
+               for value in (field if isinstance(field, list) else [field]) if isinstance(value, str)):
+            continue
         if any(not str(getattr(idea, field) or "").strip() for field in ESSENTIAL_FIELDS):
             continue
         references = [value for value in idea.reference_topics if matches_topic(value, topics)]
@@ -100,7 +118,7 @@ def retryable(exc: HTTPException) -> bool:
 async def analyze(payload: TrendRequest) -> TrendReceipt:
     topics, sources = await run_in_threadpool(resolve_topics, payload)
     if not topics:
-        raise HTTPException(409, "暂时没有可用的热点，请刷新热搜、查询相关热搜，或在补充要求中粘贴热点标题")
+        raise HTTPException(409, "暂时没有符合 AI、数码、娱乐方向且不涉及政治的热点，请刷新或粘贴非政治热点")
     emit_generation_event("status", message=f"已准备 {len(topics)} 条热点，正在提炼题材方向…")
     context = {
         "topics": topics,

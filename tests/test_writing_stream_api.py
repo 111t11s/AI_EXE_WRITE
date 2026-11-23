@@ -33,6 +33,10 @@ CASES = [
      "save_outline", {"project_id": 2, "outline_id": 6, "version_no": 2, "volume_ids": [7], "plot_beat_count": 1}),
     ("/chapters/5/rewrite", {"instruction": "加强对话"}, {"content": "少年循着灵脉，踏上了远行的路。" * 20, "character_updates": []},
      "save_rewritten_draft", {"chapter_id": 5, "status": "draft", "word_count": 300}),
+    ("/chapters/5/polish", {"instruction": "保留文风"}, {"content": "少年循着灵脉，踏上了远行的路。" * 20},
+     "save_rewritten_draft", {"chapter_id": 5, "status": "draft", "word_count": 300}),
+    ("/chapters/5/continue", {"instruction": "继续对话"}, {"content": "少年循着灵脉，踏上了远行的路。" * 20},
+     "save_continued_draft", {"chapter_id": 5, "status": "draft", "word_count": 300}),
 ]
 CASES += [(path, payload, artifact["content"], save_name, receipt)
           for path, payload, artifact, save_name, receipt in list(CASES)

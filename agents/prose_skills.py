@@ -38,22 +38,22 @@ def _skill_text(root: Path, skill_name: str, files: tuple[str, ...], label: str)
     return "\n\n" + "\n\n".join(bodies) + "\n"
 
 
-def prose_skill_prompt(*, rewrite: bool = False) -> str:
+def prose_skill_prompt(*, rewrite: bool = False, continuation: bool = False) -> str:
     files = (*COMMON_FILES, REVISION_FILE) if rewrite else COMMON_FILES
     prompt = _skill_text(SKILL_ROOT, "prose-writing", files, "正文写作")
-    mode = "正文重写" if rewrite else "正文初稿"
+    mode = "正文润色/重写" if rewrite else "正文续写" if continuation else "正文初稿"
     logger.info("已加载正文写作技能：模式=%s", mode)
     emit_generation_event("status", message=f"已加载：小说正文写作技能（{mode}）")
     return prompt
 
 
-def opening_skill_prompt(*, chapter_number: int | None, rewrite: bool = False) -> str:
+def opening_skill_prompt(*, chapter_number: int | None, rewrite: bool = False, continuation: bool = False) -> str:
     # Use the global chapter sequence, never a database ID or a volume position.
     if type(chapter_number) is not int or chapter_number not in (1, 2, 3):
         return ""
     files = (*OPENING_FILES, REVISION_FILE) if rewrite else OPENING_FILES
     prompt = _skill_text(OPENING_SKILL_ROOT, "opening-chapters", files, "黄金三章")
-    mode = "正文重写" if rewrite else "正文初稿"
+    mode = "正文重写" if rewrite else "正文续写" if continuation else "正文初稿"
     logger.info("已加载黄金三章技能：章序=%s，模式=%s", chapter_number, mode)
     emit_generation_event("status", message=f"已加载：小说黄金三章技能（第 {chapter_number} 章，{mode}）")
     return prompt

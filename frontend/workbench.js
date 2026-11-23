@@ -20,8 +20,8 @@ const initialState = () => ({projects: [], project: null, libraryOwner: 'all', w
   trash: null, trashLoading: false, trashError: null,
   trends: null, trendsLoading: false, trendsError: null, trendsSelection: new Map(),
   trendsManualMode: false, trendsManualText: '', trendsSearched: null, trendsSearchedSelection: new Map(),
-  trendSearchLoading: false, trendsGenre: '', trendsAudience: '',
-  trendsNote: '', trendsModel: '',
+  trendSearchLoading: false, trendsGenre: 'AI、数码、娱乐', trendsAudience: '关注 AI、数码与娱乐的网文读者',
+  trendsNote: '只围绕 AI/人工智能、数码产品与科技体验、影视、综艺、游戏、音乐等娱乐话题选材；严禁涉及政治、时政、外交、军事、选举和政策争议。', trendsModel: '',
   taskCategory: 'all', taskProjectId: 'all', taskStatus: 'all', taskPage: 1, taskPageSize: 5,
   taskMenuOpen: false, tasksLoaded: false, tasksError: null, taskSelection: new Set(),
   taskMeta: null, completedTotal: 0,
@@ -125,6 +125,7 @@ function stopProgress() {
 
 function jobRow(job) {
   const project = state.projects.find(item => item.id === job.project_id);
+  const projectName = project?.title || (job.kind === 'worldbuilding' ? '新小说' : '小说任务');
   const terminal = ['completed', 'failed'].includes(job.status);
   const checkbox = element('input', {type: 'checkbox', class: 'task-select', checked: state.taskSelection.has(job.id),
     disabled: !terminal, 'aria-label': `选择任务：${job.title}`, change: event => {
@@ -134,8 +135,8 @@ function jobRow(job) {
     }});
   return element('div', {class: 'task-row', 'data-job-id': job.id},
     element('label', {class: 'task-select-box', title: terminal ? `选择任务：${job.title}` : '生成中的任务完成后才能删除'}, checkbox),
-    element('div', {class: 'task-row-main'}, element('strong', {}, job.title),
-      element('p', {class: 'muted'}, `${project?.title || (job.kind === 'worldbuilding' ? '新小说' : '小说任务')} · ${taskCategoryName(job.kind)} · ${jobStatuses[job.status] || '未知状态'} · ${job.message}`),
+    element('div', {class: 'task-row-main'}, element('strong', {}, `${projectName} · ${job.title}`),
+      element('p', {class: 'muted'}, `${taskCategoryName(job.kind)} · ${jobStatuses[job.status] || '未知状态'} · ${job.message}`),
       element('p', {class: 'muted'}, `发起时间：${new Date(job.created_at).toLocaleString()}`)),
     actions(button('查看进度', () => openProgress(job.id)),
       button('删除', () => deleteJobs([job.id]), 'danger', !terminal || state.busy)));
@@ -360,7 +361,11 @@ function renderTaskResult(job, result) {
     if (job.kind === 'worldbuilding') message = result.persistence?.world_id ? '世界观已保存。' : '生成已完成，请核对保存状态。';
     if (job.kind === 'outline') message = `大纲 v${result.version_no} 已保存，共 ${result.volume_ids.length} 卷。`;
     if (job.kind === 'plan') message = `已保存 ${result.chapters.length} 个计划章节。`;
-    if (job.kind === 'draft') message = `正文已保存，共 ${result.word_count} 字；人物正文进展可另行分析。`;
+    if (job.kind === 'draft') {
+      message = job.title?.startsWith('润色') ? `正文已润色并保存，共 ${result.word_count} 字。` :
+        job.title?.startsWith('续写') ? `续写内容已追加，正文共 ${result.word_count} 字。` :
+          `正文已保存，共 ${result.word_count} 字；人物正文进展可另行分析。`;
+    }
     if (job.kind === 'consistency_repair') {
       for (const row of result.chapters) state.reviews.delete(row.chapter_id);
       message = `已按采纳的修复意见保存 ${result.completed_count} 章正文：${result.chapters.map(row => `第 ${row.chapter_number} 章 · ${row.title}`).join('、')}。人物正文进展可重新分析，修复结果可再次核对。`;
@@ -692,22 +697,30 @@ function startTrendAnalysis() {
     topics = brief ? [...state.trendsSearchedSelection.keys()] : manual.topics;
   }
   if (!topics.length && !brief) {
-    notify('请至少选择热点，或写一段选题要求。', 'error');
-    return;
-  }
-  if (!brief && topics.length < 2) {
-    notify('请至少选择或粘贴两条热点新闻。', 'error');
+    notify('请至少选择热点，或写一段选题要求。', 'error', 5000);
     return;
   }
   const payload = {topics, brief, genre_preference: state.trendsGenre.trim(),
     audience: state.trendsAudience.trim(), instruction: state.trendsNote.trim(), idea_count: 4};
   if (modelSelectable() && state.trendsModel) payload.model = state.trendsModel;
+  const analysisButton = $('trend-analysis-button');
   setBusy('正在提交热点分析…');
+  if (analysisButton) {
+    analysisButton.disabled = true;
+    analysisButton.textContent = '正在提交…';
+  }
   post('/trends/analyze/tasks', payload).then(job => {
     recordJob(job);
     void openProgress(job.id);
-  }).catch(error => notify(`提交失败：${error.message}`, 'error'))
-    .finally(() => setBusy());
+  }).catch(error => notify(`提交失败：${error.message}`, 'error', 6000))
+    .finally(() => {
+      setBusy();
+      const button = $('trend-analysis-button');
+      if (button) {
+        button.disabled = state.trendsLoading;
+        button.textContent = '分析并推荐题材';
+      }
+    });
 }
 
 function toggleTrendMode() {
@@ -802,7 +815,7 @@ function trendsView() {
       ...items.map(item => trendRow(item, updateCount)))) :
       stack(muted('暂时没有抓到热点，可切换到手动粘贴，再填写标题。'));
   updateCount();
-  const left = panel('热点来源', stack(list,
+  const left = panel('热点来源 · AI / 数码 / 娱乐', stack(list,
     state.trendsManualMode ? null : actions(button('手动粘贴热点', toggleTrendMode, 'secondary'),
       button('刷新热搜', () => loadTrends(true), 'secondary', state.trendsLoading),
       button('全选', () => {
@@ -815,13 +828,13 @@ function trendsView() {
   state.trends?.updated_at ? `更新时间：${new Date(state.trends.updated_at).toLocaleString()}${state.trends.sources?.length ? ` · 来源：${state.trends.sources.join('、')}` : ''}${state.trends.cached ? ' · 缓存结果' : ''}${state.trends.errors?.length ? ` · 抓取失败：${state.trends.errors.join('；')}` : ''}` :
     '点击刷新可重新抓取；抓取失败时仍可使用手动粘贴。');
 
-  const genre = element('input', {maxlength: 40, placeholder: '如：都市、仙侠，可留空'});
+  const genre = element('input', {maxlength: 40, placeholder: '默认：AI、数码、娱乐'});
   genre.value = state.trendsGenre;
   genre.addEventListener('input', event => { state.trendsGenre = event.target.value; });
-  const audience = element('input', {maxlength: 40, placeholder: '如：男生/女生/全年龄，可留空'});
+  const audience = element('input', {maxlength: 40, placeholder: '关注 AI、数码与娱乐的网文读者'});
   audience.value = state.trendsAudience;
   audience.addEventListener('input', event => { state.trendsAudience = event.target.value; });
-  const note = element('textarea', {rows: 4, maxlength: 2000, placeholder: '例如：想要轻松向、主角不要无敌、避免现实案件细节'});
+  const note = element('textarea', {rows: 4, maxlength: 2000, placeholder: '仅推荐 AI、数码、娱乐话题；不涉及政治或时政内容'});
   note.value = state.trendsNote;
   note.addEventListener('input', event => { state.trendsNote = event.target.value; });
   const fields = [element('label', {class: 'control'}, '类型偏好', genre),
@@ -836,11 +849,12 @@ function trendsView() {
     fields.push(element('label', {class: 'control'}, '调用模型', model));
   }
   const right = panel('分析设置', stack(...fields,
-    actions(button('分析并推荐题材', startTrendAnalysis, 'primary', state.busy || state.trendsLoading)),
-    muted('热点只用于提炼情绪与冲突，方案会改写成虚构世界与人物，不直接改编真实事件、人物或案件细节。分析在后台运行，完成后可在此页打开结果。')),
+    actions(element('button', {id: 'trend-analysis-button', type: 'button', class: 'button primary',
+      click: startTrendAnalysis, disabled: state.busy || state.trendsLoading}, '分析并推荐题材')),
+    muted('默认热点仅来自 AI、数码与娱乐方向；政治及时政内容会自动过滤。热点只用于提炼灵感，不直接改编真实事件或人物。分析在后台运行，完成后可在此页打开结果。')),
   '给出可直接开写的题材方向。');
   return element('div', {}, stack(
-    panel('热点选题', muted(`从最近热搜中寻找读者当下关心的情绪，再把它变成可持续写下去的小说题材。${
+    panel('热点选题', muted(`默认从 AI、数码与娱乐相关热点中寻找灵感，政治及时政内容会自动过滤；再把读者关心的话题变成可持续写下去的小说题材。${
       state.trendsManualMode
         ? '当前为手动填写：可每行粘贴热点标题，或写一段选题要求。'
         : items.length ? `当前抓取到 ${items.length} 条热点，可在左侧勾选。` : '暂时没有抓到热点，可切换到手动填写。'}`),
@@ -945,9 +959,11 @@ function selectedRow(label, sub, isCurrent, click) {
     element('strong', {}, label), sub ? element('small', {}, sub) : null);
 }
 
-function hero(project) {
-  return element('section', {class: 'hero'}, element('p', {class: 'eyebrow'}, '小说项目'),
-    element('h1', {}, project.title || '未命名小说'), project.premise ? element('p', {}, project.premise) : null,
+function hero(project, compact = false) {
+  const pageNames = {overview: '作品概览', characters: '角色档案', outline: '章节大纲', chapters: '正文创作', consistency: '一致性核对'};
+  return element('section', {class: `hero project-hero${compact ? ' compact' : ''}`},
+    element('p', {class: 'eyebrow'}, compact ? `作品工作区 · ${pageNames[state.tab] || '作品'}` : '小说项目'),
+    element('h1', {}, project.title || '未命名小说'), !compact && project.premise ? element('p', {}, project.premise) : null,
     element('div', {class: 'hero-meta'}, pill(project.genre || '小说'), pill(statusNames[project.status] ?? '未知状态'),
       pill(project.is_public ? '已发布到公共书架' : '未发布'),
       project.tone ? pill(project.tone) : null,
@@ -958,6 +974,39 @@ function hero(project) {
         state.busy || state.projectLoading || Boolean(state.projectError)),
       project.is_public ? element('a', {class: 'button secondary', href: `/public.html?book=${project.id}`}, '公开阅读 ↗') : null,
       mutationButton('移入回收站', moveProjectToTrash, 'secondary', state.busy || state.projectLoading || Boolean(state.projectError))));
+}
+
+const projectPages = [
+  ['overview', '作品概览', '查看项目设定与创作进度'],
+  ['characters', '角色档案', '人物与阶段记录'],
+  ['outline', '章节大纲', '分卷、剧情节点与规划'],
+  ['chapters', '正文创作', '章节目录与正文编辑'],
+  ['consistency', '一致性核对', '检查正文与设定衔接'],
+];
+
+function renderProjectNavigation() {
+  const nav = $('project-navigation');
+  const visible = Boolean(state.project && state.screen === 'project');
+  nav.hidden = !visible;
+  if (!visible) return;
+  const switcher = element('label', {class: 'project-switcher-label'}, '切换作品',
+    element('select', {class: 'project-switcher', 'aria-label': '切换当前作品',
+      disabled: state.busy || state.projectLoading || state.projects.length < 2,
+      change: event => {
+        const project = state.projects.find(item => String(item.id) === event.target.value);
+        if (project && project.id !== state.project?.id) void openProject(project.id);
+      }},
+    ...state.projects.map(project => element('option', {value: project.id,
+      selected: String(project.id) === String(state.project.id)},
+    `${project.title || '未命名小说'}${account?.is_admin && String(project.account_id) !== String(account.id) ? ` · ${projectOwner(project)}` : ''}`))));
+  nav.replaceChildren(element('p', {class: 'project-navigation-label'}, '当前作品'),
+    switcher,
+    ...projectPages.filter(([page]) => page !== 'consistency' || !readOnlyProject()).map(([page, title, description]) =>
+      element('button', {type: 'button', class: 'project-page-link', 'aria-current': String(state.tab === page),
+        title: description, disabled: state.busy || state.projectLoading, click: () => void activate(page)},
+      element('span', {class: 'project-page-icon', 'aria-hidden': 'true'},
+        ({overview: '⌂', characters: '◉', outline: '▤', chapters: '✎', consistency: '✓'})[page]),
+      element('span', {class: 'project-page-copy'}, element('strong', {}, title), element('small', {}, description)))));
 }
 
 async function togglePublication() {
@@ -1003,8 +1052,15 @@ function overview() {
 
 function render() {
   const taskScreen = state.screen === 'tasks';
+  renderProjectNavigation();
   $('workspace').classList.toggle('task-workspace', taskScreen);
-  $('workspace').querySelector('.topline').hidden = taskScreen;
+  const topline = $('workspace').querySelector('.topline');
+  topline.hidden = taskScreen;
+  const pageTitles = {overview: '作品概览', characters: '角色档案', outline: '章节大纲', chapters: '正文创作', consistency: '一致性核对'};
+  topline.querySelector('span:first-child').textContent = state.screen === 'project' ?
+    (pageTitles[state.tab] || '创作空间') : state.screen === 'trends' ? '热点选题' : state.screen === 'trash' ? '回收站' : '任务进度';
+  topline.querySelector('.topline-note').textContent = state.screen === 'project' ?
+    (state.project?.title || '从设定到正文') : '墨间 · 小说工作台';
   view.hidden = state.screen === 'progress';
   $('task-progress-page').hidden = state.screen !== 'progress';
   renderJobSummary();
@@ -1031,11 +1087,6 @@ function render() {
       state.libraryError ? button('刷新书架', () => loadLibrary(), 'primary') : button('新建小说', openWizard, 'primary')));
     return;
   }
-  const tabs = element('nav', {class: 'tabs', 'aria-label': '项目页面'},
-    [['overview', '概览'], ['characters', '角色'], ['outline', '大纲与分卷'], ['chapters', '章节与正文'], ['consistency', '一致性核对']]
-      .filter(([tab]) => tab !== 'consistency' || !readOnlyProject()).map(([tab, title]) =>
-      element('button', {type: 'button', class: 'tab', 'aria-current': state.tab === tab ? 'page' : null,
-        click: () => activate(tab)}, title)));
   let content;
   if (state.projectLoading) content = empty('正在读取项目', '正在加载世界观和大纲。');
   else if (state.projectError) content = empty('项目读取失败', state.projectError,
@@ -1045,7 +1096,7 @@ function render() {
   else if (state.tab === 'characters') content = characterView();
   else if (state.tab === 'consistency') content = consistencyView();
   else content = overview();
-  view.replaceChildren(hero(state.project), tabs, content);
+  view.replaceChildren(hero(state.project, state.tab !== 'overview'), content);
 }
 
 async function activate(tab) {
@@ -1578,7 +1629,9 @@ function chapterView() {
     hasContent ? element('article', {class: 'reader', tabindex: 0, 'aria-label': '章节正文'}, chapter.content) : muted('正文还没开始。可以生成初稿，也可以手动写。')),
   `第 ${chapter.chapter_number} 章 · ${statusNames[chapter.status] ?? '未知状态'} · ${chapter.word_count ?? 0} 字`, actions(
     !hasContent && chapter.status === 'planned' ? mutationButton('生成正文', () => draftDialog(chapter), 'primary', state.busy || state.worlds.length !== 1) : null,
-    hasContent ? mutationButton('重写正文', () => draftDialog(chapter, true), 'primary', state.busy || state.worlds.length !== 1) : null,
+    hasContent ? mutationButton('润色正文', () => draftDialog(chapter, 'polish'), 'primary', state.busy || state.worlds.length !== 1) : null,
+    hasContent ? mutationButton('续写本章', () => continueChapterDialog(chapter), 'secondary', state.busy || state.worlds.length !== 1) : null,
+    hasContent ? mutationButton('重写正文', () => draftDialog(chapter, 'rewrite'), 'secondary', state.busy || state.worlds.length !== 1) : null,
     canEdit ? mutationButton('编辑章节', () => editDialog(chapter), 'secondary', state.busy) : null,
     hasContent ? mutationButton('分析人物进展', () => progressAnalysisDialog(chapter), 'secondary', state.busy || state.worlds.length !== 1) : null,
     hasContent ? mutationButton('审读本章', () => reviewDialog(chapter), 'secondary', state.busy || state.worlds.length !== 1) : null));
@@ -1949,21 +2002,26 @@ async function planDialog(volume) {
   });
 }
 
-async function draftDialog(chapter, rewrite = false) {
+async function ensureChapterCharacters(chapter) {
   const projectId = state.project.id;
   const requestingAccount = account;
   let characters;
   try { characters = await api('/characters', {filters: {project_id: projectId, limit: 1}}); }
   catch (error) { if (account === requestingAccount) notify(`角色信息检查失败：${error.message}`, 'error'); return; }
-  if (account !== requestingAccount || state.project?.id !== projectId) return;
+  if (account !== requestingAccount || state.project?.id !== projectId) return false;
   if (!characters.items.length) {
     await activate('characters');
-    if (account !== requestingAccount || state.project?.id !== projectId) return;
+    if (account !== requestingAccount || state.project?.id !== projectId) return false;
     notify('尚未生成角色信息，请先设置数量并生成角色，再生成正文。');
     coreCharacterDialog();
-    return;
+    return false;
   }
-  if (rewrite) {
+  return true;
+}
+
+async function draftDialog(chapter, mode = 'draft') {
+  if (!await ensureChapterCharacters(chapter)) return;
+  if (mode === 'rewrite') {
     openAction({title: '重写正文', description: `基于第 ${chapter.chapter_number} 章原文、角色和剧情资料重写。成功后替换当前正文并设为草稿，原审读建议清除；失败或期间章节被修改时保留原文。`,
       submit: '重写并替换正文', fields: [numberField('target_characters', '目标篇幅（字符）',
         Math.min(6000, Math.max(300, chapter.word_count || 2000)), 300, 6000),
@@ -1972,10 +2030,31 @@ async function draftDialog(chapter, rewrite = false) {
       taskPath: `/writing/chapters/${chapter.id}/rewrite/tasks`});
     return;
   }
+  if (mode === 'polish') {
+    openAction({title: '润色正文', description: `润色第 ${chapter.chapter_number} 章，改善语言、节奏、段落衔接和对话表达；保留原有情节、人物、视角、结果与伏笔。成功后替换正文并清除旧审读建议。`,
+      submit: '润色并保存', fields: [numberField('target_characters', '润色后篇幅（字符）',
+        Math.min(6000, Math.max(300, chapter.word_count || 2000)), 300, 6000),
+        {...noteField, label: '润色侧重（可选）', placeholder: '例如：减少重复表达，让对话更自然，保留原有文风'}],
+      useModel: true,
+      taskPath: `/writing/chapters/${chapter.id}/polish/tasks`});
+    return;
+  }
   openAction({title: '生成正文', description: `角色信息已就绪，为第 ${chapter.chapter_number} 章生成初稿。正文保存后，可单独分析本章人物进展。`,
     submit: '写作并保存', fields: [numberField('target_characters', '目标篇幅（字符）', 2000, 300, 6000), noteField],
     useModel: true,
     taskPath: `/writing/chapters/${chapter.id}/draft/tasks`,
+  });
+}
+
+async function continueChapterDialog(chapter) {
+  if (!await ensureChapterCharacters(chapter)) return;
+  const available = Math.max(300, 30000 - chapter.content.length);
+  openAction({title: '续写本章', description: `从第 ${chapter.chapter_number} 章正文结尾接着写，只生成新增内容并追加到原文。续写会沿用当前视角与场景，遵守章节规划和人物设定；章节原文发生变化时会取消追加。`,
+    submit: '续写并追加', fields: [numberField('target_characters', '续写篇幅（字符）',
+      Math.min(1600, available), 300, 6000),
+      {...noteField, label: '续写要求（可选）', placeholder: '例如：让主角先确认来信来源，再进入下一场对话'}],
+    useModel: true,
+    taskPath: `/writing/chapters/${chapter.id}/continue/tasks`,
   });
 }
 

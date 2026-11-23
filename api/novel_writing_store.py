@@ -169,6 +169,29 @@ def save_rewritten_draft(engine, chapter_id: int, content: str, original: dict, 
         return DraftReceipt(chapter_id=chapter_id, word_count=count)
 
 
+def save_continued_draft(engine, chapter_id: int, continuation: str, original: dict) -> DraftReceipt:
+    """Append generated prose only when its source chapter is still unchanged."""
+    chapter = tables["novel_chapter"]
+    addition = continuation.strip()
+    if not addition:
+        raise HTTPException(502, "续写结果为空，原文未修改")
+    separator = "" if original["content"].endswith(("\n", "\r", " ", "\t")) else "\n\n"
+    content = original["content"] + separator + addition
+    if len(content) > 30000:
+        raise HTTPException(502, "续写后正文超过 30000 字符上限，原文未修改")
+    count = sum(not character.isspace() for character in content)
+    with transaction(engine) as connection:
+        json_columns = legacy_json_columns(connection, chapter.name)
+        current = response_row(get_row(connection, chapter, chapter_id, lock=True), json_columns)
+        if any(current[key] != original[key] for key in (
+                "project_id", "volume_id", "chapter_number", "title", "summary", "content", "status")):
+            raise HTTPException(409, "续写期间章节发生变化，未追加正文，请刷新后重新续写")
+        replace_progress(connection, current, content, ())
+        values = storage_values({"content": content, "word_count": count, "status": "draft"}, json_columns)
+        connection.execute(update(chapter).where(chapter.c.id == chapter_id).values(**values))
+        return DraftReceipt(chapter_id=chapter_id, word_count=count)
+
+
 def save_character_progress(engine, chapter_id: int, original: dict, updates=()) -> CharacterProgressReceipt:
     """Save analysis for an unchanged chapter without touching its正文."""
     chapter = tables["novel_chapter"]

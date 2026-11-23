@@ -30,6 +30,17 @@ KIND_CATEGORY = {"character_progress": "characters", "batch_draft": "draft", "co
 STATUSES = {"all", "running", "completed", "failed"}
 
 
+def _database_error_summary(exc: Exception) -> str:
+    """Return a short driver error code/message without logging SQL parameters."""
+    original = getattr(exc, "orig", None)
+    args = getattr(original, "args", ())
+    if args:
+        code = args[0]
+        detail = str(args[1] if len(args) > 1 else args[0]).replace("\n", " ")
+        return f"{code}: {detail[:240]}"
+    return type(exc).__name__
+
+
 def task_category(kind: str) -> str:
     category = KIND_CATEGORY.get(kind, kind)
     return category if category in CATEGORY_KINDS else "other"
@@ -108,7 +119,7 @@ class JobStore:
             interrupted = job_db.fail_running(engine)
             rows = job_db.load_rows(engine)
         except Exception as exc:
-            logger.warning("任务持久化不可用：读取失败，异常类型=%s", type(exc).__name__)
+            logger.warning("任务持久化不可用：读取失败，数据库错误=%s", _database_error_summary(exc))
             return False
         for row in rows:
             job = self._restore(row)
@@ -151,7 +162,7 @@ class JobStore:
             try:
                 action(engine)
             except Exception as exc:
-                logger.warning("任务持久化写入失败：异常类型=%s", type(exc).__name__)
+                logger.warning("任务持久化写入失败：数据库错误=%s", _database_error_summary(exc))
             return
         if self._queue is None:
             self._queue = asyncio.Queue()
@@ -164,7 +175,7 @@ class JobStore:
             try:
                 await asyncio.to_thread(action, engine)
             except Exception as exc:
-                logger.warning("任务持久化写入失败：异常类型=%s", type(exc).__name__)
+                logger.warning("任务持久化写入失败：数据库错误=%s", _database_error_summary(exc))
             finally:
                 self._queue.task_done()
 

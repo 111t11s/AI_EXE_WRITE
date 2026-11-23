@@ -9,6 +9,13 @@ from db.migrate_accounts import create_account
 from test_writing_workflow import create_test_db
 
 
+def test_database_error_summary_reports_driver_code_and_message():
+    from api.generation_jobs import _database_error_summary
+
+    error = SimpleNamespace(orig=SimpleNamespace(args=(1054, "Unknown column 'event_sequence'")))
+    assert _database_error_summary(error) == "1054: Unknown column 'event_sequence'"
+
+
 def setup():
     engine = create_test_db()
     account_id = create_account(engine, "writer", "browser-test-password")

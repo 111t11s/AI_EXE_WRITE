@@ -21,9 +21,12 @@ MODE_FILES = {
     "plan": (CHARACTERS, PLOT, CONFLICT, DEVELOPMENT),
     "draft": (CHARACTERS, LANGUAGE, PLOT, CONFLICT),
     "rewrite": (CHARACTERS, LANGUAGE, PLOT, CONFLICT, "references/feedback-and-revision.md"),
+    "continue": (CHARACTERS, LANGUAGE, PLOT, CONFLICT),
+    "polish": (CHARACTERS, LANGUAGE, PLOT, CONFLICT, "references/feedback-and-revision.md"),
 }
 MODE_LABELS = {"blueprint": "小说蓝图", "outline": "大纲设计", "characters": "人物设计",
-               "plan": "章节规划", "draft": "正文初稿", "rewrite": "正文重写"}
+               "plan": "章节规划", "draft": "正文初稿", "rewrite": "正文重写",
+               "continue": "正文续写", "polish": "正文润色"}
 
 
 def webnovel_skill_prompt(mode: str) -> str:

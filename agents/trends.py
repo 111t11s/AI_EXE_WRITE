@@ -1,4 +1,4 @@
-"""抓取公开热搜，供「热点选题」分析使用。
+"""抓取并筛选 AI、数码、娱乐类公开热搜，供「热点选题」分析使用。
 
 只访问服务端配置的地址（默认百度热搜），不接受用户提交的 URL；抓取失败时
 保留上一次缓存，并把错误信息交给页面。解析函数独立于网络，便于离线测试。
@@ -41,6 +41,17 @@ SEARCH_ENGINES = (
 SEARCH_SKIP = {"大家还在搜", "相关搜索", "其他人还在搜", "热搜榜", "热点资讯"}
 SKIP_TITLE_WORDS = ("百科", "辞典", "词典", "读音", "笔顺", "小说简介", "人物介绍", "剧情介绍")
 HOT_WORDS = ("热", "爆", "争议", "话题", "官宣", "开播", "收视", "讨论", "评价", "关注", "刷屏", "破万")
+CURATED_CATEGORIES = {
+    "AI": ("AI", "人工智能", "大模型", "生成式", "智能体", "机器学习", "深度学习", "ChatGPT", "GPT", "DeepSeek", "通义", "豆包", "文心", "Kimi", "Claude", "Gemini", "机器人", "具身智能"),
+    "数码": ("数码", "手机", "平板", "电脑", "笔记本", "芯片", "显卡", "处理器", "耳机", "相机", "智能手表", "智能家居", "苹果", "华为", "小米", "荣耀", "OPPO", "vivo", "三星", "索尼", "任天堂", "Switch", "游戏机"),
+    "娱乐": ("娱乐", "影视", "电影", "电视剧", "综艺", "明星", "演员", "歌手", "演唱会", "开播", "收视", "票房", "剧集", "艺人", "音乐", "动漫", "动画", "电竞", "游戏", "网剧", "综艺节目"),
+}
+POLITICAL_WORDS = (
+    "政治", "时政", "两会", "人大", "政协", "政府", "总书记", "国家主席", "国家领导", "总理", "外交", "国防",
+    "军事", "军方", "解放军", "军演", "选举", "议会", "白宫", "总统", "国会", "台湾", "台海", "两岸", "中美",
+    "涉政", "政治局", "外交部", "国防部", "制裁", "内阁", "议员", "政党", "政策", "特朗普", "拜登", "习近平",
+    "普京", "泽连斯基", "赖清德", "金正恩", "首相", "外长", "议长",
+)
 _search_cache: dict[tuple[str, str], tuple[datetime, list[dict]]] = {}
 
 
@@ -121,6 +132,23 @@ def dedupe(items: list[dict]) -> list[dict]:
     return unique
 
 
+def contains_political_content(text: str) -> bool:
+    value = str(text or "").casefold()
+    return any(word.casefold() in value for word in POLITICAL_WORDS)
+
+
+def is_curated_title(title: str) -> bool:
+    """默认来源只展示 AI、数码、娱乐相关标题，并排除时政内容。"""
+    if contains_political_content(title):
+        return False
+    value = title.casefold()
+    return any(word.casefold() in value for words in CURATED_CATEGORIES.values() for word in words)
+
+
+def filter_political_items(items: list[dict]) -> list[dict]:
+    return [item for item in items if not contains_political_content(item.get("title", ""))]
+
+
 def brief_anchor(brief: str) -> str:
     """取选题要求里最像主题词的短句，作为搜索关键词。"""
     for part in re.split(r"[，,。;；、\s]+", brief):
@@ -164,19 +192,23 @@ def parse_search_results(page: str, source: str) -> list[dict]:
             continue
         if any(word in text for word in SKIP_TITLE_WORDS):
             continue
+        if contains_political_content(text):
+            continue
         rows.append({"title": text, "source": source, "heat": None, "url": None})
     return rows
 
 
 def search_related(brief: str, genre: str = "", limit: int = 20) -> list[dict]:
     """按选题要求检索相关新闻/热点，优先返回带热度、争议等词的条目。"""
+    if contains_political_content(brief) or contains_political_content(genre):
+        return []
     key = (brief.strip()[:200], genre.strip())
     settings = get_settings()
     now = datetime.now(timezone.utc)
     with _lock:
         cached = _search_cache.get(key)
         if cached and now - cached[0] < timedelta(minutes=settings.TREND_CACHE_MINUTES):
-            return list(cached[1])[:limit]
+            return filter_political_items(list(cached[1]))[:limit]
     items = []
     for name, url, param in SEARCH_ENGINES:
         for query in brief_queries(brief, genre):
@@ -190,7 +222,7 @@ def search_related(brief: str, genre: str = "", limit: int = 20) -> list[dict]:
             items.extend(parse_search_results(response.text, name))
         if len(items) >= 6:
             break
-    items = dedupe(items)
+    items = dedupe(filter_political_items(items))
     # 含“热度、争议、开播”等词的条目更像热点，排到前面；其余保持搜索顺序。
     items.sort(key=lambda row: not any(word in row["title"] for word in HOT_WORDS))
     items = items[:limit]
@@ -210,6 +242,7 @@ def collect_trends(refresh: bool = False) -> dict:
         now = datetime.now(timezone.utc)
         fresh = _cache["updated_at"] is not None and now - _cache["updated_at"] < ttl
         if fresh and not refresh and _cache["items"]:
+            _cache["items"] = [row for row in _cache["items"] if is_curated_title(row.get("title", ""))]
             return {**_cache, "cached": True}
 
         items, errors, sources = [], [], []
@@ -221,15 +254,17 @@ def collect_trends(refresh: bool = False) -> dict:
                 logger.warning("热点抓取失败：来源=%s，异常类型=%s", name, type(exc).__name__)
                 errors.append(f"{name}：{type(exc).__name__}")
                 continue
+            rows = [row for row in rows if is_curated_title(row.get("title", ""))]
             if rows:
                 sources.append(name)
                 items.extend(rows)
-        items = dedupe(items)[:MAX_ITEMS]
+        items = dedupe(filter_political_items(items))[:MAX_ITEMS]
         if items:
             _cache.update(items=items, updated_at=now, errors=errors, sources=sources)
         elif _cache["items"]:
             # 全部失败时继续提供上一次结果，但把本次错误带回页面。
-            _cache.update(errors=errors)
+            _cache.update(items=[row for row in _cache["items"] if is_curated_title(row.get("title", ""))],
+                          errors=errors)
         else:
             _cache.update(items=[], errors=errors, sources=sources)
         return {**_cache, "cached": False}

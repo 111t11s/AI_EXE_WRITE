@@ -54,12 +54,43 @@ def test_json_source_parser_accepts_common_field_names():
         ("热点新闻一", 12345, "example.com"), ("热点新闻二", 99, "example.com")]
 
 
+def test_default_hot_list_keeps_only_ai_digital_entertainment_and_drops_politics(monkeypatch):
+    monkeypatch.setattr(trends, "get_settings", lambda: SimpleNamespace(
+        TREND_CACHE_MINUTES=30, TREND_TIMEOUT=5, TREND_SOURCE_URLS=""))
+    monkeypatch.setattr(trends, "fetch_baidu", lambda timeout: [
+        {"title": "AI 助手进入日常办公", "source": "百度热搜", "heat": 1, "url": None},
+        {"title": "新款手机影像功能发布", "source": "百度热搜", "heat": 2, "url": None},
+        {"title": "新剧官宣开播引发讨论", "source": "百度热搜", "heat": 3, "url": None},
+        {"title": "两会讨论 AI 手机政策", "source": "百度热搜", "heat": 4, "url": None},
+        {"title": "年轻人开始反向消费", "source": "百度热搜", "heat": 5, "url": None},
+    ])
+
+    result = trends.collect_trends()
+    assert [row["title"] for row in result["items"]] == [
+        "AI 助手进入日常办公", "新款手机影像功能发布", "新剧官宣开播引发讨论"]
+
+
+def test_trend_defaults_target_requested_categories_and_forbid_politics():
+    request = TrendRequest()
+    assert request.genre_preference == "AI、数码、娱乐"
+    assert "严禁涉及政治" in request.instruction
+
+
+def test_manual_hot_topics_and_brief_reject_political_content():
+    request = TrendRequest(topics=["AI 助手上线", "两会讨论 AI 政策", "新剧官宣开播"])
+    topics, _ = trends_api.resolve_topics(request)
+    assert topics == ["AI 助手上线", "新剧官宣开播"]
+    with pytest.raises(HTTPException) as error:
+        trends_api.resolve_topics(TrendRequest(brief="围绕选举和总统写故事"))
+    assert error.value.status_code == 422
+
+
 def test_collect_trends_caches_and_refreshes(monkeypatch):
     calls = []
     monkeypatch.setattr(trends, "get_settings", lambda: SimpleNamespace(
         TREND_CACHE_MINUTES=30, TREND_TIMEOUT=5, TREND_SOURCE_URLS=""))
     monkeypatch.setattr(trends, "fetch_baidu", lambda timeout: calls.append(timeout) or [
-        {"title": "缓存热点", "source": "百度热搜", "heat": 1, "url": None}])
+        {"title": "AI 助手进入日常办公", "source": "百度热搜", "heat": 1, "url": None}])
 
     first = trends.collect_trends()
     assert first["cached"] is False and first["sources"] == ["百度热搜"]
@@ -77,13 +108,13 @@ def test_failed_refresh_keeps_the_previous_items(monkeypatch):
     def fetch(timeout):
         if state["fail"]:
             raise RuntimeError("blocked")
-        return [{"title": "保留的热点", "source": "百度热搜", "heat": 5, "url": None}]
+        return [{"title": "AI 助手进入日常办公", "source": "百度热搜", "heat": 5, "url": None}]
 
     monkeypatch.setattr(trends, "fetch_baidu", fetch)
-    assert trends.collect_trends()["items"][0]["title"] == "保留的热点"
+    assert trends.collect_trends()["items"][0]["title"] == "AI 助手进入日常办公"
     state["fail"] = True
     failed = trends.collect_trends(refresh=True)
-    assert failed["items"][0]["title"] == "保留的热点"
+    assert failed["items"][0]["title"] == "AI 助手进入日常办公"
     assert failed["errors"] and "百度热搜" in failed["errors"][0]
 
 
@@ -100,6 +131,17 @@ def test_report_must_cite_the_provided_topics():
     incomplete = TrendReport(overview="概览", ideas=[
         idea("年轻人开始反向消费"), idea("某地出现罕见极光", hook="")])
     assert trends_api.clean_report(incomplete, topics) is None
+
+
+def test_report_drops_ideas_that_introduce_political_content():
+    safe = idea("AI 助手进入日常办公")
+    political = idea("AI 助手进入日常办公").model_copy(update={"premise": "总统竞选团队使用 AI 争夺选票"})
+    report = TrendReport(overview="概览", ideas=[safe, political])
+    assert trends_api.clean_report(report, ["AI 助手进入日常办公"]) is None
+
+    report = TrendReport(overview="大模型提升创作效率，但也带来新挑战。", ideas=[safe, safe])
+    political_overview = report.model_copy(update={"overview": "两会讨论大模型政策"})
+    assert trends_api.clean_report(political_overview, ["AI 助手进入日常办公"]) is None
 
 
 def test_analysis_retries_once_when_a_recommendation_is_incomplete(monkeypatch):
@@ -145,6 +187,21 @@ def test_analysis_uses_selected_topics_and_keeps_receipt(monkeypatch):
     assert [row.reference_topics for row in receipt.ideas] == [["热点甲"], ["热点乙"]]
     assert receipt.ideas[0].discussion_hook == "能被概括成一句梗，评论区会站队"
     assert receipt.generated_at
+
+
+def test_analysis_accepts_one_selected_hot_topic(monkeypatch):
+    captured = {}
+
+    async def fake_generate(role, context, payload):
+        captured["topics"] = context["topics"]
+        return TrendReport(overview="围绕热点延展出的不同故事方向。", ideas=[
+            idea("热点衍生方向甲"), idea("热点衍生方向乙")])
+
+    monkeypatch.setattr(trends_api, "generate", fake_generate)
+    receipt = asyncio.run(trends_api.analyze(TrendRequest(topics=["单条有效热点"], idea_count=2)))
+    assert captured["topics"] == ["单条有效热点"]
+    assert receipt.topics == ["单条有效热点"]
+    assert len(receipt.ideas) == 2
 
 
 def test_analysis_without_topics_is_rejected(monkeypatch):

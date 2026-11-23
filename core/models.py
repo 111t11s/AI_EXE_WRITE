@@ -1,12 +1,12 @@
-"""模型配置档案：把 .env 中的主模型与 DeepSeek 配置统一成可选项。
+"""模型配置档案：把 .env 中的 Gemini 主模型和其他模型统一成可选项。
 
-生成请求只提交档案 ID（``default`` / ``deepseek``），密钥和地址始终留在
-服务端，不下发到浏览器，也不写进模型上下文。主模型沿用原有环境配置，
-选中它时返回 ``None``，调用方继续使用原逻辑。
+生成请求只提交档案 ID（``default`` / ``gemini-pro`` / ``deepseek``），密钥和地址始终留在
+服务端，不下发到浏览器，也不写进模型上下文。Gemini Flash 为默认档案；未配置 Gemini 时
+默认档案回退到历史主模型连接。
 """
 
-import os
 import re
+import os
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -75,11 +75,20 @@ class ModelProfile:
 def model_profiles() -> tuple[ModelProfile, ...]:
     settings = get_settings()
     timeout = settings.REQUEST_TIMEOUT or 120
-    # 主模型沿用历史配置：MODEL_NAME 优先，未设置时回退到 DEEPSEEK_MODEL_NAME。
-    default_model = os.getenv("MODEL_NAME") or settings.DEEPSEEK_MODEL_NAME
+    gemini_key = getattr(settings, "GEMINI_API_KEY", "")
+    gemini_url = getattr(settings, "GEMINI_PROXY_URL", "")
+    flash_model = getattr(settings, "GEMINI_3_8_FLASH", "")
+    gemini_primary = bool(gemini_key.strip() and gemini_url.strip() and flash_model.strip())
+    default_profile = (ModelProfile(DEFAULT_PROFILE, "Gemini 3.8 Flash", flash_model,
+                                    gemini_key, gemini_url, timeout) if gemini_primary else
+                       ModelProfile(DEFAULT_PROFILE, "主模型",
+                                    getattr(settings, "MODEL_NAME", "") or os.getenv("MODEL_NAME") or
+                                    settings.DEEPSEEK_MODEL_NAME,
+                                    settings.API_KEY, settings.PROXY_URL, timeout))
     return (
-        ModelProfile(DEFAULT_PROFILE, "主模型", default_model, settings.API_KEY,
-                     settings.PROXY_URL, timeout),
+        default_profile,
+        ModelProfile("gemini-pro", "Gemini 3.1 Pro Preview",
+                     getattr(settings, "GEMINI_4_ARGON", ""), gemini_key, gemini_url, timeout),
         ModelProfile("deepseek", "DeepSeek", settings.DEEPSEEK_MODEL_NAME,
                      settings.DEEPSEEK_API_KEY, settings.DEEPSEEK_PROXY_URL, timeout),
     )
@@ -90,9 +99,12 @@ def available_profiles() -> list[ModelProfile]:
 
 
 def resolve_profile(profile_id: str | None) -> ModelProfile | None:
-    """返回需要覆盖的模型档案；主模型或省略时返回 None（沿用原配置）。"""
+    """默认选择 Gemini Flash；未配置时沿用旧主模型，其余按指定档案选择。"""
     wanted = (profile_id or "").strip()
     if not wanted or wanted == DEFAULT_PROFILE:
+        default_profile = model_profiles()[0]
+        if default_profile.label == "Gemini 3.8 Flash" and default_profile.available:
+            return default_profile
         return None
     profile = next((item for item in model_profiles() if item.id == wanted), None)
     if profile is None:

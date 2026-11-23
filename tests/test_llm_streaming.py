@@ -83,6 +83,21 @@ def test_reasoning_is_forwarded_separately_from_json_content(field, as_object):
     assert [name for name, _ in events] == ["thinking", "delta", "status"]
 
 
+def test_text_content_blocks_are_collected():
+    chunks = [
+        {"choices": [{"delta": {"content": [{"type": "text", "text": '{"summary":'},
+                                                  {"type": "text", "text": '"Gemini"}'}]}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+    ]
+    assert collect_chat_text(iter(chunks)) == '{"summary":"Gemini"}'
+
+
+def test_empty_model_response_is_reported_as_incomplete():
+    response = iter([{"choices": [{"delta": {}, "finish_reason": "stop"}]}])
+    with pytest.raises(IncompleteGenerationError, match="空内容"):
+        collect_chat_text(response)
+
+
 @pytest.mark.parametrize("finish_reason", ["length", "content_filter"])
 @pytest.mark.parametrize("streamed", [True, False])
 def test_explicitly_truncated_output_cannot_be_used_as_a_completed_body(finish_reason, streamed):

@@ -10,3 +10,5 @@ EXIT;
 sudo git -C /opt/aitxt pull --ff-only origin master
 # 重启后端
 sudo systemctl restart aitxt
+# 模型中转
+https://qunaapi.com/sign-up?aff=suVv

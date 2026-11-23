@@ -51,13 +51,19 @@ class Settings(BaseSettings):
     MODEL_NATIVE_TOOLS: bool = False
 
     # 模型名称
+    MODEL_NAME: str = ""
     DEEPSEEK_MODEL_NAME: str = "deepseek-v4-pro"
     GLM_MODEL_NAME: str = "glm-5.1"
     QWEN_MODEL_NAME: str = "qwen3.6-plus"
     KIMI_MODEL_NAME: str = "kimi-k2.6"
 
+    # Gemini 主模型与 Pro 选项共用密钥和 OpenAI 兼容地址。
+    GEMINI_API_KEY: str = ""
+    GEMINI_PROXY_URL: str = ""
+    GEMINI_3_8_FLASH: str = "gemini-3.8-flash"
+    GEMINI_4_ARGON: str = "gemini-4-argon"
+
     # 可选模型配置：DeepSeek 使用独立密钥与地址，供生成时按需选择。
-    # 主模型仍使用 API_KEY / PROXY_URL / MODEL_NAME。
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_PROXY_URL: str = ""
 

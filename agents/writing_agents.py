@@ -1,13 +1,12 @@
 """CrewAI specialists for outlining, chapter planning, drafting and review."""
 
 import json
-import os
 from dataclasses import dataclass
 
 from openai import APIStatusError, OpenAI
 from pydantic import BaseModel, ValidationError
 
-from agents.llm_streaming import collect_chat_text, has_generation_listener
+from agents.llm_streaming import IncompleteGenerationError, collect_chat_text, has_generation_listener
 from agents.mcp.worldbuilding import crewai_tools
 from agents.outline_skills import outline_skill_prompt
 from agents.prose_skills import opening_skill_prompt, prose_skill_prompt
@@ -135,6 +134,24 @@ DRAFT_REWRITE = WritingRole(
     "人物正文进展由独立分析任务处理，不要在正文结果中输出 character_updates。",
     ChapterContentDraft, CHAPTER_TOOLS,
 )
+DRAFT_POLISH = WritingRole(
+    "小说正文润色编辑",
+    "润色 chapter.content 中的完整正文，返回完整的新正文并贴近 target_characters 指定篇幅。"
+    "保持原有情节、人物身份与关系、叙事视角、事件结果、因果和伏笔，不新增或删除剧情信息。"
+    "重点改善病句、重复表达、用词准确度、段落衔接、节奏、对话自然度和画面感；"
+    "除非用户明确要求，不改变文风、叙述人称、时态、人物语气或情绪基调。"
+    "只返回润色后的完整正文，保留段落，不写章节标题、评语、修改说明或 character_updates。",
+    ChapterContentDraft, CHAPTER_TOOLS,
+)
+DRAFT_CONTINUE = WritingRole(
+    "小说正文续写作者",
+    "从 chapter.content 的最后一个实际场景自然续写，结合章节摘要、分卷与角色资料推进当前章节。"
+    "只输出新增的续写正文，不复述或复制原文，不写章节标题、回顾、创作说明或 character_updates。"
+    "延续原有叙事视角、语言风格、人物语气与当前场景，衔接最后的动作、时间、地点和未完成对话；"
+    "遵守世界规则、人物能力边界、因果与伏笔，不把未来大纲安排写成已经发生的事实。"
+    "按照 target_characters 控制新增篇幅；除非章节摘要要求收束，不要强行结束章节或提前揭示远期谜底。",
+    ChapterContentDraft, CHAPTER_TOOLS,
+)
 CONSISTENCY_REPAIR = WritingRole(
     "小说一致性修复编辑",
     "根据 approved_fix.suggestion 中用户采纳的修复意见，修复 chapter.content 中与本问题相关的内容。"
@@ -197,6 +214,8 @@ CONSISTENCY = WritingRole(
 TREND_ANALYST = WritingRole(
     "网文热点选题策划",
     "阅读本次提供的最新热点标题和用户偏好，输出可直接开写的中文网文题材方案，数量与 preferences.idea_count 一致。"
+    "题材默认优先围绕 AI/人工智能、数码产品与科技体验、影视/综艺/游戏/音乐等娱乐方向；不得涉及政治或时政，"
+    "不得出现政治人物、政府机构、外交、军事、选举、政党、政策争议等内容。若某个热点涉及这些内容，忽略它并改用安全热点。"
     "如果提供了 brief（用户手动粘贴的选题要求），先读懂它：题材偏好、主角与关系、基调、必须保留与必须避免的点，"
     "把理解写进 requirement_summary（没有 brief 时返回空字符串）；brief 是硬约束，方案不得擅自更换题材、主角性别或基调。"
     "此时 topics 是按该要求检索到的相关新闻/热点（也可能是热搜榜单）：只有确实能借势（情绪、处境或人物关系相通）时才引用；"
@@ -206,15 +225,14 @@ TREND_ANALYST = WritingRole(
     "科技日常、人情世故等普通人能对号入座的话题优先；硬新闻只提供背景情绪，不复述事件、不消费当事人。"
     "每个方案都要考虑传播：它能被概括成一句梗吗？读者会在评论区站队、吐槽或转发吗？没有讨论空间的方案不要输出。"
     "热点只提供情绪切入点与时代细节：不得直接改编真实事件、真实人物或复述新闻正文，"
-    "涉及政治、军事、外交、灾难、案件、医疗、未成年人等敏感内容时只取普遍情绪，改成虚构世界与虚构人物；"
+    "灾难、案件、医疗、未成年人等敏感内容不作为题材素材；"
     "不写犯罪手法，不消费当事人，不编造未提供的事实，也不承诺流量或签约。"
     "每个方案给出类型 genre、时代背景 setting、力量体系 power_system、金手指 cheat、主角设定 protagonist、"
     "主角目标 goal、基调 tone、篇幅 length，以及参考书名 title、一句话梗概 premise、核心冲突 core_conflict、"
     "话题点 discussion_hook、两三条卖点 selling_points、参考热点 reference_topics 和风险提示 risks。"
     "discussion_hook 要写清可传播的梗、争议点或共鸣点，以及读者会站哪一边；不能只写“有话题”“很爽”。"
     "reference_topics 必须逐字引用本次提供列表中的标题，至少一条，不能改写、概括或编造热点；"
-    "优先引用生活、消费、科技、文化、体育、娱乐类热点，避免把政治、灾难、案件、医疗、军事或当事人隐私类标题作为参考热点；"
-    "如果列表里缺少这类条目，就选争议度较低、能安全虚构化的条目，并在 risks 说明处理方式。"
+    "只引用本次提供的非政治热点，绝不引用政治、灾难、案件、医疗、军事或当事人隐私类标题；默认热搜列表已优先筛选 AI、数码和娱乐方向。"
     "说明热点中的哪种情绪（焦虑、补偿、好奇、愤怒、期待）转化为人物目标与冲突，不能只把热点标题当标签。"
     "方案之间要有明显差异，避免同一套路换皮；genre 使用常见网文类型名称；title 要像真实书名，避免标题党与夸大承诺。"
     "每个方案必须完整填写所有字段；如果输出长度受限，宁可只给 2 个完整方案，也不要返回缺字段的半成品。"
@@ -242,7 +260,15 @@ def _request_without_tools(*, model, api_key, base_url, timeout, role, prompt) -
             ],
         }
         completion = client.chat.completions.create(**request, stream=True)
-        return collect_chat_text(completion)
+        try:
+            return collect_chat_text(completion)
+        except IncompleteGenerationError as exc:
+            if "空内容" not in str(exc) and "思考内容" not in str(exc):
+                raise
+            # 部分兼容网关会忽略 stream=true 或只返回空 SSE；改用一次非流式请求。
+            logger.warning("模型流式返回空内容，改用非流式重试：任务=%s，模型=%s", role.title, model)
+            fallback = client.chat.completions.create(**request, stream=False)
+            return collect_chat_text(fallback)
 
 
 def _extract_json(raw: str) -> str:
@@ -286,7 +312,7 @@ def generate(role: WritingRole, context: dict, profile=None) -> BaseModel:
         logger.info("使用模型配置：%s（%s）", profile.id, profile.model)
     else:
         connection = {
-            "model": os.getenv("MODEL_NAME") or settings.DEEPSEEK_MODEL_NAME,
+            "model": getattr(settings, "MODEL_NAME", "") or settings.DEEPSEEK_MODEL_NAME,
             "api_key": settings.API_KEY,
             "base_url": settings.PROXY_URL,
             "timeout": settings.REQUEST_TIMEOUT or 120,
@@ -298,14 +324,17 @@ def generate(role: WritingRole, context: dict, profile=None) -> BaseModel:
         output_format = ("只返回符合 Schema 的 JSON，不要附带 Markdown。"
                          f"\nSchema：{json.dumps(role.output.model_json_schema(), ensure_ascii=False)}")
         expected_output = f"合法的 {role.output.__name__} JSON"
-    prose_prompt = prose_skill_prompt(rewrite=role is DRAFT_REWRITE) if role in (DRAFT, DRAFT_REWRITE) else ""
-    if role in (DRAFT, DRAFT_REWRITE):
+    prose_prompt = prose_skill_prompt(rewrite=role in (DRAFT_REWRITE, DRAFT_POLISH),
+                                      continuation=role is DRAFT_CONTINUE) if role in (
+        DRAFT, DRAFT_REWRITE, DRAFT_POLISH, DRAFT_CONTINUE) else ""
+    if role in (DRAFT, DRAFT_REWRITE, DRAFT_POLISH, DRAFT_CONTINUE):
         prose_prompt += opening_skill_prompt(
-            chapter_number=(context.get("chapter") or {}).get("chapter_number"), rewrite=role is DRAFT_REWRITE)
+            chapter_number=(context.get("chapter") or {}).get("chapter_number"),
+            rewrite=role in (DRAFT_REWRITE, DRAFT_POLISH), continuation=role is DRAFT_CONTINUE)
     foundation_mode = {
         OUTLINE: "outline", OUTLINE_REWRITE: "outline", PLAN: "plan",
         CORE_CHARACTERS: "characters", SUPPORTING_CHARACTERS: "characters", CHARACTER_PROFILES: "characters",
-        DRAFT: "draft", DRAFT_REWRITE: "rewrite",
+        DRAFT: "draft", DRAFT_REWRITE: "rewrite", DRAFT_POLISH: "polish", DRAFT_CONTINUE: "continue",
     }.get(role)
     foundation_prompt = webnovel_skill_prompt(foundation_mode) if foundation_mode else ""
     prompt = (f"{role.task}\n{output_format}{foundation_prompt}{prose_prompt}"

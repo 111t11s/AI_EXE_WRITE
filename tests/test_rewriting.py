@@ -152,6 +152,41 @@ def test_rewrite_supports_legacy_json_text_columns(novel, monkeypatch):
         assert json.loads(connection.scalar(select(chapter.c.content).where(chapter.c.id == chapter_id))) == REWRITTEN
 
 
+@pytest.mark.parametrize("mode,suffix", [(mode, suffix) for mode in ("polish", "continue")
+                                           for suffix in ("", "/stream", "/tasks")])
+def test_polish_and_continue_keep_their_save_semantics(novel, monkeypatch, mode, suffix):
+    chapter_id = prepare(novel, status="reviewed")
+
+    def generate(role, context, profile=None):
+        assert role is (agents.DRAFT_POLISH if mode == "polish" else agents.DRAFT_CONTINUE)
+        assert context["chapter"]["content"] == ORIGINAL
+        return ChapterDraft(character_updates=[], content=REWRITTEN)
+
+    monkeypatch.setattr(agents, "generate", generate)
+    receipt = result(novel, f"/api/v1/writing/chapters/{chapter_id}/{mode}",
+                     {"target_characters": 1500, "instruction": "保留人物语气"}, suffix)
+    saved = get(novel, f"chapters/{chapter_id}")
+    expected = REWRITTEN if mode == "polish" else f"{ORIGINAL}\n\n{REWRITTEN}"
+    assert saved["content"] == expected and saved["status"] == "draft"
+    assert receipt["word_count"] == sum(not char.isspace() for char in expected)
+
+
+def test_continue_rejects_stale_chapter_without_appending(novel, monkeypatch):
+    chapter_id = prepare(novel)
+
+    def generate(role, context, profile=None):
+        with novel["engine"].begin() as connection:
+            connection.execute(update(tables["novel_chapter"]).where(
+                tables["novel_chapter"].c.id == chapter_id).values(content="作者刚刚修改的内容"))
+        return ChapterDraft(character_updates=[], content=REWRITTEN)
+
+    monkeypatch.setattr(agents, "generate", generate)
+    response = novel["client"].post(f"/api/v1/writing/chapters/{chapter_id}/continue", json={},
+                                     headers=novel["headers"]["writer"])
+    assert response.status_code == 409 and "未追加" in response.text
+    assert get(novel, f"chapters/{chapter_id}")["content"] == "作者刚刚修改的内容"
+
+
 @pytest.mark.parametrize("resource", ["outlines", "chapters"])
 def test_model_failure_preserves_original(novel, monkeypatch, resource):
     record_id = prepare(novel) if resource == "chapters" else novel["outline"]
