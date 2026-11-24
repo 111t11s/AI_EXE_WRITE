@@ -6,7 +6,7 @@
 from fastapi import APIRouter
 
 from api.account_api import CurrentAccount
-from core.models import DEFAULT_PROFILE, available_profiles
+from core.models import available_profiles, default_profile_id
 
 
 router = APIRouter(prefix="/models", tags=["模型"])
@@ -14,4 +14,4 @@ router = APIRouter(prefix="/models", tags=["模型"])
 
 @router.get("", summary="查询可用的模型配置")
 def list_models(user: CurrentAccount) -> dict:
-    return {"items": [profile.public() for profile in available_profiles()], "default": DEFAULT_PROFILE}
+    return {"items": [profile.public() for profile in available_profiles()], "default": default_profile_id()}

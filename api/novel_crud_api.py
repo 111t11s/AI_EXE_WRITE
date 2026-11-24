@@ -13,7 +13,7 @@ from api.database import Database, get_database, transaction
 from api.novel_tables import tables
 from api.ownership import readable_condition, require_readable, require_owned, validate_owned_links
 from api.project_trash_api import move_project_to_trash
-from core.logging import get_logger
+from core.app_logging import get_logger
 from db.connection import legacy_json_columns
 from db.accounts import account
 from db.character_progress import character_progress

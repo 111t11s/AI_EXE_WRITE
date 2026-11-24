@@ -43,29 +43,21 @@ class Settings(BaseSettings):
     DB_TLS_REQUIRED: bool = False
     DB_TLS_CA: str = ""
 
-    # OpenAI API key
+    # 模型名称清单在 core/model_config.py；密钥和服务地址通过环境变量配置。
+    GPT_API_KEY: str = ""
+    # 兼容已有部署，未设置 GPT_API_KEY 时作为 GPT 密钥使用。
     API_KEY: str = ""
-    PROXY_URL: str = "https://api.meai.cloud/v1"
+    # 模型服务地址可按部署环境覆盖。
+    GPT_BASE_URL: str = ""
+    GEMINI_BASE_URL: str = ""
+    DEEPSEEK_BASE_URL: str = ""
     # Application code handles MCP reads/writes. Enable model-side tools only
     # after verifying the gateway supports the full CrewAI request format.
     MODEL_NATIVE_TOOLS: bool = False
 
-    # 模型名称
-    MODEL_NAME: str = ""
-    DEEPSEEK_MODEL_NAME: str = "deepseek-v4-pro"
-    GLM_MODEL_NAME: str = "glm-5.1"
-    QWEN_MODEL_NAME: str = "qwen3.6-plus"
-    KIMI_MODEL_NAME: str = "kimi-k2.6"
-
-    # Gemini 主模型与 Pro 选项共用密钥和 OpenAI 兼容地址。
+    # 各服务密钥由环境变量注入；名称和地址不从环境变量读取。
     GEMINI_API_KEY: str = ""
-    GEMINI_PROXY_URL: str = ""
-    GEMINI_3_8_FLASH: str = "gemini-3.8-flash"
-    GEMINI_4_ARGON: str = "gemini-4-argon"
-
-    # 可选模型配置：DeepSeek 使用独立密钥与地址，供生成时按需选择。
     DEEPSEEK_API_KEY: str = ""
-    DEEPSEEK_PROXY_URL: str = ""
 
     # 热点选题：抓取公开热搜时的缓存分钟数、超时秒数与额外的 JSON 数据源（逗号分隔）
     TREND_CACHE_MINUTES: int = Field(default=30, ge=1, le=1440)

@@ -68,8 +68,8 @@ class BatchDraftRequest(DraftRequest):
 
 
 class CoreCharacterRequest(WritingInput):
-    protagonist_count: int = Field(default=1, ge=1, le=2)
-    important_count: int = Field(default=3, ge=0, le=8)
+    protagonist_count: Literal[2] = 2
+    important_count: Literal[0] = 0
     outline_id: RowId | None = None
     volume_id: RowId | None = None
 
@@ -235,8 +235,27 @@ class CharacterVolumeProfile(Generated):
     progress_relation: str = Field(min_length=1, max_length=900)
 
 
+class CharacterRelationshipDraft(Generated):
+    target_name: Annotated[str, Field(min_length=1, max_length=160)]
+    relationship_type: Annotated[str, Field(min_length=1, max_length=100)]
+    description: Detail
+
+
+class CharacterFactionDraft(Generated):
+    name: Annotated[str, Field(min_length=1, max_length=160)]
+    faction_type: str = Field(default="", max_length=120)
+    summary: Detail
+    goal: str = ""
+    leader: str = Field(default="", max_length=160)
+    territory: str = Field(default="", max_length=300)
+    strengths: str = ""
+    weaknesses: str = ""
+    relationships: str = ""
+
+
 class CharacterDraft(Generated):
     category: Literal["protagonist", "important", "supporting"]
+    gender: Literal["男", "女"] | None = None
     name: Annotated[str, Field(min_length=1, max_length=160)]
     role: str = Field(min_length=1, max_length=70)
     summary: Detail
@@ -247,6 +266,8 @@ class CharacterDraft(Generated):
     weakness: Detail
     character_arc: Detail
     abilities: Detail
+    faction_name: str = Field(default="", max_length=160)
+    relationships: list[CharacterRelationshipDraft] = Field(default_factory=list, max_length=20)
     volume_profiles: list[CharacterVolumeProfile] = Field(default_factory=list, max_length=5)
 
 
@@ -267,6 +288,7 @@ class CharacterProfileList(Generated):
 
 class CharacterDraftList(Generated):
     characters: list[CharacterDraft] = Field(max_length=22)
+    new_factions: list[CharacterFactionDraft] = Field(default_factory=list, max_length=12)
     reused_characters: list[ReusedCharacterDraft] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")

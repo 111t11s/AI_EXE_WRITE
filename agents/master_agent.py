@@ -5,25 +5,13 @@
 
 from crewai import Agent, Crew, LLM, Process, Task
 
-from core.config import get_settings
 from core.models import resolve_profile
 
 
 def create_master_agent() -> Agent:
     """创建负责小说创作规划的测试智能体。"""
-    settings = get_settings()
     profile = resolve_profile(None)
-    if profile is not None:
-        connection = profile.connection()
-    else:
-        if not settings.API_KEY:
-            raise RuntimeError("请先在 .env 中配置模型 API 密钥")
-        connection = {
-            "model": getattr(settings, "MODEL_NAME", "") or settings.DEEPSEEK_MODEL_NAME,
-            "api_key": settings.API_KEY,
-            "base_url": settings.PROXY_URL,
-            "timeout": settings.REQUEST_TIMEOUT or 120,
-        }
+    connection = profile.connection()
     llm = LLM(**connection, max_retries=0, stream=True)
     return Agent(
         role="小说创作总策划",

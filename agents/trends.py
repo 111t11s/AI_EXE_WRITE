@@ -13,7 +13,7 @@ from urllib.parse import quote
 import httpx
 
 from core.config import get_settings
-from core.logging import get_logger
+from core.app_logging import get_logger
 
 
 logger = get_logger("trends")

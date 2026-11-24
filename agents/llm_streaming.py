@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from time import monotonic
 from typing import Any
 
-from core.logging import get_logger
+from core.app_logging import get_logger
 
 
 logger = get_logger("llm_streaming")
@@ -127,7 +127,7 @@ def collect_chat_text(response: Any) -> str:
         if _looks_like_html(original):
             logger.warning("模型服务返回网页内容：%s", _response_hint(original))
             raise IncompleteGenerationError(
-                "模型服务返回了网页而不是接口内容，请检查 PROXY_URL 是否为 OpenAI 兼容接口地址（通常以 /v1 结尾）")
+                "模型服务返回了网页而不是接口内容，请检查 core/model_config.py 中该模型的服务地址")
         # Some compatible gateways ignore stream=true. Read that same JSON
         # response rather than issue a second, non-streaming generation.
         http_response = getattr(response, "response", None)

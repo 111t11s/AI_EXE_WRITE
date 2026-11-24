@@ -8,12 +8,15 @@ const statusNames = {planning: '规划中', writing: '写作中', completed: '�
   approved: '已确认', active: '使用中', archived: '已归档'};
 const labels = {genre: '小说类型', setting: '时代与背景', power_system: '力量体系', cheat: '金手指',
   protagonist: '主角设定', goal: '主角目标', tone: '故事基调', length: '篇幅规划'};
+const modelStorageKey = 'aitxt.currentModel';
+const savedModelChoice = () => { try { return localStorage.getItem(modelStorageKey) || ''; } catch { return ''; } };
 const pageSize = 15;
 // 分卷目录每页显示的卷数；分卷详情在固定高度的卡片内滚动。
 const volumePageSize = 3;
 const initialState = () => ({projects: [], project: null, libraryOwner: 'all', worlds: [], outlines: [], tab: 'overview',
   outline: null, volumes: null, volume: null, volumePage: 0, volumeChapters: null, beats: null, page: null, chapter: null, chapterId: null,
-  characters: null, characterProfiles: null, characterProgress: null, characterError: null, characterLoading: false, characterOutlineId: null,
+  characters: null, characterProfiles: null, characterProgress: null, factions: null, characterRelationships: null,
+  characterError: null, characterLoading: false, characterOutlineId: null,
   consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
   consistencyOutlineId: null, consistencyReport: null,
   consistencyIssuePage: 1, consistencySelectedIssues: new Set(), consistencyShowReport: false, consistencyReportKey: null,
@@ -21,11 +24,11 @@ const initialState = () => ({projects: [], project: null, libraryOwner: 'all', w
   trends: null, trendsLoading: false, trendsError: null, trendsSelection: new Map(),
   trendsManualMode: false, trendsManualText: '', trendsSearched: null, trendsSearchedSelection: new Map(),
   trendSearchLoading: false, trendsGenre: 'AI、数码、娱乐', trendsAudience: '关注 AI、数码与娱乐的网文读者',
-  trendsNote: '只围绕 AI/人工智能、数码产品与科技体验、影视、综艺、游戏、音乐等娱乐话题选材；严禁涉及政治、时政、外交、军事、选举和政策争议。', trendsModel: '',
+  trendsNote: '只围绕 AI/人工智能、数码产品与科技体验、影视、综艺、游戏、音乐等娱乐话题选材；严禁涉及政治、时政、外交、军事、选举和政策争议。',
   taskCategory: 'all', taskProjectId: 'all', taskStatus: 'all', taskPage: 1, taskPageSize: 5,
   taskMenuOpen: false, tasksLoaded: false, tasksError: null, taskSelection: new Set(),
   taskMeta: null, completedTotal: 0,
-  modelOptions: [], modelChoice: '',
+  modelOptions: [], modelChoice: savedModelChoice(),
   busy: false, screen: 'project', reviews: new Map()});
 const state = initialState();
 let account = null;
@@ -358,7 +361,9 @@ function renderTaskResult(job, result) {
   else if (job.kind === 'trends') content.push(trendReportView(result));
   else {
     let message = '生成结果已保存，可打开小说查看。';
-    if (job.kind === 'worldbuilding') message = result.persistence?.world_id ? '世界观已保存。' : '生成已完成，请核对保存状态。';
+    if (job.kind === 'worldbuilding') message = result.persistence?.error ? `生成完成但保存未完整：${result.persistence.error}` :
+      result.persistence?.outline_id && result.persistence?.character_ids?.length >= 2 ?
+        '世界观、初始大纲、男女主及第一卷阶段档案已保存。' : '生成已完成，请核对世界观、大纲和角色的保存状态。';
     if (job.kind === 'outline') message = `大纲 v${result.version_no} 已保存，共 ${result.volume_ids.length} 卷。`;
     if (job.kind === 'plan') message = `已保存 ${result.chapters.length} 个计划章节。`;
     if (job.kind === 'draft') {
@@ -374,7 +379,7 @@ function renderTaskResult(job, result) {
     if (job.kind === 'batch_draft') {
       message = `已按顺序保存 ${result.completed_count} 章正文。`;
       if (result.warning) message += '部分章节的人物进展未保存，详见下方提示。';
-      else message += '每章人物进展均已分析。';
+      else message += '全部正文生成后已统一分析人物进展。';
     }
     if (job.kind === 'character_progress') {
       message = `已分析并保存本章 ${result.updated_count} 位角色的人物正文进展。`;
@@ -702,7 +707,7 @@ function startTrendAnalysis() {
   }
   const payload = {topics, brief, genre_preference: state.trendsGenre.trim(),
     audience: state.trendsAudience.trim(), instruction: state.trendsNote.trim(), idea_count: 4};
-  if (modelSelectable() && state.trendsModel) payload.model = state.trendsModel;
+  if (state.modelChoice) payload.model = state.modelChoice;
   const analysisButton = $('trend-analysis-button');
   setBusy('正在提交热点分析…');
   if (analysisButton) {
@@ -840,14 +845,6 @@ function trendsView() {
   const fields = [element('label', {class: 'control'}, '类型偏好', genre),
     element('label', {class: 'control'}, '目标读者', audience),
     element('label', {class: 'control'}, '补充要求（可选）', note)];
-  if (modelSelectable()) {
-    const model = element('select', {'aria-label': '调用模型'},
-      modelChoices().map(choice => element('option', {value: choice.value}, choice.label)));
-    model.value = state.trendsModel || state.modelChoice || modelChoices()[0]?.value || '';
-    state.trendsModel = model.value;
-    model.addEventListener('change', event => { state.trendsModel = event.target.value; });
-    fields.push(element('label', {class: 'control'}, '调用模型', model));
-  }
   const right = panel('分析设置', stack(...fields,
     actions(element('button', {id: 'trend-analysis-button', type: 'button', class: 'button primary',
       click: startTrendAnalysis, disabled: state.busy || state.trendsLoading}, '分析并推荐题材')),
@@ -1036,7 +1033,7 @@ function overview() {
   const world = state.worlds[0];
   const project = state.project;
   const steps = [['世界观', world ? `当前：${world.title}` : '先建立当前世界观'],
-    ['角色', '先生成主角与重要配角，有大纲后再补充配角'],
+    ['角色', '世界观生成后自动创建男女主，之后按大纲补充配角'],
     ['大纲与分卷', state.outlines.length ? `已有 ${state.outlines.length} 个大纲版本` : '生成全书结构与剧情节点'],
     ['章节与正文', '先规划章节，再生成初稿或手动编辑'], ['审读', '检查人物、设定与情节衔接']];
   const worldPanel = world ? panel(world.title, stack(prose(world.summary), element('div', {class: 'details'},
@@ -1389,12 +1386,22 @@ async function loadCharacters() {
   render();
   try {
     const outlineId = state.characterOutlineId || state.outlines[0]?.id;
-    const [rows, profiles, progress] = await Promise.all([
+    const worldId = state.worlds[0]?.id;
+    const [rows, profiles, progress, factions] = await Promise.all([
       allRows('/characters', {project_id: projectId}),
       outlineId ? api(`/writing/projects/${projectId}/character-profiles`, {filters: {outline_id: outlineId}}) : Promise.resolve({items: []}),
       api(`/writing/projects/${projectId}/character-progress`),
+      worldId ? allRows('/factions', {world_id: worldId}) : Promise.resolve([]),
     ]);
-    if (current('characters', token)) { state.characters = rows; state.characterProfiles = profiles; state.characterProgress = progress; }
+    const relationshipsByCharacter = await Promise.all(rows.map(row =>
+      allRows('/character-relationships', {source_character_id: row.id})));
+    if (current('characters', token)) {
+      state.characters = rows;
+      state.characterProfiles = profiles;
+      state.characterProgress = progress;
+      state.factions = factions;
+      state.characterRelationships = relationshipsByCharacter.flat();
+    }
   } catch (error) {
     if (current('characters', token)) state.characterError = error.message;
   } finally {
@@ -1427,24 +1434,156 @@ function characterProgressView(id) {
     entries.length ? null : muted('尚无已分析的正文进展；打开章节后点击「分析人物进展」即可单独生成。'));
 }
 
+function characterTreeNode(character, edge, byId, ancestors, visited) {
+  if (visited.has(character.id)) return null;
+  visited.add(character.id);
+  const nextAncestors = new Set(ancestors).add(character.id);
+  const related = (state.characterRelationships || []).flatMap(relation => {
+    const sourceId = Number(relation.source_character_id);
+    const targetId = Number(relation.target_character_id);
+    const otherId = sourceId === character.id ? targetId : targetId === character.id ? sourceId : null;
+    if (otherId == null || nextAncestors.has(otherId)) return [];
+    const other = byId.get(otherId);
+    if (!other) return [];
+    const direction = sourceId === character.id ? '' : '对其：';
+    return [{character: other, edge: {id: relation.id,
+      label: `${direction}${relation.relationship_type}${relation.description ? ` · ${relation.description}` : ''}`}}];
+  });
+  return element('li', {class: 'character-tree-node'},
+    element('div', {class: 'tree-person'}, edge ? element('span', {class: 'tree-edge'}, edge.label || edge) : null,
+      edge?.id ? button('删除关系', () => deleteCharacterRelationship(edge.id), 'secondary tree-action', readOnlyProject()) : null,
+      element('strong', {}, character.name), pill(character.role),
+      character.faction_id ? muted((state.factions || []).find(faction => faction.id === character.faction_id)?.name || '所属势力') : null,
+      character.summary ? muted(character.summary) : null),
+    related.length ? element('ul', {}, ...related.map(item => characterTreeNode(
+      item.character, item.edge, byId, nextAncestors, visited))) : null);
+}
+
+async function deleteCharacterRelationship(id) {
+  if (!window.confirm('确定删除这条角色关系吗？')) return;
+  try {
+    await api(`/character-relationships/${id}`, {method: 'DELETE'});
+    notify('角色关系已删除。');
+    await loadCharacters();
+  } catch (error) { notify(`删除角色关系失败：${error.message}`, 'error'); }
+}
+
+function characterTreeView() {
+  const characters = state.characters || [];
+  const leads = characters.filter(row => row.role.startsWith('主角'));
+  const byId = new Map(characters.map(row => [row.id, row]));
+  const connected = new Set();
+  const roots = leads.map(lead => {
+    const visited = new Set();
+    const node = characterTreeNode(lead, '', byId, new Set(), visited);
+    visited.forEach(id => connected.add(id));
+    return node;
+  });
+  const unlinked = characters.filter(row => !connected.has(row.id));
+  return panel('角色关系树', stack(
+    muted('以男女主为根，根据已记录的人物关系展开；关系方向会显示在连接标签中。尚未关联到主角的人物单独列出。'),
+    leads.length ? element('ul', {class: 'character-tree'}, ...roots) : muted('还没有男女主。'),
+    unlinked.length ? stack(element('h3', {}, leads.length ? '尚未连入主角关系网' : '全部角色'),
+      element('ul', {class: 'character-tree'}, ...unlinked.map(row => characterTreeNode(
+        row, '未设置关系', byId, new Set(), new Set())))) : null));
+}
+
+function factionTreeView() {
+  const factions = state.factions || [];
+  const characters = state.characters || [];
+  const factionNodes = factions.map(faction => {
+    const members = characters.filter(row => Number(row.faction_id) === Number(faction.id));
+    return element('li', {class: 'faction-tree-node'},
+      element('div', {class: 'tree-faction'}, element('strong', {}, faction.name),
+        faction.faction_type ? pill(faction.faction_type) : null,
+        faction.leader ? muted(`领袖：${faction.leader}`) : null,
+        faction.summary ? muted(faction.summary) : null,
+        faction.relationships ? details(['势力关系', faction.relationships]) : null),
+      members.length ? element('ul', {}, ...members.map(row => element('li', {class: 'tree-person'},
+        element('strong', {}, row.name), pill(row.role), row.summary ? muted(row.summary) : null))) :
+        element('ul', {}, element('li', {class: 'tree-empty'}, muted('暂无角色归属'))));
+  });
+  const unassigned = characters.filter(row => !factions.some(faction => Number(faction.id) === Number(row.faction_id)));
+  if (unassigned.length) factionNodes.push(element('li', {class: 'faction-tree-node'},
+    element('div', {class: 'tree-faction'}, element('strong', {}, '未加入势力')),
+    element('ul', {}, ...unassigned.map(row => element('li', {class: 'tree-person'},
+      element('strong', {}, row.name), pill(row.role), row.summary ? muted(row.summary) : null)))));
+  return panel('势力树', stack(
+    muted('按所属势力归组人物；可在角色档案卡中调整归属。'),
+    factionNodes.length ? element('ul', {class: 'faction-tree'}, ...factionNodes) :
+      muted('当前世界观还没有势力档案，可点击上方「新建势力」。')));
+}
+
+function characterRelationshipDialog(sourceId = null) {
+  const characters = state.characters || [];
+  if (characters.length < 2) { notify('至少需要两位角色才能建立关系。'); return; }
+  const sourceChoices = characters.map(row => ({value: row.id, label: `${row.name} · ${row.role}`}));
+  const targetChoices = characters.filter(row => row.id !== sourceId).map(row => ({value: row.id, label: `${row.name} · ${row.role}`}));
+  openAction({title: '整理角色关系', description: '记录一条有方向的人物关系；保存后会在男女主关系树中展开。',
+    submit: '保存关系', fields: [
+      {name: 'source_character_id', label: '关系发起角色', type: 'select', value: sourceId || sourceChoices[0].value, choices: sourceChoices},
+      {name: 'target_character_id', label: '关联角色', type: 'select', value: targetChoices[0].value, choices: targetChoices},
+      {name: 'relationship_type', label: '关系类型', type: 'text', required: true, maxlength: 100, placeholder: '例如：师徒、同盟、亲属'},
+      {name: 'description', label: '关系说明', type: 'textarea', required: true, maxlength: 2000, rows: 3},
+    ],
+    send: data => post('/character-relationships', {...data,
+      source_character_id: Number(data.source_character_id), target_character_id: Number(data.target_character_id)}),
+    success: () => '角色关系已保存。', after: loadCharacters});
+}
+
+function createFactionDialog() {
+  const worldId = state.worlds[0]?.id;
+  if (!worldId) { notify('请先设置当前世界观。'); return; }
+  openAction({title: '新建势力', description: '创建后可在角色档案卡中设置角色所属势力。',
+    submit: '保存势力', fields: [
+      {name: 'name', label: '势力名称', type: 'text', required: true, maxlength: 160},
+      {name: 'faction_type', label: '势力类型', type: 'text', maxlength: 120, placeholder: '例如：宗门、家族、商会'},
+      {name: 'summary', label: '势力简介', type: 'textarea', required: true, rows: 3},
+      {name: 'goal', label: '势力目标', type: 'textarea', rows: 2},
+      {name: 'leader', label: '领袖', type: 'text', maxlength: 160},
+      {name: 'territory', label: '领地', type: 'text', maxlength: 300},
+      {name: 'strengths', label: '优势', type: 'textarea', rows: 2},
+      {name: 'weaknesses', label: '弱点', type: 'textarea', rows: 2},
+      {name: 'relationships', label: '与其他势力的关系', type: 'textarea', rows: 2},
+    ],
+    send: data => post('/factions', {...data, world_id: worldId}),
+    success: () => '势力已保存。', after: loadCharacters});
+}
+
+function characterFactionDialog(character) {
+  const factions = state.factions || [];
+  const factionChoices = [{value: '', label: '未加入势力'},
+    ...factions.map(row => ({value: row.id, label: `${row.name}${row.faction_type ? ` · ${row.faction_type}` : ''}`}))];
+  openAction({title: `设置「${character.name}」的势力`, description: '角色只归属一个主要势力；选择“未加入势力”可解除当前归属。',
+    submit: '保存归属', fields: [{name: 'faction_id', label: '所属势力', type: 'select',
+      value: character.faction_id ?? '', choices: factionChoices}],
+    send: data => api(`/characters/${character.id}`, {method: 'PATCH', data: {
+      faction_id: data.faction_id ? Number(data.faction_id) : null,
+    }}),
+    success: () => '角色势力归属已更新。', after: loadCharacters});
+}
+
 function characterView() {
   const outlineId = state.characterOutlineId || state.outlines[0]?.id;
+  const hasProtagonists = (state.characters || []).some(row => row.role.startsWith('主角'));
   const version = element('select', {'aria-label': '配角生成使用的大纲版本',
     change: (event) => { state.characterOutlineId = Number(event.target.value); state.characterProfiles = null; void loadCharacters(); }},
     state.outlines.map(row => element('option', {value: row.id, selected: row.id === outlineId}, `大纲 v${row.version_no}`)));
   const controls = panel(readOnlyProject() ? '角色档案浏览' : '角色生成智能体', stack(
-    muted(readOnlyProject() ? '选择大纲版本查看各卷角色档案及正文进度。' : '根据当前世界观建立主角与重要配角；大纲完成后，再补充推动剧情的其他配角。任务在后台生成，可通过「查看进度」查看实时内容。'),
-    actions(mutationButton('生成主角与重要配角', coreCharacterDialog, 'primary', state.busy || state.worlds.length !== 1),
+    muted(readOnlyProject() ? '选择大纲版本查看各卷角色档案及正文进度。' : '世界观生成后会自动建立一位男主、一位女主及第一卷阶段档案；此后只能按大纲补充配角。'),
+    actions(!hasProtagonists ? mutationButton('生成男女主', coreCharacterDialog, 'primary', state.busy || state.worlds.length !== 1) : null,
       state.outlines.length ? version : null,
       mutationButton('根据大纲补充配角', () => supportingCharacterDialog(), 'secondary', state.busy || !state.outlines.length || state.worlds.length !== 1),
+      mutationButton('新增角色关系', () => characterRelationshipDialog(), 'secondary', state.busy || (state.characters || []).length < 2),
+      mutationButton('新建势力', createFactionDialog, 'secondary', state.busy || state.worlds.length !== 1),
       button('刷新角色', loadCharacters, 'secondary', state.characterLoading)),
-    muted('正文生成和重写只保存正文；打开已保存章节后点击「分析人物进展」，单独提取已发生的行动、当前状态及关系变化，并保留正文原句依据。基础设定、大纲计划与正文进展分开展示；手动修改正文会清除该章旧进展，需重新分析。'),
+    muted('正文生成和重写只保存正文；批量生成会在全部章节完成后统一分析人物进展。也可打开已保存章节单独分析；手动修改正文会清除该章旧进展，需重新分析。'),
     state.worlds.length !== 1 ? muted('请先设置唯一的当前世界观。') : null,
     !state.outlines.length ? muted('生成大纲后即可补充剧情配角。') : null));
   if (state.characterError) return stack(controls, empty('角色读取失败', state.characterError, button('重试', loadCharacters)));
   if (state.characters === null) return stack(controls, muted('正在读取角色…'));
-  if (!state.characters.length) return stack(controls, empty('尚未建立角色', '先生成主角与重要配角，为后续大纲和正文提供人物设定。'));
-  return stack(controls, panel(`角色档案 · ${state.characters.length} 位`, stack(...state.characters.map(row =>
+  if (!state.characters.length) return stack(controls, factionTreeView(), empty('尚未建立角色', '生成世界观时会自动创建男女主；也可在这里生成男女主，再按大纲补充配角。'));
+  return stack(controls, characterTreeView(), factionTreeView(), panel(`角色档案 · ${state.characters.length} 位`, stack(...state.characters.map(row =>
     element('details', {class: 'character-card'}, element('summary', {}, element('strong', {}, row.name), ' ', pill(row.role)),
       details(['简介与剧情作用', row.summary], ['性格', row.personality], ['背景经历', row.background],
         ['目标', row.goal], ['动机', row.motivation], ['弱点', row.weakness], ['成长弧线', row.character_arc],
@@ -1453,8 +1592,10 @@ function characterView() {
       ...(state.characterProfiles?.items || []).filter(profile => profile.character_id === row.id).map(profile =>
         stack(rule(), element('h3', {}, `第 ${profile.volume_number} 卷 · ${profile.volume_title}`),
           prose(profile.scenes), muted(profileProgress(profile.progress)))),
-      mutationButton('生成阶段档案', () => characterProfileDialog(null, row.id), 'secondary',
-        state.busy || !outlineId || state.worlds.length !== 1)))),
+      actions(mutationButton('新增关系', () => characterRelationshipDialog(row.id), 'secondary', state.busy || state.characters.length < 2),
+        mutationButton('设置势力', () => characterFactionDialog(row), 'secondary', state.busy || state.worlds.length !== 1),
+        mutationButton('生成阶段档案', () => characterProfileDialog(null, row.id), 'secondary',
+          state.busy || !outlineId || state.worlds.length !== 1))))),
     state.characterProgress?.has_more ? button('加载更多正文进展', moreCharacterProgress, 'secondary', state.characterLoading) : null));
 }
 
@@ -1655,10 +1796,6 @@ const outlineThemeField = {name: 'outline_theme', label: '本版大纲主题', t
 ]};
 const numberField = (name, label, value, min, max) => ({name, label, value, min, max, type: 'number', required: true});
 const modelChoices = () => state.modelOptions.map(item => ({value: item.id, label: `${item.label} · ${item.model}`}));
-const modelSelectable = () => state.modelOptions.length > 1;
-const modelField = () => ({name: 'model', label: '调用模型', type: 'select',
-  value: state.modelChoice || modelChoices()[0]?.value || '',
-  choices: modelChoices()});
 
 function openAction(options) {
   if (state.busy) return;
@@ -1667,9 +1804,7 @@ function openAction(options) {
   $('action-description').textContent = options.description;
   $('action-error').hidden = true;
   $('action-submit').textContent = options.submit;
-  // 只有配置了多个模型时才显示选择项，避免单模型部署多一个无意义的下拉。
-  const fields = options.useModel && modelSelectable() ? [...options.fields, modelField()] : options.fields;
-  $('action-fields').replaceChildren(...fields.map(({label, type, value, choices, change, ...attributes}, index) => {
+  $('action-fields').replaceChildren(...options.fields.map(({label, type, value, choices, change, ...attributes}, index) => {
     const input = type === 'select' ? element('select', {...attributes, change}, choices.map(choice =>
       element('option', {value: choice.value}, choice.label))) :
       type === 'textarea' ? element('textarea', attributes) : element('input', {...attributes, type});
@@ -1702,7 +1837,6 @@ $('action-form').addEventListener('submit', async (event) => {
     if (field.type === 'number') data[field.name] = Number(data[field.name]);
     else if (field.name !== 'content') data[field.name] = data[field.name].trim();
   }
-  if (data.model) state.modelChoice = String(data.model);
   $('action-error').hidden = true;
   setBusy(submitted.taskPath ? '正在提交后台任务…' : (submitted.pending || '正在保存…'));
   setActionBusy(true);
@@ -1710,7 +1844,8 @@ $('action-form').addEventListener('submit', async (event) => {
     let receipt;
     try {
       const payload = submitted.payload ? submitted.payload(data, form) : data;
-      receipt = submitted.taskPath ? await post(submitted.taskPath, payload) : await submitted.send(payload);
+      const requestPayload = submitted.useModel && state.modelChoice ? {...payload, model: state.modelChoice} : payload;
+      receipt = submitted.taskPath ? await post(submitted.taskPath, requestPayload) : await submitted.send(requestPayload);
       if (account !== requestingAccount) return;
     }
     catch (error) {
@@ -1880,11 +2015,10 @@ function coreCharacterDialog() {
   const selectedOutlineId = state.outlines.find(row => row.id === state.characterOutlineId)?.id || state.outlines[0]?.id || '';
   const outlineChoices = [{value: '', label: state.outlines.length ? '自动使用最新大纲并绑定阶段档案' : '尚无大纲，暂生成基础档案'},
     ...state.outlines.map(row => ({value: row.id, label: `大纲 v${row.version_no} · 绑定主线与阶段档案`}))];
-  openAction({title: '生成主角与重要配角', description: state.outlines.length ?
-    '根据当前世界观和选定大纲创作核心人物；主角目标、冲突、能力边界和成长弧线必须服务大纲主线，并为各卷保存阶段档案。未指定时自动使用最新大纲。数量表示本次新增人数。' :
-    '当前还没有大纲，只能生成基础人物档案；完成大纲后可再生成与主线绑定的阶段档案。数量表示本次新增人数。',
-    submit: '后台生成并保存', fields: [numberField('protagonist_count', '新增主角数', 1, 1, 2),
-      numberField('important_count', '新增重要配角数', 3, 0, 8),
+  openAction({title: '生成男女主', description: state.outlines.length ?
+    '只生成一位男主和一位女主，并根据选定大纲建立阶段档案。男女主已存在时不能再次生成；后续人物请使用配角生成。' :
+    '只生成一位男主和一位女主。生成大纲后可为他们补充分卷阶段档案。',
+    submit: '后台生成并保存', fields: [
       {name: 'outline_id', label: '依据大纲', type: 'select', value: selectedOutlineId, choices: outlineChoices}, noteField],
     payload: data => {
       const {outline_id, ...values} = data;
@@ -1978,7 +2112,7 @@ async function characterProfileDialog(preferredVolume = null, characterId = null
     payload: (data, form) => {
       const ids = form.getAll('profile_character_ids').map(Number);
       if (!ids.length || ids.length > 20) throw new Error('请选择 1—20 位角色。');
-      return {character_ids: ids, instruction: data.instruction || '', model: data.model};
+      return {character_ids: ids, instruction: data.instruction || ''};
     }};
   openAction(options);
 }
@@ -2103,7 +2237,7 @@ async function batchDraftDialog() {
       element('span', {}, element('strong', {}, `第 ${row.chapter_number} 章 · ${row.title || '未命名'}`),
         muted(row.summary || '暂无章节摘要')))));
   openAction({title: '批量生成正文',
-    description: `从已有章节规划中选择多章，系统会按章号依次写作；每章正文保存并完成独立人物进展分析后才会进入下一章。`,
+    description: `从已有章节规划中选择多章，系统会先按章号生成并保存全部正文，再统一分析和更新各章人物进展。`,
     submit: '后台开始批量写作', fields: [numberField('target_characters', '每章目标篇幅（字符）', 2000, 300, 6000), noteField],
     extra: choices,
     useModel: true,
@@ -2166,6 +2300,12 @@ async function loadModels() {
   try {
     const result = await api('/models');
     state.modelOptions = result.items || [];
+    const validIds = state.modelOptions.map(item => item.id);
+    if (!validIds.includes(state.modelChoice)) state.modelChoice = result.default || validIds[0] || '';
+    try {
+      if (state.modelChoice) localStorage.setItem(modelStorageKey, state.modelChoice);
+      else localStorage.removeItem(modelStorageKey);
+    } catch { /* Private browsing may deny storage; the current-page choice still works. */ }
   } catch {
     // 读取失败时按单模型处理，生成入口保持原样。
     state.modelOptions = [];
@@ -2174,16 +2314,15 @@ async function loadModels() {
 }
 
 function syncModelPicker() {
-  const control = $('wizard-model-control');
-  const select = $('wizard-model');
+  const control = $('current-model-control');
+  const select = $('current-model');
   const choices = modelChoices();
-  control.hidden = choices.length < 2;
-  // 用户选择通过 change 事件写入 state.modelChoice，重绘时据此恢复，
-  // 避免向导刷新把已选模型重置成第一项。
+  control.hidden = choices.length === 0;
   const values = choices.map(choice => choice.value);
   select.replaceChildren(...choices.map(choice => element('option', {value: choice.value}, choice.label)));
-  select.value = values.includes(state.modelChoice) ? state.modelChoice : (values[0] || '');
-  select.disabled = !session.id || session.busy || session.done;
+  if (!values.includes(state.modelChoice)) state.modelChoice = values[0] || '';
+  select.value = state.modelChoice;
+  select.disabled = choices.length < 2;
 }
 
 function syncWizard() {
@@ -2215,7 +2354,6 @@ function syncWizard() {
   $('confirm-world').textContent = busy && count === Object.keys(labels).length ? '处理中…' : '确认并生成';
   $('restart-wizard').disabled = busy;
   $('close-wizard').disabled = busy;
-  syncModelPicker();
 }
 
 function bubble(text, user = false) {
@@ -2254,16 +2392,14 @@ function openWizard() {
 async function sendMessage(content) {
   if (!content || !session.id || session.busy || session.done) return;
   const generating = ['确认生成', '确认', '开始生成'].includes(content);
-  // 先读取当前选择：下面 syncWizard() 会重绘下拉框，不能等重绘后再读。
-  const model = generating ? $('wizard-model').value : '';
   const requestingSession = session;
   session.busy = true;
   syncWizard();
   bubble(content, true);
   try {
     const path = `/novel-assistant/sessions/${session.id}/messages`;
-    const data = generating ? {content, outline_theme: $('outline-theme').value, ...(model ? {model} : {})} : {content};
-    if (model) state.modelChoice = model;
+    const data = generating ? {content, outline_theme: $('outline-theme').value,
+      ...(state.modelChoice ? {model: state.modelChoice} : {})} : {content};
     const reply = await post(generating ? `${path}/tasks` : path, data);
     if (session !== requestingSession) return;
     if (generating) {
@@ -2294,7 +2430,10 @@ $('refresh').onclick = () => loadLibrary();
 $('open-trash').onclick = openTrash;
 $('close-wizard').onclick = () => { if (!session.busy) wizard.close(); };
 wizard.addEventListener('cancel', (event) => { if (session.busy) event.preventDefault(); });
-$('wizard-model').addEventListener('change', event => { state.modelChoice = event.target.value; });
+$('current-model').addEventListener('change', event => {
+  state.modelChoice = event.target.value;
+  try { localStorage.setItem(modelStorageKey, state.modelChoice); } catch { /* Storage is optional. */ }
+});
 $('restart-wizard').onclick = startConversation;
 $('confirm-world').onclick = () => sendMessage('确认生成');
 $('chat-form').addEventListener('submit', (event) => {

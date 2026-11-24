@@ -26,6 +26,11 @@ def save_characters(engine, project_id, artifact, sources, volume_id=None, legac
     relation = tables["novel_character"]
     with transaction(engine) as connection:
         get_row(connection, tables["novel_project"], project_id, lock=True)
+        if any(item.category == "protagonist" for item in artifact.characters):
+            existing_lead = connection.scalar(select(relation.c.id).where(
+                relation.c.project_id == project_id, relation.c.role.like("主角%")).limit(1))
+            if existing_lead is not None:
+                raise HTTPException(409, "男女主已生成；后续只能根据大纲添加配角")
         current = tables["novel_world"]
         world_ids = list(connection.scalars(select(current.c.id).where(
             current.c.project_id == project_id, current.c.is_current.is_(True))))
@@ -43,16 +48,57 @@ def save_characters(engine, project_id, artifact, sources, volume_id=None, legac
             raise HTTPException(502, "模型返回了重复角色姓名，请重新生成")
         if names.intersection(new_names):
             raise HTTPException(409, "生成角色与已有角色同名，本批次未保存，请调整要求后重试")
+        faction_table = tables["novel_faction"]
+        faction_ids = {
+            character_name_key(source["name"]): source["id"]
+            for table_name, source in sources if table_name == "novel_faction"
+        }
+        for faction in artifact.new_factions:
+            faction_key = character_name_key(faction.name)
+            if faction_key not in faction_ids:
+                faction_ids[faction_key] = insert_row(connection, faction_table,
+                    world_id=sources[0][1]["id"], **faction.model_dump())
+        # Existing character names resolve relationship targets; newly saved
+        # characters are added to the same map as their IDs are allocated.
+        character_ids_by_name = {
+            character_name_key(source["name"]): source["id"]
+            for table_name, source in sources if table_name == "novel_character"
+        }
         ids = []
         assignments = []
         for item in artifact.characters:
-            values = item.model_dump(exclude={"category", "role", "volume_profiles"})
-            ids.append(insert_row(connection, relation, project_id=project_id, faction_id=None,
-                                  role=f"{CHARACTER_LABELS[item.category]} · {item.role}",
-                                  first_appearance_chapter=None, status="active", **values))
+            faction_id = faction_ids.get(character_name_key(item.faction_name))
+            if faction_id is None:
+                raise HTTPException(502, "角色所属势力未能匹配到已保存势力，本批次未保存")
+            values = item.model_dump(exclude={"category", "gender", "role", "volume_profiles",
+                                              "faction_name", "relationships"})
+            role = item.role
+            if item.category == "protagonist":
+                lead_label = "男主" if item.gender == "男" else "女主"
+                role = f"{lead_label} · {role}"
+            character_id = insert_row(connection, relation, project_id=project_id, faction_id=faction_id,
+                                  role=f"{CHARACTER_LABELS[item.category]} · {role}",
+                                  first_appearance_chapter=None, status="active", **values)
+            ids.append(character_id)
+            character_ids_by_name[character_name_key(item.name)] = character_id
             assignments.extend((profile.volume_id, ids[-1], format_profile(profile, sources)) for profile in item.volume_profiles)
             if volume_id is not None and not item.volume_profiles:
                 assignments.append((volume_id, ids[-1], item.summary))
+        relationship_table = tables["novel_character_relationship"]
+        saved_relationships = set()
+        for item in artifact.characters:
+            source_id = character_ids_by_name[character_name_key(item.name)]
+            for relationship in item.relationships:
+                target_id = character_ids_by_name.get(character_name_key(relationship.target_name))
+                if target_id is None or source_id == target_id:
+                    continue
+                edge_key = (source_id, target_id, relationship.relationship_type)
+                if edge_key in saved_relationships:
+                    continue
+                insert_row(connection, relationship_table, source_character_id=source_id,
+                    target_character_id=target_id, relationship_type=relationship.relationship_type,
+                    description=relationship.description, changed_at_chapter=None)
+                saved_relationships.add(edge_key)
         for item in artifact.reused_characters:
             assignments.extend((profile.volume_id, item.character_id, format_profile(profile, sources)) for profile in item.volume_profiles)
             if volume_id is not None and not item.volume_profiles:

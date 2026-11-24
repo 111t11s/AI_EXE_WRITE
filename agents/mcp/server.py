@@ -126,7 +126,7 @@ def register_writing_tools(server: FastMCP) -> None:
         return await request(ctx, "POST", f"writing/projects/{project_id}/consistency", 200,
                              result_schema=ConsistencyReceipt, json=payload.model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
 
-    @server.tool(description="根据当前世界观及项目最新大纲生成主角和重要配角；有大纲时自动读取并绑定各分卷阶段档案，不会覆盖已有角色。",
+    @server.tool(description="根据世界观和指定大纲生成唯一的一位男主和一位女主；有大纲时绑定阶段档案，已有男女主时拒绝重复生成。后续请使用配角生成工具。",
                  annotations=annotations())
     async def generate_novel_core_characters(ctx: Context, project_id: RowId,
                                              payload: CoreCharacterRequest | None = None) -> CharacterReceipt:
@@ -176,7 +176,7 @@ def register_writing_tools(server: FastMCP) -> None:
         return await request(ctx, "POST", f"writing/chapters/{chapter_id}/draft", 200, result_schema=DraftReceipt,
                              json=(payload or DraftRequest()).model_dump(mode="json"), timeout=WORKFLOW_TIMEOUT)
 
-    @server.tool(description="按章号顺序批量生成已有规划章节的正文；每章正文保存并完成独立人物进展分析后才继续下一章，最多 20 章。",
+    @server.tool(description="按章号顺序批量生成已有规划章节的正文；全部正文保存后再统一分析并更新人物进展，最多 20 章。",
                  annotations=annotations())
     async def batch_draft_novel_chapters(ctx: Context, project_id: RowId,
                                          payload: BatchDraftRequest) -> BatchDraftReceipt:
@@ -223,7 +223,7 @@ def create_server(api_base_url: str, *, transport: httpx.AsyncBaseTransport | No
 
 
 def main() -> None:
-    from core.logging import configure_external_logging
+    from core.app_logging import configure_external_logging
 
     server = create_server(os.getenv("AITXT_API_BASE_URL", DEFAULT_API_BASE_URL))
     configure_external_logging()

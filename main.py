@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-from core.logging import get_logger
+from core.app_logging import get_logger
 from core.config import get_settings
 from core.middleware import RequestLoggingMiddleware
 from core.static import FrontendFiles
@@ -112,7 +112,7 @@ app.mount("/", FrontendFiles(directory=PROJECT_ROOT / "frontend", html=True), na
 
 if __name__ == "__main__":
     import uvicorn
-    from core.logging import configure_external_logging, uvicorn_log_config
+    from core.app_logging import configure_external_logging, uvicorn_log_config
 
     configure_external_logging()
 

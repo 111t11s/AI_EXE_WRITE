@@ -8,7 +8,7 @@ from fastapi import Depends, HTTPException
 from sqlalchemy import Engine
 from sqlalchemy.exc import DBAPIError, TimeoutError as PoolTimeout
 
-from core.logging import get_logger
+from core.app_logging import get_logger
 from db.connection import DatabaseNotConfigured, get_engine
 
 

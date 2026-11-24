@@ -58,7 +58,7 @@
 | `generate_novel_supporting_characters` | `{"outline_id":8,"payload":{"volume_id":12,"supporting_count":2,"reuse_character_ids":[4,5]}}` | 根据分卷补充新配角并为勾选的前卷配角安排新戏份；新增数可为 0，返回新增及复用角色 ID |
 | `plan_novel_chapters` | `{"volume_id":12,"payload":{"start_chapter":1,"chapter_count":5}}` | 新的计划章节 ID、章号与标题 |
 | `draft_novel_chapter` | `{"chapter_id":34,"payload":{"target_characters":2000}}` | 检查项目已有角色后生成并保存正文；人物正文进展由独立分析工具处理，缺少角色返回 409；正文用 `read_novel_chapter` 获取 |
-| `batch_draft_novel_chapters` | `{"project_id":12,"payload":{"chapter_ids":[34,35],"target_characters":2000}}` | 按章号顺序生成多个已有规划章节；每章正文保存并完成独立人物进展分析后才继续下一章，最多 20 章 |
+| `batch_draft_novel_chapters` | `{"project_id":12,"payload":{"chapter_ids":[34,35],"target_characters":2000}}` | 按章号顺序先生成全部正文，再统一分析并更新人物进展，最多 20 章 |
 | `analyze_novel_character_progress` | `{"chapter_id":34,"payload":{"instruction":"核对本章已发生行动和结果"}}` | 只分析已保存正文，按逐字原文依据保存人物行动、截至本章状态和关系变化；不会续写或修改正文 |
 | `list_novel_character_progress` | `{"project_id":12,"before_chapter_number":34,"latest":true}` | 只读查询人物正文进展；按章序排除当前及未来章，latest 返回每人最近状态，支持 limit/offset 分页 |
 | `rewrite_novel_chapter` | `{"chapter_id":34,"payload":{"target_characters":2000,"instruction":"保留情节，加强对话"}}` | 读取原正文后重写并替换，设为草稿；期间章节变化则拒绝覆盖 |

@@ -9,7 +9,7 @@ from fastapi.encoders import jsonable_encoder
 from starlette.responses import StreamingResponse
 
 from agents.llm_streaming import GENERATION_EVENTS
-from core.logging import get_logger
+from core.app_logging import get_logger
 
 
 logger = get_logger("generation_stream")

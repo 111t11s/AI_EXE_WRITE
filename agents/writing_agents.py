@@ -15,7 +15,8 @@ from api.writing_schemas import (ChapterContentDraft, ChapterPlanDraft, OutlineD
                                  CharacterDraftList, ConsistencyReport, CharacterProfileList,
                                  CharacterProgressAnalysis, TrendReport, OUTLINE_THEME_LABELS)
 from core.config import get_settings
-from core.logging import get_logger
+from core.app_logging import get_logger
+from core.models import resolve_profile
 
 
 logger = get_logger("writing_agents")
@@ -60,13 +61,17 @@ PROFILE_RULES = (
 
 CORE_CHARACTERS = WritingRole(
     "角色生成智能体·核心人物",
-    "根据当前世界观、力量规则、势力和项目主角设定，生成指定 protagonist_count 位主角和 important_count 位重要配角。"
+    "只生成两位主角：一位男性男主和一位女性女主；gender 分别填写“男”和“女”，category 均为 protagonist。"
+    "不得生成第三位主角或重要配角。若项目已有主角，不要复制、扩写或替换已有主角。"
     "如果提供 outline，必须把 outline.summary、central_conflict、themes、每一卷的 protagonist_goal/main_conflict/climax/ending_hook "
     "以及剧情节点作为人物设计的硬约束；主角的目标、动机、身份、能力边界和成长弧线必须服务全书主线，不能生成与大纲无关的通用人物。"
-    "category 分别为 protagonist、important；role 写具体剧情职能，如对手、导师、伙伴。"
+    "role 写具体剧情职能，如对手、导师、伙伴。"
     "人物应有不同的性格、经历、目标、动机、弱点、成长弧线与能力边界，能力服从世界规则。"
-    "在简介中说明与主角、势力及其他人物的关系。只新增人物，姓名不得与已有角色或本批次重复；"
-    "保留已有角色设定，若已有主角，新主角需说明其共同主角定位。不要编造数据库 ID 或章节号。"
+    "为每位人物填写 faction_name，并优先使用 context.faction 中已有势力；没有合适势力时，在 new_factions 中创建完整势力并引用准确名称。"
+    "用 relationships 为角色建立可保存的关系边，target_name 必须精确引用本批次另一位主角或已有角色；"
+    "男主和女主必须互相建立至少一条直接关系，写明 relationship_type 和具体 description。"
+    "只新增人物，姓名不得与已有角色或本批次重复；"
+    "保留已有角色设定，不要编造数据库 ID 或章节号。"
     "未提供 outline 时 volume_profiles 返回空数组，阶段经历与结局留待依据大纲生成；"
     "提供 outline 时必须同时生成对应的分卷阶段档案。" + PROFILE_RULES,
     CharacterDraftList, SETTING_TOOLS,
@@ -76,6 +81,9 @@ SUPPORTING_CHARACTERS = WritingRole(
     "根据指定版本的大纲、分卷及剧情节点，补充 supporting_count 位其余配角，category 必须为 supporting。"
     "优先展开大纲中尚未建档的人物；每位人物须服务具体剧情，role 写剧情职能，"
     "summary 说明在哪一卷/节点出场、承担的冲突或推动作用以及与已有角色的关系。"
+    "为每位新配角填写 faction_name，使用 context.faction 中的势力；没有合适势力时在 new_factions 中创建并引用准确名称。"
+    "用 relationships 建立结构化人物关系，target_name 必须精确引用 context.characters 中的姓名；"
+    "每位新配角至少直接关联男主或女主一人，写明 relationship_type 和具体 description，不能只在 summary 中提关系。"
     "补全性格、背景、目标、动机、弱点、成长变化、能力边界，遵守世界观和已有核心人物设定。"
     "若提供 target_volume，仅为该卷新增人物和安排戏份，不为其他卷创建人物。"
     "为 reuse_characters 中每一位勾选的旧配角返回 reused_characters 项，character_id 使用原 ID，"
@@ -306,17 +314,10 @@ def _parse_output(role: WritingRole, raw: str) -> BaseModel:
 
 def generate(role: WritingRole, context: dict, profile=None) -> BaseModel:
     settings = get_settings()
-    if profile is not None:
-        # 选定模型配置：密钥与地址来自该档案，不再读取主模型环境变量。
-        connection = profile.connection()
-        logger.info("使用模型配置：%s（%s）", profile.id, profile.model)
-    else:
-        connection = {
-            "model": getattr(settings, "MODEL_NAME", "") or settings.DEEPSEEK_MODEL_NAME,
-            "api_key": settings.API_KEY,
-            "base_url": settings.PROXY_URL,
-            "timeout": settings.REQUEST_TIMEOUT or 120,
-        }
+    # 未指定模型时与界面默认选择一致，统一使用 model_config.py 标记的主模型。
+    profile = profile or resolve_profile(None)
+    connection = profile.connection()
+    logger.info("使用模型配置：%s（%s）", profile.id, profile.model)
     if role.output is ChapterContentDraft:
         output_format = "直接返回完整的小说正文纯文本，保留段落换行，不要 JSON、Markdown 围栏、章节标题或创作说明。"
         expected_output = "完整的小说正文纯文本"

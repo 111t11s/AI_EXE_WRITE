@@ -16,7 +16,7 @@ from starlette.responses import StreamingResponse
 from agents.llm_streaming import GENERATION_EVENTS
 from api.account_api import CurrentAccount
 from api.generation_stream import HEARTBEAT_SECONDS, encode_event
-from core.logging import get_logger
+from core.app_logging import get_logger
 from db import generation_jobs as job_db
 
 

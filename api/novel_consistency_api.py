@@ -23,7 +23,7 @@ from api.ownership import require_resource
 from api.writing_schemas import (ConsistencyReceipt, ConsistencyRepairRequest, ConsistencyRequest,
                                  ConsistencySuggestion, WritingInput)
 from db.connection import legacy_json_columns
-from core.logging import get_logger
+from core.app_logging import get_logger
 
 
 router = APIRouter(prefix="/writing", tags=["小说一致性核对"])

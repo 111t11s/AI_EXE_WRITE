@@ -20,14 +20,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from core.config import get_settings
-from core.models import safe_error_reason
+from core.models import available_profiles, safe_error_reason
 
 
-MODELS = {
-    "flash": "GEMINI_3_8_FLASH",
-    "pro": "GEMINI_3_1_PRO",
-    "argon": "GEMINI_4_ARGON",
-}
+MODEL_ALIASES = {"flash": "gemini_3.8_flash", "argon": "gemini_4_argon"}
 
 
 def probe(label: str, model: str, api_key: str, base_url: str, timeout: int) -> dict:
@@ -61,31 +57,28 @@ def probe(label: str, model: str, api_key: str, base_url: str, timeout: int) -> 
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=(*MODELS, "all"), default="flash",
+    parser.add_argument("--model", choices=(*MODEL_ALIASES, "all"), default="flash",
                         help="选择要测试的 Gemini 配置，默认 flash")
     args = parser.parse_args()
 
     settings = get_settings()
-    key = getattr(settings, "GEMINI_API_KEY", "")
-    base_url = getattr(settings, "GEMINI_PROXY_URL", "")
-    if not key.strip() or not base_url.strip():
-        print(json.dumps({"status": "not_configured", "message": "请检查 Gemini 密钥和代理地址配置"},
+    gemini_profiles = [profile for profile in available_profiles() if profile.id.startswith("gemini_")]
+    selected = gemini_profiles if args.model == "all" else [
+        profile for profile in gemini_profiles
+        if profile.id == MODEL_ALIASES[args.model]
+    ]
+    if not selected:
+        print(json.dumps({"status": "not_configured", "message": "请先配置 Gemini_API_KEY"},
                          ensure_ascii=False))
         return 2
-
-    selected = MODELS if args.model == "all" else {args.model: MODELS[args.model]}
     failed = False
-    for label, setting_name in selected.items():
-        model = getattr(settings, setting_name, "")
-        if not model.strip():
-            print(json.dumps({"profile": label, "status": "skipped", "reason": "not_configured"},
-                             ensure_ascii=False))
-            failed |= args.model != "all"
-            continue
-        result = probe(label, model, key, base_url, settings.REQUEST_TIMEOUT or 120)
+    for profile in selected:
+        connection = profile.connection()
+        result = probe(profile.label, profile.model, connection["api_key"], connection["base_url"],
+                       settings.REQUEST_TIMEOUT or 120)
         if result["status"] != 200:
             failed = True
-        print(json.dumps({"host": urlsplit(base_url).hostname or "-", **result}, ensure_ascii=False),
+        print(json.dumps({"host": urlsplit(connection["base_url"]).hostname or "-", **result}, ensure_ascii=False),
               flush=True)
     return 1 if failed else 0
 

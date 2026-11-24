@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agents.llm_streaming import emit_generation_event
-from core.logging import get_logger
+from core.app_logging import get_logger
 
 
 logger = get_logger("outline_skills")

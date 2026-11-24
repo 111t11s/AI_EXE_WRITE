@@ -20,6 +20,7 @@ from openai import OpenAI
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from core.config import get_settings
+from core.models import resolve_profile
 
 
 def main() -> int:
@@ -39,7 +40,9 @@ def main() -> int:
     load_dotenv(ROOT / ".env")
     os.environ["LOG_FORMAT"] = "%(levelname)s %(message)s"
     settings = get_settings()
-    model = os.getenv("MODEL_NAME") or settings.DEEPSEEK_MODEL_NAME
+    profile = resolve_profile(None)
+    connection = profile.connection()
+    model = connection["model"]
     started = time.monotonic()
     report = {"mode": args.mode, "model": model, "stream": True, "status": "running"}
     texts = []
@@ -49,7 +52,7 @@ def main() -> int:
     content_frames = 0
 
     def safe(value):
-        return str(value).replace(settings.API_KEY, "[redacted]") if settings.API_KEY else str(value)
+        return str(value).replace(connection["api_key"], "[redacted]") if connection["api_key"] else str(value)
 
     def output(event, **values):
         print(json.dumps({"event": event, "elapsed_seconds": round(time.monotonic() - started, 3),
@@ -98,14 +101,12 @@ def main() -> int:
                            "required": ["record_id"], "additionalProperties": False},
         }}]
     report.update(include_usage=args.include_usage, with_tools=args.with_tools)
-    output("request", mode=args.mode, model=model, read_timeout=settings.REQUEST_TIMEOUT or 120)
+    output("request", mode=args.mode, model=model, read_timeout=connection["timeout"])
     try:
-        if not settings.API_KEY.strip():
-            raise RuntimeError("API_KEY is not configured")
         if args.mode == "raw":
-            url = settings.PROXY_URL.rstrip("/") + "/chat/completions"
-            with httpx.Client(timeout=httpx.Timeout(settings.REQUEST_TIMEOUT or 120, connect=15)) as client:
-                with client.stream("POST", url, headers={"Authorization": "Bearer " + settings.API_KEY,
+            url = connection["base_url"].rstrip("/") + "/chat/completions"
+            with httpx.Client(timeout=httpx.Timeout(connection["timeout"], connect=15)) as client:
+                with client.stream("POST", url, headers={"Authorization": "Bearer " + connection["api_key"],
                                                        "Accept": "text/event-stream"}, json=payload) as response:
                     report["http_status"] = response.status_code
                     report["content_type"] = response.headers.get("content-type", "")
@@ -136,8 +137,8 @@ def main() -> int:
                         else:
                             consume(json.loads(data))
         elif args.mode == "sdk":
-            with OpenAI(api_key=settings.API_KEY, base_url=settings.PROXY_URL,
-                        timeout=settings.REQUEST_TIMEOUT or 120, max_retries=0) as client:
+            with OpenAI(api_key=connection["api_key"], base_url=connection["base_url"],
+                        timeout=connection["timeout"], max_retries=0) as client:
                 with client.chat.completions.create(**payload) as stream:
                     report["http_status"] = stream.response.status_code
                     report["content_type"] = stream.response.headers.get("content-type", "")

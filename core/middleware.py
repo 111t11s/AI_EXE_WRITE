@@ -5,7 +5,7 @@ import re
 import time
 from uuid import uuid4
 
-from core.logging import REQUEST_ID, get_logger
+from core.app_logging import REQUEST_ID, get_logger
 
 
 class RequestLoggingMiddleware:

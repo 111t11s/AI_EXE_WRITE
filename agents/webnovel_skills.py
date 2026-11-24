@@ -4,7 +4,7 @@ from pathlib import Path
 
 from agents.llm_streaming import emit_generation_event
 from agents.prose_skills import _skill_text
-from core.logging import get_logger
+from core.app_logging import get_logger
 
 
 logger = get_logger("webnovel_skills")

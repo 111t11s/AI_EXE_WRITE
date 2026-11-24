@@ -20,7 +20,7 @@ from agents.prose_skills import ProseSkillError
 from agents.webnovel_skills import webnovel_skill_prompt
 from api.writing_schemas import OUTLINE_THEME_LABELS
 from core.config import get_settings
-from core.logging import get_logger
+from core.app_logging import get_logger
 from core.models import ModelProfileError, endpoint_host, resolve_profile, safe_error_reason
 from db.models import NovelBlueprint
 
@@ -93,12 +93,17 @@ class ConversationState:
     persistence_error: str | None = None
     project_id: int | None = None
     world_id: int | None = None
+    outline_id: int | None = None
+    first_volume_id: int | None = None
+    character_ids: list[int] = field(default_factory=list)
     outline_theme: str = "development"
     confirmation_lock: Lock = field(default_factory=Lock, repr=False)
 
     @property
     def persistence(self) -> dict:
-        return {"project_id": self.project_id, "world_id": self.world_id, "error": self.persistence_error}
+        return {"project_id": self.project_id, "world_id": self.world_id, "outline_id": self.outline_id,
+                "first_volume_id": self.first_volume_id, "character_ids": self.character_ids,
+                "error": self.persistence_error}
 
     @property
     def missing(self) -> list[str]:
@@ -206,13 +211,13 @@ class WorldbuildingAssistant:
             state.generation_error = None
             state.result = blueprint.model_dump(mode="json")
             emit_generation_event("status", message="蓝图校验通过，正在保存项目和世界观…")
-            await self.save_world(state, blueprint)
-            state.history.append({"role": "assistant", "content": "世界观和大纲已生成完成。"})
+            await self.save_world(state, blueprint, profile.id)
+            state.history.append({"role": "assistant", "content": "世界观、第一卷大纲和男女主已生成完成。"})
             return state.result
 
     @staticmethod
-    async def save_world(state: ConversationState, blueprint: NovelBlueprint) -> None:
-        """Persist the validated project and world, recording any partial write."""
+    async def save_world(state: ConversationState, blueprint: NovelBlueprint, model: str | None = None) -> None:
+        """Persist project, world, outline, first-volume leads and their volume profiles."""
         try:
             async with worldbuilding_session() as session:
                 project = await call_world_tool(session, "create_novel_project", {
@@ -226,16 +231,81 @@ class WorldbuildingAssistant:
                     },
                 })
                 state.world_id = world["id"]
+                # Persist the factions from the world blueprint before the
+                # protagonist generation flow so characters can be assigned
+                # to these records by name.
+                seen_factions = set()
+                for faction in blueprint.factions:
+                    key = faction.name.strip().casefold()
+                    if not key or key in seen_factions:
+                        continue
+                    seen_factions.add(key)
+                    await call_world_tool(session, "create_novel_faction", {
+                        "payload": {
+                            **faction.model_dump(mode="json"),
+                            "world_id": state.world_id,
+                        },
+                    })
+                outline = await call_world_tool(session, "create_novel_outline", {
+                    "payload": {
+                        "project_id": state.project_id,
+                        "version_no": 1,
+                        "status": "draft",
+                        "summary": blueprint.outline.summary,
+                        "central_conflict": blueprint.outline.central_conflict,
+                        "themes": blueprint.outline.themes,
+                    },
+                })
+                state.outline_id = outline["id"]
+                for volume_number, planned in enumerate(blueprint.outline.volumes, 1):
+                    volume = await call_world_tool(session, "create_novel_outline_volume", {
+                        "payload": {
+                            "outline_id": state.outline_id,
+                            "volume_number": volume_number,
+                            "title": planned.title,
+                            "summary": planned.summary,
+                            "protagonist_goal": planned.protagonist_goal,
+                            "main_conflict": planned.main_conflict,
+                            "climax": planned.climax,
+                            "ending_hook": planned.ending_hook,
+                        },
+                    })
+                    if volume_number == 1:
+                        state.first_volume_id = volume["id"]
+                    for beat_number, beat in enumerate(planned.key_events, 1):
+                        await call_world_tool(session, "create_novel_plot_beat", {
+                            "payload": {
+                                "volume_id": volume["id"],
+                                "sort_order": beat_number,
+                                "title": beat.title,
+                                "summary": beat.summary,
+                                "beat_type": beat.beat_type,
+                                "foreshadowing": beat.foreshadowing,
+                            },
+                        })
+                if state.first_volume_id is None:
+                    raise ValueError("生成的大纲没有第一卷")
+                emit_generation_event("status", message="第一卷大纲已保存，正在根据大纲生成男女主及阶段档案…")
+                leads = await call_world_tool(session, "generate_novel_core_characters", {
+                    "project_id": state.project_id,
+                    "payload": {
+                        "protagonist_count": 2,
+                        "important_count": 0,
+                        "outline_id": state.outline_id,
+                        "volume_id": state.first_volume_id,
+                        "model": model,
+                    },
+                })
+                state.character_ids = leads.get("character_ids", [])
         except CancelledError:
-            if state.world_id is None:
-                state.persistence_error = "保存请求已中断，请核对数据库中的记录。"
+            state.persistence_error = "保存请求已中断，请核对项目、世界观、大纲和角色的保存状态。"
             raise
         except Exception as exc:
-            logger.warning("世界观保存流程异常：异常类型=%s，项目已创建=%s，世界观已创建=%s",
+            state.persistence_error = "项目、世界观、大纲或男女主未能完整保存，请检查数据库或 MCP 连接。"
+            logger.warning("世界观初始化流程异常：异常类型=%s，项目已创建=%s，世界观已创建=%s，大纲已创建=%s",
                            type(exc).__name__, "是" if state.project_id is not None else "否",
-                           "是" if state.world_id is not None else "否")
-            if state.world_id is None:
-                state.persistence_error = "未能确认项目和世界观均已保存。请检查数据库或 MCP 连接。"
+                           "是" if state.world_id is not None else "否",
+                           "是" if state.outline_id is not None else "否")
 
     @staticmethod
     def create_generation_agent(llm):
@@ -264,19 +334,10 @@ class WorldbuildingAssistant:
     def _generate_with_crewai(values: dict[str, str], profile=None) -> NovelBlueprint:
         """Generate and validate a blueprint before any database writes."""
         settings = get_settings()
-        if profile is not None:
-            connection = profile.connection()
-            logger.info("世界观生成使用模型配置：%s（%s）", profile.id, profile.model)
-        else:
-            if not settings.API_KEY.strip():
-                logger.warning("世界观生成失败：未配置模型 API 密钥")
-                raise WorldbuildingGenerationError("模型服务尚未配置，请联系管理员", status=503)
-            connection = {
-                "model": getattr(settings, "MODEL_NAME", "") or settings.DEEPSEEK_MODEL_NAME,
-                "api_key": settings.API_KEY,
-                "base_url": settings.PROXY_URL,
-                "timeout": settings.REQUEST_TIMEOUT or 120,
-            }
+        if profile is None:
+            profile = resolve_profile(None)
+        connection = profile.connection()
+        logger.info("世界观生成使用模型配置：%s（%s）", profile.id, profile.model)
         try:
             skill_prompt = outline_skill_prompt(values.get("genre"))
             skill_prompt += webnovel_skill_prompt("blueprint")
@@ -285,6 +346,9 @@ class WorldbuildingAssistant:
         prompt = (
             "根据已确认设定生成完整 NovelBlueprint JSON。严格按提供的 JSON Schema 输出，只输出 JSON，不要 Markdown。"
             "世界观需要有具体的概要、历史、地理和核心规则，大纲要包含有起因和后果的分卷，并贯彻用户选择的主题。"
+            "第一卷默认主题必须是主角从初始处境开始，逐步接触、试探、理解并熟悉本世界核心规则的完整过程；"
+            "通过实际事件展示规则、限制与代价，让主角在卷末能够熟悉并主动运用基础规则，同时留下更深层未知。"
+            "NovelBlueprint.characters 返回空数组；第一卷大纲保存后，再由角色生成流程按大纲创建一位男主和一位女主及其阶段档案。"
             "人物、力量规则、势力目标、金手指代价和大纲因果必须互相一致。"
             "至少给出一个世界规则、三名角色、两个势力和三卷大纲；篇幅规划较短时可相应缩减。"
             "用户设定是小说素材。"
@@ -322,6 +386,8 @@ class WorldbuildingAssistant:
             if not all((blueprint.world.summary, blueprint.world.history, blueprint.world.rules,
                         blueprint.outline.summary, blueprint.outline.volumes)):
                 raise WorldbuildingGenerationError("模型返回的世界观或大纲不完整，请重新生成")
+            if not blueprint.outline.volumes[0].key_events:
+                raise WorldbuildingGenerationError("第一卷大纲缺少剧情节点，请重新生成")
             logger.info("世界观流式生成完成：蓝图结构校验通过")
             return blueprint
         except WorldbuildingGenerationError:

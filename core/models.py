@@ -1,19 +1,13 @@
-"""模型配置档案：把 .env 中的 Gemini 主模型和其他模型统一成可选项。
-
-生成请求只提交档案 ID（``default`` / ``gemini-pro`` / ``deepseek``），密钥和地址始终留在
-服务端，不下发到浏览器，也不写进模型上下文。Gemini Flash 为默认档案；未配置 Gemini 时
-默认档案回退到历史主模型连接。
-"""
+"""将 core.model_config 中的模型清单转换为安全的可选档案。"""
 
 import re
-import os
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from core.config import get_settings
+from core.model_config import ModelConfig
 
 
-DEFAULT_PROFILE = "default"
 KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]{6,}")
 
 
@@ -58,6 +52,7 @@ class ModelProfile:
     api_key: str
     base_url: str
     timeout: int = 120
+    main_model: bool = False
 
     @property
     def available(self) -> bool:
@@ -75,40 +70,46 @@ class ModelProfile:
 def model_profiles() -> tuple[ModelProfile, ...]:
     settings = get_settings()
     timeout = settings.REQUEST_TIMEOUT or 120
-    gemini_key = getattr(settings, "GEMINI_API_KEY", "")
-    gemini_url = getattr(settings, "GEMINI_PROXY_URL", "")
-    flash_model = getattr(settings, "GEMINI_3_8_FLASH", "")
-    gemini_primary = bool(gemini_key.strip() and gemini_url.strip() and flash_model.strip())
-    default_profile = (ModelProfile(DEFAULT_PROFILE, "Gemini 3.8 Flash", flash_model,
-                                    gemini_key, gemini_url, timeout) if gemini_primary else
-                       ModelProfile(DEFAULT_PROFILE, "主模型",
-                                    getattr(settings, "MODEL_NAME", "") or os.getenv("MODEL_NAME") or
-                                    settings.DEEPSEEK_MODEL_NAME,
-                                    settings.API_KEY, settings.PROXY_URL, timeout))
-    return (
-        default_profile,
-        ModelProfile("gemini-pro", "Gemini 3.1 Pro Preview",
-                     getattr(settings, "GEMINI_4_ARGON", ""), gemini_key, gemini_url, timeout),
-        ModelProfile("deepseek", "DeepSeek", settings.DEEPSEEK_MODEL_NAME,
-                     settings.DEEPSEEK_API_KEY, settings.DEEPSEEK_PROXY_URL, timeout),
+    configured = ModelConfig().get_model()
+    return tuple(
+        ModelProfile(
+            id=key.lower(),
+            label=item["label"],
+            model=item["model_name"],
+            api_key=item["api_key"],
+            base_url=item["base_url"],
+            timeout=timeout,
+            main_model=item["main_model"],
+        )
+        for key, item in configured.items()
     )
 
 
 def available_profiles() -> list[ModelProfile]:
-    return [profile for profile in model_profiles() if profile.available]
+    profiles = [profile for profile in model_profiles() if profile.available]
+    return sorted(profiles, key=lambda profile: not profile.main_model)
 
 
-def resolve_profile(profile_id: str | None) -> ModelProfile | None:
-    """默认选择 Gemini Flash；未配置时沿用旧主模型，其余按指定档案选择。"""
+def default_profile_id() -> str:
+    """返回已配置模型中的主模型；主模型密钥缺失时选第一个可用模型。"""
+    profiles = available_profiles()
+    primary = next((profile for profile in profiles if profile.main_model), None)
+    return (primary or (profiles[0] if profiles else None)).id if profiles else ""
+
+
+def resolve_profile(profile_id: str | None) -> ModelProfile:
+    """按模型清单 ID 解析连接；未指定时使用 ``main_model`` 标记的模型。"""
     wanted = (profile_id or "").strip()
-    if not wanted or wanted == DEFAULT_PROFILE:
-        default_profile = model_profiles()[0]
-        if default_profile.label == "Gemini 3.8 Flash" and default_profile.available:
-            return default_profile
-        return None
+    if not wanted or wanted == "default":
+        wanted = default_profile_id()
+        if not wanted:
+            raise ModelProfileError("模型服务尚未配置 API 密钥")
+    else:
+        # 接受旧版模型选择器曾发送的档案 ID。
+        wanted = {"deepseek": "deepseek_flash", "gemini-pro": "gemini_4_argon"}.get(wanted, wanted)
     profile = next((item for item in model_profiles() if item.id == wanted), None)
     if profile is None:
         raise ModelProfileError("所选模型不存在，请重新选择")
     if not profile.available:
-        raise ModelProfileError("所选模型尚未配置完整，请检查 .env 或改选其他模型")
+        raise ModelProfileError("所选模型尚未配置 API 密钥，请检查 .env 或改选其他模型")
     return profile

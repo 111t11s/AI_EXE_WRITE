@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.logging import REQUEST_ID, SafeFormatter, setup_logging
+from core.app_logging import REQUEST_ID, SafeFormatter, setup_logging
 from core.middleware import RequestLoggingMiddleware
 
 
@@ -28,8 +28,8 @@ class LoggingTests(unittest.IsolatedAsyncioTestCase):
             LOG_LEVEL="DEBUG", LOG_FORMAT="%(levelname)s %(name)s %(message)s",
             LOG_FILE=str(self.log_path), LOG_MAX_BYTES=1024, LOG_BACKUP_COUNT=2,
         )
-        self.settings_patch = patch("core.logging.get_settings", return_value=self.config)
-        self.stdout_patch = patch("core.logging.sys.stdout", self.output)
+        self.settings_patch = patch("core.app_logging.get_settings", return_value=self.config)
+        self.stdout_patch = patch("core.app_logging.sys.stdout", self.output)
         self.settings_patch.start()
         self.stdout_patch.start()
         setup_logging()

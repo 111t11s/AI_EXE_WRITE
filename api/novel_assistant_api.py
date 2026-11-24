@@ -67,7 +67,7 @@ async def send_message(session_id: str, request: MessageRequest, user: CurrentAc
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return {
-            "message": "世界观和大纲已生成完成。",
+            "message": "世界观、第一卷大纲和男女主已生成完成。",
             "values": state.values,
             "result": result,
             "warning": state.generation_error,

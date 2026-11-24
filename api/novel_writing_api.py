@@ -20,7 +20,7 @@ from api.ownership import require_resource
 from agents.mcp.worldbuilding import NovelToolError, call_novel_tool, novel_session
 from api.novel_crud_api import Database, get_row, response_row
 from api.novel_schemas import RowId
-from api.novel_writing_store import require_empty_plan, save_chapter_plan, save_draft, save_outline
+from api.novel_writing_store import character_name_key, require_empty_plan, save_chapter_plan, save_draft, save_outline
 from api.novel_writing_store import (save_characters, save_rewritten_draft, save_character_progress,
                                      save_continued_draft)
 from api.novel_tables import tables
@@ -33,9 +33,10 @@ from api.writing_schemas import (
     CoreCharacterRequest, SupportingCharacterRequest, CharacterReceipt,
     CharacterProgressReceipt,
     BatchDraftRequest, BatchDraftReceipt, BatchDraftChapterReceipt,
+    CharacterFactionDraft, CharacterRelationshipDraft,
 )
 from api.character_profiles import validate_profiles
-from core.logging import get_logger
+from core.app_logging import get_logger
 from core.models import ModelProfileError, endpoint_host, resolve_profile, safe_error_reason
 
 
@@ -178,6 +179,64 @@ async def list_reusable_characters(volume_id: RowId, user: CurrentAccount, engin
     return {"items": candidates}
 
 
+def ensure_character_assignments(artifact, context, *, core):
+    """Fill any missing faction or protagonist link before the atomic save."""
+    existing_characters = list(context.get("characters", []))
+    generated_characters = artifact.characters
+    all_names = {character_name_key(row["name"]) for row in existing_characters}
+    all_names.update(character_name_key(row.name) for row in generated_characters)
+    faction_names = {character_name_key(row["name"]): row["name"] for row in context.get("faction", [])}
+    for faction in artifact.new_factions:
+        faction_names.setdefault(character_name_key(faction.name), faction.name)
+
+    leads = [row for row in existing_characters if row.get("role", "").startswith("主角")]
+    leads.extend(row for row in generated_characters if row.category == "protagonist")
+    if not core and not leads:
+        raise HTTPException(409, "请先生成男主和女主，再创建配角关系")
+
+    def add_faction(name, summary):
+        key = character_name_key(name)
+        faction_names[key] = name
+        artifact.new_factions.append(CharacterFactionDraft(
+            name=name, faction_type="自动归属", summary=summary[:4000]))
+
+    for character in generated_characters:
+        faction_key = character_name_key(character.faction_name)
+        if faction_key and faction_key not in faction_names:
+            # Keep the model's chosen name and create a concrete faction record
+            # when it did not include a separate faction definition.
+            add_faction(character.faction_name,
+                        f"{character.name}及相关人物所属的势力。设定依据：{character.summary}")
+        elif not faction_key:
+            if not faction_names:
+                add_faction("独立行动者", "用于归档尚未加入固定组织的独立角色，可在势力树中调整为具体势力。")
+            character.faction_name = next(iter(faction_names.values()))
+        else:
+            character.faction_name = faction_names[faction_key]
+
+        valid_relationships = []
+        for relationship in character.relationships:
+            target_key = character_name_key(relationship.target_name)
+            if target_key in all_names and target_key != character_name_key(character.name):
+                valid_relationships.append(relationship)
+        character.relationships = valid_relationships
+        protagonist_targets = [row for row in leads
+                               if character_name_key(row.name if isinstance(row, dict) else row.name)
+                               != character_name_key(character.name)]
+        has_lead_link = any(character_name_key(item.target_name) in {
+            character_name_key(row["name"] if isinstance(row, dict) else row.name) for row in protagonist_targets
+        } for item in character.relationships)
+        if not has_lead_link and protagonist_targets:
+            target = protagonist_targets[0]
+            target_name = target["name"] if isinstance(target, dict) else target.name
+            character.relationships.append(CharacterRelationshipDraft(
+                target_name=target_name,
+                relationship_type="主线关联" if character.category != "protagonist" else "共同主角",
+                description=(f"{character.name}与{target_name}共同承载当前大纲主线；具体关系随剧情展开。"
+                             if character.category == "protagonist" else
+                             f"{character.name}参与{target_name}所在的主线剧情，具体关系可随剧情发展调整。")))
+
+
 async def create_characters(project_id, outline_id, payload, user, engine):
     core = isinstance(payload, CoreCharacterRequest)
     if core:
@@ -197,6 +256,8 @@ async def create_characters(project_id, outline_id, payload, user, engine):
             raise HTTPException(409, "当前大纲尚未生成分卷，无法按大纲绑定核心人物")
     else:
         context, sources = await load_context(character_context, project_id)
+    if core and any(row["role"].startswith("主角") for row in context["characters"]):
+        raise HTTPException(409, "男女主已生成；后续只能根据大纲添加配角")
     volume_id = payload.volume_id
     selected = [] if core else payload.reuse_character_ids
     legacy_assignments = []
@@ -214,10 +275,12 @@ async def create_characters(project_id, outline_id, payload, user, engine):
                     legacy_assignments.append((scene["volume_id"], character["id"], scene["scenes"]))
     artifact = await generate(agents.CORE_CHARACTERS if core else agents.SUPPORTING_CHARACTERS, context, payload)
     counts = Counter(item.category for item in artifact.characters)
-    expected = {"protagonist": payload.protagonist_count, "important": payload.important_count} if core else {
-        "supporting": payload.supporting_count}
+    expected = {"protagonist": 2, "important": 0} if core else {"supporting": payload.supporting_count}
     if +counts != +Counter(expected):
         raise HTTPException(502, "模型返回的角色数量或层级与请求不符，本批次未保存")
+    if core and Counter(item.gender for item in artifact.characters) != Counter({"男": 1, "女": 1}):
+        raise HTTPException(502, "模型必须分别返回一位男主和一位女主，本批次未保存")
+    ensure_character_assignments(artifact, context, core=core)
     returned = [item.character_id for item in artifact.reused_characters]
     if Counter(returned) != Counter(selected):
         raise HTTPException(502, "模型返回的复用角色与勾选不符，本批次未保存")
@@ -237,7 +300,7 @@ def latest_outline_id(engine, project_id):
 
 
 @router.post("/projects/{project_id}/characters/core", response_model=CharacterReceipt, status_code=201,
-             summary="根据世界观和当前大纲生成主角和重要配角")
+             summary="生成唯一的一位男主和一位女主")
 async def write_core_characters(project_id: RowId, payload: CoreCharacterRequest, user: CurrentAccount, engine: Database):
     return await create_characters(project_id, None, payload, user, engine)
 
@@ -250,7 +313,7 @@ async def write_supporting_characters(outline_id: RowId, payload: SupportingChar
     return await create_characters(project_id, outline_id, payload, user, engine)
 
 
-@router.post("/projects/{project_id}/characters/core/tasks", status_code=202, summary="后台根据世界观和当前大纲生成主角和重要配角")
+@router.post("/projects/{project_id}/characters/core/tasks", status_code=202, summary="后台生成唯一的一位男主和一位女主")
 async def start_core_characters(project_id: RowId, payload: CoreCharacterRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
     if payload.outline_id is not None:
@@ -265,7 +328,7 @@ async def start_core_characters(project_id: RowId, payload: CoreCharacterRequest
             if belongs != payload.outline_id:
                 raise HTTPException(404, "目标分卷不属于当前大纲")
     return generation_jobs.store.start(account_id=user.id, key=f"characters:core:{project_id}", kind="characters",
-        title="生成主角与重要配角", project_id=project_id, resource_id=payload.outline_id or project_id,
+        title="生成男女主", project_id=project_id, resource_id=payload.outline_id or project_id,
         operation=lambda: write_core_characters(project_id, payload, user, engine)).summary()
 
 
@@ -434,15 +497,12 @@ async def generate(role, context, payload):
         logger.warning("模型请求超时：任务=%s", role.title)
         raise HTTPException(504, "模型响应超时，请稍后重试") from None
     except (APIConnectionError, httpx.RequestError):
-        from core.config import get_settings
         logger.warning("模型网关连接失败：任务=%s，主机=%s", role.title,
-                       endpoint_host(profile.base_url if profile else get_settings().PROXY_URL))
+                       endpoint_host(profile.base_url))
         raise HTTPException(502, "无法连接模型网关，请检查网络或模型服务配置") from None
     except APIStatusError as exc:
-        from core.config import get_settings
-        host = endpoint_host(profile.base_url if profile else get_settings().PROXY_URL)
-        model_name = profile.model if profile else (
-            get_settings().MODEL_NAME or get_settings().DEEPSEEK_MODEL_NAME)
+        host = endpoint_host(profile.base_url)
+        model_name = profile.model
         reason = safe_error_reason(exc)
         logger.warning("模型网关请求失败：任务=%s，模型=%s，主机=%s，状态码=%s，原因=%s",
                        role.title, model_name, host, exc.status_code, reason or "未提供")
@@ -531,13 +591,16 @@ async def write_batch_drafts(project_id: RowId, payload: BatchDraftRequest,
                              user: CurrentAccount, engine: Database):
     chapters = await run_in_threadpool(validate_batch_chapters, engine, project_id,
                                        payload.chapter_ids, user.id)
-    completed, warnings = [], []
+    drafts, completed, warnings = [], [], []
     for index, chapter in enumerate(chapters, 1):
         emit_generation_event("status", message=f"正在生成第 {chapter['chapter_number']} 章（{index}/{len(chapters)}）…")
         draft = await write_draft(chapter["id"], DraftRequest(
             target_characters=payload.target_characters, instruction=payload.instruction, model=payload.model),
             user, engine)
-        emit_generation_event("status", message=f"第 {chapter['chapter_number']} 章正文已保存，正在分析人物进展…")
+        drafts.append((chapter, draft))
+
+    emit_generation_event("status", message="所选章节正文已全部生成，正在统一分析并更新人物进展档案…")
+    for chapter, draft in drafts:
         try:
             progress = await analyze_character_progress(
                 chapter["id"], WritingInput(instruction=payload.instruction, model=payload.model), user, engine)
@@ -550,7 +613,7 @@ async def write_batch_drafts(project_id: RowId, payload: BatchDraftRequest,
             progress_count = progress.updated_count
             if progress.warning:
                 warnings.append(f"第 {chapter['chapter_number']} 章：{progress.warning}")
-            emit_generation_event("status", message=f"第 {chapter['chapter_number']} 章正文与人物档案已同步保存。")
+            emit_generation_event("status", message=f"已更新第 {chapter['chapter_number']} 章的人物进展档案。")
         completed.append(BatchDraftChapterReceipt(
             chapter_id=chapter["id"], chapter_number=chapter["chapter_number"], title=chapter["title"],
             word_count=draft.word_count, progress_count=progress_count))
