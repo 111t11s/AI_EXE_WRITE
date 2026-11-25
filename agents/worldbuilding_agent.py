@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from agents.llm_streaming import collect_chat_text, emit_generation_event, has_generation_listener
-from agents.mcp.worldbuilding import call_world_tool, crewai_world_tools, worldbuilding_session
+from agents.mcp.worldbuilding import NovelToolError, call_world_tool, crewai_world_tools, worldbuilding_session
 from agents.outline_skills import OutlineSkillError, outline_skill_prompt
 from agents.prose_skills import ProseSkillError
 from agents.webnovel_skills import webnovel_skill_prompt
@@ -80,6 +80,47 @@ class WorldbuildingGenerationError(RuntimeError):
     def __init__(self, message: str, status: int = 502):
         super().__init__(message)
         self.status = status
+
+
+def _parse_blueprint(raw: str) -> NovelBlueprint:
+    """Parse a blueprint even when the model surrounds JSON with short prose."""
+    candidate = raw.strip()
+    if candidate.startswith("```"):
+        candidate = candidate.partition("\n")[2].rsplit("```", 1)[0].strip()
+    start = candidate.find("{")
+    if start >= 0:
+        try:
+            _, end = json.JSONDecoder().raw_decode(candidate, start)
+            candidate = candidate[start:end]
+        except ValueError:
+            # Let Pydantic return a useful structured JSON validation error.
+            pass
+    return NovelBlueprint.model_validate_json(candidate)
+
+
+def _blueprint_validation_summary(error: ValidationError) -> str:
+    problems = []
+    for item in error.errors(include_input=False)[:8]:
+        path = ".".join(str(part) for part in item["loc"]) or "根对象"
+        problems.append(f"{path}: {item['msg']}")
+    return "\n".join(problems) or "输出不是符合 Schema 的 JSON"
+
+
+def _blueprint_content_issues(blueprint: NovelBlueprint) -> list[str]:
+    missing = []
+    for label, value in (("世界观概要", blueprint.world.summary),
+                         ("世界历史", blueprint.world.history),
+                         ("世界规则", blueprint.world.rules),
+                         ("大纲概要", blueprint.outline.summary)):
+        if not value.strip():
+            missing.append(label)
+    if not blueprint.outline.volumes:
+        missing.append("分卷大纲")
+    elif not blueprint.outline.volumes[0].key_events:
+        missing.append("第一卷剧情节点")
+    if len(blueprint.factions) < 2:
+        missing.append("至少两个势力")
+    return missing
 
 
 @dataclass
@@ -212,18 +253,22 @@ class WorldbuildingAssistant:
             state.result = blueprint.model_dump(mode="json")
             emit_generation_event("status", message="蓝图校验通过，正在保存项目和世界观…")
             await self.save_world(state, blueprint, profile.id)
-            state.history.append({"role": "assistant", "content": "世界观、第一卷大纲和男女主已生成完成。"})
+            message = ("世界观与大纲已生成并保存，第一卷男女主已完成。" if state.persistence_error is None
+                       else state.persistence_error)
+            state.history.append({"role": "assistant", "content": message})
             return state.result
 
     @staticmethod
     async def save_world(state: ConversationState, blueprint: NovelBlueprint, model: str | None = None) -> None:
         """Persist project, world, outline, first-volume leads and their volume profiles."""
+        save_step = "项目"
         try:
             async with worldbuilding_session() as session:
                 project = await call_world_tool(session, "create_novel_project", {
                     "payload": blueprint.project.model_dump(mode="json"),
                 })
                 state.project_id = project["id"]
+                save_step = "世界观"
                 world = await call_world_tool(session, "create_novel_world", {
                     "payload": {
                         **blueprint.world.model_dump(mode="json", exclude={"regions"}),
@@ -240,12 +285,21 @@ class WorldbuildingAssistant:
                     if not key or key in seen_factions:
                         continue
                     seen_factions.add(key)
+                    faction_values = faction.model_dump(mode="json")
+                    # Keep the blueprint model and the persisted CRUD contract
+                    # compatible even when the language model returns long labels.
+                    for field_name, limit in (("name", 160), ("faction_type", 120),
+                                              ("leader", 160), ("territory", 300)):
+                        faction_values[field_name] = faction_values[field_name][:limit]
+
+                    save_step = f"势力「{faction_values['name']}」"
                     await call_world_tool(session, "create_novel_faction", {
                         "payload": {
-                            **faction.model_dump(mode="json"),
+                            **faction_values,
                             "world_id": state.world_id,
                         },
                     })
+                save_step = "大纲"
                 outline = await call_world_tool(session, "create_novel_outline", {
                     "payload": {
                         "project_id": state.project_id,
@@ -258,6 +312,7 @@ class WorldbuildingAssistant:
                 })
                 state.outline_id = outline["id"]
                 for volume_number, planned in enumerate(blueprint.outline.volumes, 1):
+                    save_step = f"第{volume_number}卷大纲"
                     volume = await call_world_tool(session, "create_novel_outline_volume", {
                         "payload": {
                             "outline_id": state.outline_id,
@@ -286,6 +341,7 @@ class WorldbuildingAssistant:
                 if state.first_volume_id is None:
                     raise ValueError("生成的大纲没有第一卷")
                 emit_generation_event("status", message="第一卷大纲已保存，正在根据大纲生成男女主及阶段档案…")
+                save_step = "男女主及阶段档案"
                 leads = await call_world_tool(session, "generate_novel_core_characters", {
                     "project_id": state.project_id,
                     "payload": {
@@ -297,13 +353,20 @@ class WorldbuildingAssistant:
                     },
                 })
                 state.character_ids = leads.get("character_ids", [])
+                if (len(state.character_ids) != 2
+                        or leads.get("counts", {}).get("protagonist") != 2
+                        or set(leads.get("profile_character_ids", [])) != set(state.character_ids)):
+                    raise ValueError("男女主或第一卷个人档案未完整创建")
         except CancelledError:
             state.persistence_error = "保存请求已中断，请核对项目、世界观、大纲和角色的保存状态。"
             raise
         except Exception as exc:
-            state.persistence_error = "项目、世界观、大纲或男女主未能完整保存，请检查数据库或 MCP 连接。"
-            logger.warning("世界观初始化流程异常：异常类型=%s，项目已创建=%s，世界观已创建=%s，大纲已创建=%s",
-                           type(exc).__name__, "是" if state.project_id is not None else "否",
+            reason = (str(exc) if isinstance(exc, NovelToolError) else
+                      str(getattr(exc, "detail", type(exc).__name__)))
+            state.persistence_error = f"保存{save_step}失败：{reason[:240]}；项目可能只保存了一部分。"
+            logger.warning("世界观初始化流程异常：步骤=%s，异常类型=%s，原因=%s，项目已创建=%s，世界观已创建=%s，大纲已创建=%s",
+                           save_step,
+                           type(exc).__name__, reason[:240], "是" if state.project_id is not None else "否",
                            "是" if state.world_id is not None else "否",
                            "是" if state.outline_id is not None else "否")
 
@@ -379,15 +442,41 @@ class WorldbuildingAssistant:
                         raise
                     logger.warning("世界观模型请求失败，改用不带工具的请求重试：状态码=%s", exc.status_code)
                     raw = WorldbuildingAssistant._request_without_tools(**connection, prompt=prompt)
-            raw = raw.strip()
-            if raw.startswith("```") and raw.endswith("```"):
-                raw = raw[3:-3].removeprefix("json").strip()
-            blueprint = NovelBlueprint.model_validate_json(raw)
-            if not all((blueprint.world.summary, blueprint.world.history, blueprint.world.rules,
-                        blueprint.outline.summary, blueprint.outline.volumes)):
-                raise WorldbuildingGenerationError("模型返回的世界观或大纲不完整，请重新生成")
-            if not blueprint.outline.volumes[0].key_events:
-                raise WorldbuildingGenerationError("第一卷大纲缺少剧情节点，请重新生成")
+            first_error = None
+            try:
+                blueprint = _parse_blueprint(raw)
+                missing = _blueprint_content_issues(blueprint)
+                if missing:
+                    first_error = "必需内容缺失：" + "、".join(missing)
+            except ValidationError as exc:
+                first_error = _blueprint_validation_summary(exc)
+            if first_error:
+                logger.warning("世界观蓝图校验失败，发起一次格式修复：问题=%s",
+                               first_error.replace("\n", "；")[:600])
+                repair_prompt = (
+                    f"原始生成要求与用户设定：\n{prompt}\n"
+                    "上一次回答未通过蓝图校验。请修复所有格式问题并补齐必需内容，重新输出完整蓝图；只输出一个 JSON 对象，不要 Markdown 或说明文字。"
+                    f"\n校验问题：\n{first_error}"
+                    f"\nSchema：{json.dumps(NovelBlueprint.model_json_schema(), ensure_ascii=False)}"
+                    f"\n待修复的原始回答：\n{raw}"
+                )
+                raw = WorldbuildingAssistant._request_without_tools(**connection, prompt=repair_prompt)
+                try:
+                    blueprint = _parse_blueprint(raw)
+                    missing = _blueprint_content_issues(blueprint)
+                    if missing:
+                        raise WorldbuildingGenerationError(
+                            "模型修复后仍缺少必需内容：" + "、".join(missing) + "，请重试或切换模型。"
+                        )
+                except ValidationError as final_error:
+                    logger.warning("世界观蓝图格式修复后仍未通过：字段问题=%s",
+                                   _blueprint_validation_summary(final_error).replace("\n", "；")[:600])
+                    raise WorldbuildingGenerationError(
+                        "模型连续两次返回了不符合蓝图格式的内容，请重试或切换模型。"
+                    ) from None
+            missing = _blueprint_content_issues(blueprint)
+            if missing:
+                raise WorldbuildingGenerationError("世界观或大纲仍缺少：" + "、".join(missing) + "，请重试。")
             logger.info("世界观流式生成完成：蓝图结构校验通过")
             return blueprint
         except WorldbuildingGenerationError:

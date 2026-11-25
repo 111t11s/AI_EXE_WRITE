@@ -58,17 +58,22 @@ worldbuilding_session = novel_session
 
 
 class NovelToolError(RuntimeError):
-    def __init__(self, name: str, status: int = 503):
-        super().__init__(f"{name} 调用失败")
+    def __init__(self, name: str, status: int = 503, detail: str = ""):
+        self.name = name
         self.status = status
+        self.detail = detail[:240]
+        suffix = f"（HTTP {status}：{self.detail}）" if self.detail else f"（HTTP {status}）"
+        super().__init__(f"{name} 调用失败{suffix}")
 
 
 async def call_novel_tool(session: ClientSession, name: str, arguments: dict) -> dict:
     result = await session.call_tool(name, arguments)
     if result.isError or not isinstance(result.structuredContent, dict):
         message = next((block.text for block in result.content if block.type == "text"), "")
-        match = re.search(r"小说 API 返回 HTTP (401|403|404|409|422)\b", message)
-        raise NovelToolError(name, int(match[1]) if match else 503)
+        match = re.search(r"小说 API 返回 HTTP (\d{3})：([^\r\n]+)", message)
+        if match:
+            raise NovelToolError(name, int(match[1]), match[2])
+        raise NovelToolError(name, 503, message[:240] or "MCP 未返回有效结果")
     return result.structuredContent
 
 
