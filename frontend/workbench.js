@@ -26,7 +26,7 @@ const initialState = () => ({projects: [], project: null, libraryOwner: 'all', w
   documentHistory: null, documentReport: null,
   analysisFiles: [], analysisHistory: null, analysisReport: null, analysisLibrary: null,
   analysisLoading: false, analysisError: null, analysisNote: '重点看人物出场、职阶体系和对话节奏',
-  analysisCandidates: [],
+  analysisText: '', analysisCandidates: [], analysisCategory: 'all',
   trendSearchLoading: false, trendsGenre: '都市、玄幻、言情、悬疑等网文类型', trendsAudience: '关注热门网络小说的读者',
   trendsNote: '根据上传文本提炼可写题材；不得照搬原文、原有人物或情节。',
   taskCategory: 'all', taskProjectId: 'all', taskStatus: 'all', taskPage: 1, taskPageSize: 5,
@@ -711,10 +711,11 @@ async function openAnalysisReview() {
   render();
 }
 
-async function reviewCandidate(id, action) {
+async function reviewCandidate(id, action, category = 'outline') {
   try {
-    await api(`/novel-analysis/candidates/${id}/${action}`, {method: 'POST'});
-    notify(action === 'approve' ? '已通过，技法已进入技法表，并成为后续拆解维度。' : '已拒绝该候选技法。');
+    const suffix = action === 'approve' ? `?category=${encodeURIComponent(category)}` : '';
+    await api(`/novel-analysis/candidates/${id}/${action}${suffix}`, {method: 'POST'});
+    notify(action === 'approve' ? '已通过，技法已进入对应知识库分类，并成为后续拆解维度。' : '已拒绝该候选技法。');
     state.analysisLibrary = null;
     await loadAnalysisCandidates();
     render();
@@ -948,6 +949,8 @@ function trendsView() {
   paste.addEventListener('input', event => {
     state.documentText = event.target.value;
     pasteCount.textContent = `${state.documentText.length} / 25000 字符`;
+    submit.disabled = state.busy || state.trendsLoading ||
+      !(state.documentFiles.length || state.documentText.trim());
   });
   const files = state.documentFiles.length ? stack(
     ...state.documentFiles.map((file, index) => element('div', {class: 'document-file'},
@@ -1005,12 +1008,13 @@ function analysisFileSize(bytes) {
 
 async function analyzeNovel() {
   if (state.busy || state.analysisLoading) return;
-  if (!state.analysisFiles.length) {
-    notify('请先选择要拆解的小说章节文件。', 'error');
+  if (!state.analysisFiles.length && !state.analysisText.trim()) {
+    notify('请选择章节文件或粘贴章节文本。', 'error');
     return;
   }
   const form = new FormData();
   for (const file of state.analysisFiles) form.append('files', file, file.name);
+  if (state.analysisText.trim()) form.append('text', state.analysisText);
   form.append('instruction', state.analysisNote.trim());
   if (state.modelChoice) form.append('model', state.modelChoice);
   state.analysisLoading = true;
@@ -1019,6 +1023,7 @@ async function analyzeNovel() {
   try {
     const job = await api('/novel-analysis/analyze/tasks', {method: 'POST', data: form});
     state.analysisFiles = [];
+    state.analysisText = '';
     recordJob(job);
     void openProgress(job.id);
   } catch (error) {
@@ -1058,8 +1063,18 @@ function analysisView() {
   const note = element('textarea', {maxlength: 2000, rows: 3,
     placeholder: '可指定重点，例如：重点看人物出场、职阶体系和对话节奏'}, state.analysisNote);
   note.addEventListener('input', event => { state.analysisNote = event.target.value; });
+  const pasted = element('textarea', {maxlength: 25000, rows: 8,
+    placeholder: '也可以直接粘贴章节正文，最多 25,000 字符'}, state.analysisText);
+  const pastedCount = muted(`${state.analysisText.length} / 25000 字符`);
+  pasted.addEventListener('input', event => {
+    state.analysisText = event.target.value;
+    pastedCount.textContent = `${state.analysisText.length} / 25000 字符`;
+    submit.disabled = state.busy || state.analysisLoading ||
+      !(state.analysisFiles.length || state.analysisText.trim());
+  });
+  const hasInput = state.analysisFiles.length > 0 || Boolean(state.analysisText.trim());
   const submit = button(state.analysisLoading ? '正在上传并拆解…' : '拆解并提取技法', analyzeNovel,
-    'primary', state.busy || state.analysisLoading || !state.analysisFiles.length);
+    'primary', state.busy || state.analysisLoading || !hasInput);
   const history = panel('拆解历史', state.analysisHistory === null ? muted('正在读取拆解历史…') :
     state.analysisHistory.length ? stack(...state.analysisHistory.map(item => element('div', {class: 'document-file'},
       element('span', {}, element('strong', {}, (item.file_names || []).join('、') || '章节文件'),
@@ -1071,7 +1086,8 @@ function analysisView() {
     element('div', {class: 'document-drop'}, element('strong', {}, '选择章节文件'), picker,
       muted('可以只上传一章或几章，系统会按文本实际内容做局部拆解。')),
     fileList,
-    element('label', {class: 'control'}, '拆解要求（可选）', note),
+    element('div', {class: 'document-paste'}, element('strong', {}, '或粘贴章节正文'), pasted, pastedCount),
+    element('label', {class: 'control'}, '拆解要求（可选，最多 2000 字）', note),
     state.analysisError ? prose(`读取失败：${state.analysisError}`) : null),
     null, actions(button('返回书架', () => { state.screen = 'project'; render(); }, 'secondary')));
   const outputPanel = panel('输出', stack(
@@ -1082,7 +1098,7 @@ function analysisView() {
       button('写作技法库', openAnalysisLibrary, 'secondary')),
     muted('不属于五个固定维度的写法会进入待审核候选；审核通过后进入技法表，并成为后续拆解的新维度。')), '给出可直接复用的写法。');
   return element('div', {}, stack(
-    panel('小说拆解', muted('上传小说章节，系统只从这段文本中提取有原文证据的写法：人物、职介、世界、剧情、文笔。材料不足的维度会明确标注，不臆造设定。')),
+    panel('小说拆解', muted('上传小说章节或直接粘贴正文，系统只从这段文本中提取有原文证据的写法：人物、职介、世界、剧情、文笔。材料不足的维度会明确标注，不臆造设定。')),
     element('div', {class: 'layout'}, uploadPanel, outputPanel),
     history));
 }
@@ -1146,17 +1162,25 @@ function analysisLibraryView() {
   const data = state.analysisLibrary;
   if (!data) return empty('正在读取写作技法库', '请稍候。');
   const labels = data.dimensions || analysisDimensionLabels;
+  const categories = data.categories || {worldbuilding: '世界观构造', outline: '大纲', prose: '正文'};
+  const active = state.analysisCategory || 'all';
+  const items = (data.items || []).filter(item => active === 'all' || item.category === active);
   const groups = {};
-  for (const item of data.items || []) {
-    (groups[item.dimension] ||= []).push(item);
-  }
+  for (const item of items) (groups[item.dimension] ||= []).push(item);
+  const tabs = element('div', {class: 'actions'},
+    ...[['all', '全部'], ...Object.entries(categories)].map(([key, label]) =>
+      button(label, () => { state.analysisCategory = key; render(); },
+        active === key ? 'primary' : 'secondary')));
   return stack(
-    panel('写作技法库', muted('这里汇总所有已保存的拆解技法，可在新建小说或写作时参考、复制。'),
-      actions(button('返回小说拆解', () => { state.screen = 'analysis'; render(); }, 'secondary'))),
+    panel('写作技法库', stack(
+      muted('这里汇总所有已保存的拆解技法，按世界观构造、大纲、正文分类；新建大纲或正文时可选择参考。'),
+      tabs,
+      actions(button('返回小说拆解', () => { state.screen = 'analysis'; render(); }, 'secondary')))),
     ...Object.entries(labels).filter(([key]) => groups[key]?.length).map(([key, label]) => {
-      const items = groups[key];
-      return panel(label, stack(...items.map(item => stack(
-        element('div', {class: 'hero-meta'}, pill(label), pill(analysisConfidenceLabels[item.confidence] || item.confidence, true)),
+      const groupItems = groups[key];
+      return panel(label, stack(...groupItems.map(item => stack(
+        element('div', {class: 'hero-meta'}, pill(item.category_label || categories[item.category] || '大纲'),
+          pill(label), pill(analysisConfidenceLabels[item.confidence] || item.confidence, true)),
         element('h3', {}, item.name), prose(item.summary),
         item.reuse ? prose(`怎么复用：${item.reuse}`) : null,
         muted(`来源：${(item.file_names || []).join('、')}`),
@@ -1167,16 +1191,22 @@ function analysisLibraryView() {
           } catch (error) {
             notify('复制失败，请手动选择文本。', 'error');
           }
-        }, 'secondary'))))), `${items.length} 个技法`);
-    }));
+        }, 'secondary'))))), `${groupItems.length} 个技法`);
+    }),
+    items.length ? null : panel('暂无技法', muted(active === 'all' ? '知识库还是空的，先拆解几章小说吧。' : '这个分类还没有审核通过的技法。')));
 }
 
 function analysisReviewView() {
   return stack(
     panel('技法审核', muted('通过后，候选技法会写入技法表，其维度也会加入后续拆解的可用维度；拒绝则只保留在候选历史中。'),
       actions(button('返回小说拆解', () => { state.screen = 'analysis'; render(); }, 'secondary'))),
-    state.analysisCandidates.length ? stack(...state.analysisCandidates.map(candidate =>
-      element('section', {class: 'analysis-technique'},
+    state.analysisCandidates.length ? stack(...state.analysisCandidates.map(candidate => {
+      const category = element('select', {}, [
+        element('option', {value: 'outline', selected: true}, '大纲技法'),
+        element('option', {value: 'worldbuilding'}, '世界观构造技法'),
+        element('option', {value: 'prose'}, '正文技法'),
+      ]);
+      return element('section', {class: 'analysis-technique'},
         element('div', {class: 'hero-meta'}, pill(candidate.dimension_label || candidate.dimension),
           pill('新维度候选', true)),
         element('h3', {}, candidate.name),
@@ -1186,8 +1216,10 @@ function analysisReviewView() {
         candidate.reuse ? prose(`怎么复用：${candidate.reuse}`) : null,
         ...(candidate.evidence || []).map(item => element('blockquote',
           {class: 'prose consistency-quote'}, item.quote)),
-        actions(button('通过并加入技法表', () => reviewCandidate(candidate.id, 'approve'), 'primary'),
-          button('拒绝', () => reviewCandidate(candidate.id, 'reject'), 'secondary'))))) :
+        element('label', {class: 'control'}, '归入知识库分类', category),
+        actions(button('通过并加入技法表', () => reviewCandidate(candidate.id, 'approve', category.value), 'primary'),
+          button('拒绝', () => reviewCandidate(candidate.id, 'reject'), 'secondary')));
+    })) :
       panel('暂无待审核', muted('当前没有新维度候选。固定五维技法会直接进入技法表。')));
 }
 
@@ -2150,6 +2182,42 @@ const outlineThemeField = {name: 'outline_theme', label: '本版大纲主题', t
 const numberField = (name, label, value, min, max) => ({name, label, value, min, max, type: 'number', required: true});
 const modelChoices = () => state.modelOptions.map(item => ({value: item.id, label: `${item.label} · ${item.model}`}));
 
+const knowledgeCategoryLabels = {worldbuilding: '世界观构造', outline: '大纲', prose: '正文'};
+
+async function techniquePicker(categories) {
+  let items = [];
+  try {
+    const data = await api('/novel-analysis/techniques');
+    items = (data.items || []).filter(item => categories.includes(item.category) && Number.isInteger(item.id));
+  } catch (error) {
+    notify(`技法库读取失败：${error.message}`, 'error');
+  }
+  const selected = new Set();
+  const list = element('div', {class: 'technique-picker-list'});
+  if (!items.length) {
+    list.append(muted('知识库里还没有适用的技法。可以先到「小说拆解」提取技法，并在「技法审核」中通过。'));
+  }
+  for (const item of items) {
+    const check = element('input', {type: 'checkbox', value: String(item.id)});
+    check.addEventListener('change', () => {
+      if (check.checked && selected.size >= 5) {
+        check.checked = false;
+        notify('一次最多选择 5 条参考技法。', 'error');
+        return;
+      }
+      if (check.checked) selected.add(item.id); else selected.delete(item.id);
+    });
+    list.append(element('label', {class: 'technique-choice'}, check,
+      element('span', {}, element('strong', {}, item.name),
+        muted(` ${item.category_label || knowledgeCategoryLabels[item.category] || ''} · ${item.dimension_label} · ${item.summary}`))));
+  }
+  return {
+    extra: element('fieldset', {class: 'technique-picker'}, element('legend', {}, '参考技法（可选）'),
+      muted('选择后会把知识库技法注入本次生成，只借鉴写法，不照搬原文。'), list),
+    ids: () => [...selected],
+  };
+}
+
 function openAction(options) {
   if (state.busy) return;
   task = options;
@@ -2231,9 +2299,12 @@ async function outlineDialog() {
   try { selection = await api('/novel-assistant/outline-skills', {filters: {genre: state.project.genre || ''}}); }
   catch (error) { if (account === requestingAccount) notify(`大纲技能加载失败：${error.message}`, 'error'); return; }
   if (account !== requestingAccount || state.project?.id !== id) return;
+  const picker = await techniquePicker(['worldbuilding', 'outline']);
   openAction({title: '生成新大纲', description: `根据当前世界观创建一个新版本，已有大纲会保留。${selection.notice}。`,
     submit: '生成并保存', fields: [numberField('volume_count', '分卷数', 3, 1, 5), outlineThemeField, noteField],
     useModel: true,
+    extra: picker.extra,
+    payload: data => ({...data, technique_ids: picker.ids()}),
     taskPath: `/writing/projects/${id}/outline/tasks`,
   });
 }
@@ -2356,11 +2427,14 @@ function exportDialog() {
   openAction(options);
 }
 
-function outlineRewriteDialog(outline) {
+async function outlineRewriteDialog(outline) {
+  const picker = await techniquePicker(['worldbuilding', 'outline']);
   openAction({title: '重写大纲', description: `基于大纲 v${outline.version_no}、现有角色和世界观重写全书结构，结果保存为新版本。原大纲、已有章节和原卷戏份保留在原版本中。`,
     submit: '重写并保存新版本', fields: [numberField('volume_count', '重写后的分卷数', Math.min(5, state.volumes.length), 1, 5), outlineThemeField,
       {...noteField, label: '重写要求（可选）', placeholder: '例如：保留主线，加强第二卷冲突，调整结尾伏笔'}],
     useModel: true,
+    extra: picker.extra,
+    payload: data => ({...data, technique_ids: picker.ids()}),
     taskPath: `/writing/outlines/${outline.id}/rewrite/tasks`});
 }
 
@@ -2508,12 +2582,15 @@ async function ensureChapterCharacters(chapter) {
 
 async function draftDialog(chapter, mode = 'draft') {
   if (!await ensureChapterCharacters(chapter)) return;
+  const picker = await techniquePicker(['prose']);
   if (mode === 'rewrite') {
     openAction({title: '重写正文', description: `基于第 ${chapter.chapter_number} 章原文、角色和剧情资料重写。成功后替换当前正文并设为草稿，原审读建议清除；失败或期间章节被修改时保留原文。`,
       submit: '重写并替换正文', fields: [numberField('target_characters', '目标篇幅（字符）',
         Math.min(6000, Math.max(300, chapter.word_count || 2000)), 300, 6000),
         {...noteField, label: '重写要求（可选）', placeholder: '例如：保留情节，加强人物对话，减少重复描写'}],
       useModel: true,
+      extra: picker.extra,
+      payload: data => ({...data, technique_ids: picker.ids()}),
       taskPath: `/writing/chapters/${chapter.id}/rewrite/tasks`});
     return;
   }
@@ -2523,12 +2600,16 @@ async function draftDialog(chapter, mode = 'draft') {
         Math.min(6000, Math.max(300, chapter.word_count || 2000)), 300, 6000),
         {...noteField, label: '润色侧重（可选）', placeholder: '例如：减少重复表达，让对话更自然，保留原有文风'}],
       useModel: true,
+      extra: picker.extra,
+      payload: data => ({...data, technique_ids: picker.ids()}),
       taskPath: `/writing/chapters/${chapter.id}/polish/tasks`});
     return;
   }
   openAction({title: '生成正文', description: `角色信息已就绪，为第 ${chapter.chapter_number} 章生成初稿。正文保存后，可单独分析本章人物进展。`,
     submit: '写作并保存', fields: [numberField('target_characters', '目标篇幅（字符）', 2000, 300, 6000), noteField],
     useModel: true,
+    extra: picker.extra,
+    payload: data => ({...data, technique_ids: picker.ids()}),
     taskPath: `/writing/chapters/${chapter.id}/draft/tasks`,
   });
 }
@@ -2536,11 +2617,14 @@ async function draftDialog(chapter, mode = 'draft') {
 async function continueChapterDialog(chapter) {
   if (!await ensureChapterCharacters(chapter)) return;
   const available = Math.max(300, 30000 - chapter.content.length);
+  const picker = await techniquePicker(['prose']);
   openAction({title: '续写本章', description: `从第 ${chapter.chapter_number} 章正文结尾接着写，只生成新增内容并追加到原文。续写会沿用当前视角与场景，遵守章节规划和人物设定；章节原文发生变化时会取消追加。`,
     submit: '续写并追加', fields: [numberField('target_characters', '续写篇幅（字符）',
       Math.min(1600, available), 300, 6000),
       {...noteField, label: '续写要求（可选）', placeholder: '例如：让主角先确认来信来源，再进入下一场对话'}],
     useModel: true,
+    extra: picker.extra,
+    payload: data => ({...data, technique_ids: picker.ids()}),
     taskPath: `/writing/chapters/${chapter.id}/continue/tasks`,
   });
 }
@@ -2589,17 +2673,18 @@ async function batchDraftDialog() {
         }}),
       element('span', {}, element('strong', {}, `第 ${row.chapter_number} 章 · ${row.title || '未命名'}`),
         muted(row.summary || '暂无章节摘要')))));
+  const picker = await techniquePicker(['prose']);
   openAction({title: '批量生成正文',
     description: `从已有章节规划中选择多章，系统会先按章号生成并保存全部正文，再统一分析和更新各章人物进展。`,
     submit: '后台开始批量写作', fields: [numberField('target_characters', '每章目标篇幅（字符）', 2000, 300, 6000), noteField],
-    extra: choices,
+    extra: element('div', {}, choices, picker.extra),
     useModel: true,
     taskPath: `/writing/projects/${projectId}/chapters/batch-draft/tasks`,
     payload: (data, form) => {
       const ids = form.getAll('chapter_ids').map(Number);
       if (!ids.length) throw new Error('请至少选择一章。');
       if (ids.length > 20) throw new Error('一次最多选择 20 章。');
-      return {...data, chapter_ids: ids};
+      return {...data, chapter_ids: ids, technique_ids: picker.ids()};
     }});
 }
 

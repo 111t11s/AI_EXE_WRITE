@@ -13,7 +13,7 @@ from agents.llm_streaming import emit_generation_event
 from api import generation_jobs
 from api.account_api import CurrentAccount
 from api.database import Database
-from api.document_topics_api import _read_uploads
+from api.document_topics_api import MAX_TEXT_CHARS, MAX_TOTAL_CHARS, _read_uploads
 from api.novel_writing_api import generate
 from api.trends_api import retryable
 from api.writing_schemas import (NovelAnalysisCandidate, NovelAnalysisDimension, NovelAnalysisReceipt,
@@ -184,7 +184,7 @@ async def list_techniques(user: CurrentAccount, engine: Database):
     extensions = await run_in_threadpool(analysis_db.list_dimensions, engine, user.id)
     labels = {**DIMENSION_LABELS, **{row["dimension_key"]: row["label"] for row in extensions}}
     return {"items": await run_in_threadpool(analysis_db.list_techniques, engine, user.id),
-            "dimensions": labels}
+            "dimensions": labels, "categories": analysis_db.CATEGORY_LABELS}
 
 
 @router.get("/candidates", summary="查询待审核的新维度技法")
@@ -195,9 +195,13 @@ async def list_candidates(user: CurrentAccount, engine: Database,
     return {"items": await run_in_threadpool(analysis_db.list_candidates, engine, user.id, status)}
 
 
-@router.post("/candidates/{candidate_id}/approve", summary="通过新维度技法")
-async def approve_candidate(candidate_id: int, user: CurrentAccount, engine: Database):
-    result = await run_in_threadpool(analysis_db.approve_candidate, engine, user.id, candidate_id, user.id)
+@router.post("/candidates/{candidate_id}/approve", summary="通过新维度技法并归入知识库分类")
+async def approve_candidate(candidate_id: int, user: CurrentAccount, engine: Database,
+                            category: str = Query(default="outline")):
+    if category not in {"worldbuilding", "outline", "prose"}:
+        raise HTTPException(422, "技法分类不支持")
+    result = await run_in_threadpool(analysis_db.approve_candidate, engine, user.id, candidate_id,
+                                     user.id, category)
     if result is None:
         raise HTTPException(404, "候选技法不存在或已审核")
     return {"approved": True, **result}
@@ -222,19 +226,35 @@ async def get_analysis(report_id: int, user: CurrentAccount, engine: Database):
 @router.post("/analyze/tasks", status_code=202, summary="拆解上传的小说章节并提取技法")
 async def start_analysis(
         user: CurrentAccount, engine: Database,
-        files: list[UploadFile] = File(...),
+        files: list[UploadFile] | None = File(default=None),
+        text: str = Form(""),
         instruction: str = Form(DEFAULT_INSTRUCTION),
         model: str | None = Form(None)):
-    documents = await run_in_threadpool(_read_uploads, files)
+    if len(text) > MAX_TEXT_CHARS:
+        raise HTTPException(422, f"粘贴章节不能超过 {MAX_TEXT_CHARS} 字符")
+    documents = await run_in_threadpool(_read_uploads, files or [])
+    text = text.strip()
+    added_text = False
+    if text:
+        remaining = MAX_TOTAL_CHARS - sum(len(row["text"]) for row in documents)
+        if remaining > 0:
+            take = min(len(text), MAX_TEXT_CHARS, remaining)
+            documents.append({"name": "粘贴文本", "chars": len(text), "text": text[:take],
+                              "truncated": take < len(text)})
+            added_text = True
     if not documents:
-        raise HTTPException(422, "没有读取到可分析的文本")
+        raise HTTPException(422, "请上传章节文件或粘贴一段章节文本")
     instruction = instruction.strip()[:2000]
     signature = hashlib.sha256(json.dumps({
         "names": [row["name"] for row in documents],
         "chars": [row["chars"] for row in documents],
+        "text_hash": hashlib.sha256(text.encode()).hexdigest()[:16] if text else "",
         "instruction": instruction,
     }, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+    file_count = sum(1 for row in documents if row["name"] != "粘贴文本")
+    title = ("小说拆解 · 文件与粘贴文本" if file_count and added_text else
+             "小说拆解 · 粘贴文本" if added_text else f"小说拆解 · {file_count} 个文件")
     return generation_jobs.store.start(
         account_id=user.id, key=f"novel-analysis:{signature}", kind="analysis",
-        title=f"小说拆解 · {len(documents)} 个文件",
+        title=title,
         operation=lambda: analyze_documents(documents, instruction, model, user.id, engine)).summary()

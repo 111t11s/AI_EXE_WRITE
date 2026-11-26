@@ -12,6 +12,11 @@ from db.accounts import account_id_type, metadata, utcnow
 
 id_type = BigInteger().with_variant(BIGINT(unsigned=True), "mysql").with_variant(Integer, "sqlite")
 LONG_TYPE = Text().with_variant(LONGTEXT(), "mysql")
+CATEGORY_LABELS = {"worldbuilding": "世界观构造", "outline": "大纲", "prose": "正文"}
+DIMENSION_CATEGORIES = {
+    "world": "worldbuilding", "profession": "worldbuilding",
+    "character": "outline", "plot": "outline", "prose": "prose",
+}
 novel_analysis = Table(
     "app_novel_analysis", metadata,
     Column("id", id_type, primary_key=True, autoincrement=True),
@@ -30,6 +35,7 @@ analysis_dimension = Table(
            nullable=False, index=True),
     Column("dimension_key", String(40), nullable=False),
     Column("label", String(40), nullable=False),
+    Column("category", String(20), nullable=False, default="outline"),
     Column("description", String(600), nullable=False, default=""),
     Column("created_at", DateTime, nullable=False, default=utcnow),
     UniqueConstraint("account_id", "dimension_key", name="uk_analysis_dimension_account_key"),
@@ -194,10 +200,11 @@ def list_candidates(engine, account_id: int, status: str = "pending") -> list[di
     } for row in rows]
 
 
-def _technique_row(row) -> dict:
+def _technique_row(row, category: str = "outline") -> dict:
     return {
         "id": row["id"], "analysis_id": row["analysis_id"],
         "dimension": row["dimension_key"], "dimension_label": row["dimension_label"],
+        "category": category, "category_label": CATEGORY_LABELS.get(category, "大纲"),
         "name": row["name"], "summary": row["summary"], "mechanism": row["mechanism"],
         "reuse": row["reuse"], "evidence": _load(row["evidence"]) or [],
         "confidence": row["confidence"], "applicable_genres": _load(row["applicable_genres"]) or [],
@@ -213,11 +220,12 @@ def list_techniques(engine, account_id: int, limit: int = 500) -> list[dict]:
         reports = connection.execute(select(novel_analysis).where(
             novel_analysis.c.account_id == account_id
         ).order_by(novel_analysis.c.created_at.desc(), novel_analysis.c.id.desc())).mappings().all()
+        categories = _category_map(connection, account_id)
     names = {row["id"]: _load(row["file_names"]) or [] for row in reports}
     items = []
     covered = set()
     for row in rows:
-        item = _technique_row(row)
+        item = _technique_row(row, categories.get(row["dimension_key"], "outline"))
         item["file_names"] = names.get(row["analysis_id"], [])
         items.append(item)
         covered.add(row["analysis_id"])
@@ -229,20 +237,27 @@ def list_techniques(engine, account_id: int, limit: int = 500) -> list[dict]:
         for dimension in report.get("dimensions") or []:
             if not dimension.get("available"):
                 continue
+            category = categories.get(dimension.get("dimension"), "outline")
             for item in dimension.get("techniques") or []:
                 items.append({
                     "analysis_id": row["id"], "file_names": names.get(row["id"], []),
                     "dimension": item.get("dimension") or dimension.get("dimension"),
                     "dimension_label": dimension.get("label") or dimension.get("dimension"),
+                    "category": category, "category_label": CATEGORY_LABELS.get(category, "大纲"),
                     "name": item.get("name", ""), "summary": item.get("summary", ""),
                     "mechanism": item.get("mechanism", ""), "reuse": item.get("reuse", ""),
                     "confidence": item.get("confidence", "medium"),
                     "applicable_genres": item.get("applicable_genres") or [],
                     "evidence": item.get("evidence") or [], "source": "report",
                 })
-                if len(items) >= limit:
-                    return items
-    return items[:limit]
+    deduped, seen = [], set()
+    for item in items:
+        key = (item.get("dimension"), item.get("name"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped[:limit]
 
 
 def list_dimensions(engine, account_id: int) -> list[dict]:
@@ -251,10 +266,49 @@ def list_dimensions(engine, account_id: int) -> list[dict]:
             analysis_dimension.c.account_id == account_id
         ).order_by(analysis_dimension.c.created_at)).mappings().all()
     return [{"dimension_key": row["dimension_key"], "label": row["label"],
+             "category": row["category"] or DIMENSION_CATEGORIES.get(row["dimension_key"], "outline"),
              "description": row["description"]} for row in rows]
 
 
-def approve_candidate(engine, account_id: int, candidate_id: int, reviewer_id: int) -> dict | None:
+def _category_map(connection, account_id: int) -> dict[str, str]:
+    rows = connection.execute(select(analysis_dimension).where(
+        analysis_dimension.c.account_id == account_id)).mappings().all()
+    mapping = dict(DIMENSION_CATEGORIES)
+    for row in rows:
+        mapping[row["dimension_key"]] = row["category"] or "outline"
+    return mapping
+
+
+def get_techniques(engine, account_id: int, technique_ids: list[int]) -> list[dict]:
+    ids = [int(item) for item in technique_ids if int(item) > 0]
+    if not ids:
+        return []
+    with engine.begin() as connection:
+        rows = connection.execute(select(analysis_technique).where(
+            analysis_technique.c.account_id == account_id,
+            analysis_technique.c.id.in_(ids),
+        )).mappings().all()
+        categories = _category_map(connection, account_id)
+        reports = connection.execute(select(novel_analysis).where(
+            novel_analysis.c.account_id == account_id,
+            novel_analysis.c.id.in_({row["analysis_id"] for row in rows}),
+        )).mappings().all()
+    names = {row["id"]: _load(row["file_names"]) or [] for row in reports}
+    by_id = {row["id"]: row for row in rows}
+    result = []
+    for technique_id in ids:
+        row = by_id.get(technique_id)
+        if row is None:
+            continue
+        category = categories.get(row["dimension_key"], "outline")
+        item = _technique_row(row, category)
+        item["file_names"] = names.get(row["analysis_id"], [])
+        result.append(item)
+    return result
+
+
+def approve_candidate(engine, account_id: int, candidate_id: int, reviewer_id: int,
+                      category: str = "outline") -> dict | None:
     with engine.begin() as connection:
         candidate = connection.execute(select(analysis_candidate).where(
             analysis_candidate.c.id == candidate_id,
@@ -283,15 +337,15 @@ def approve_candidate(engine, account_id: int, candidate_id: int, reviewer_id: i
             connection.execute(update(analysis_dimension).where(
                 analysis_dimension.c.account_id == account_id,
                 analysis_dimension.c.dimension_key == candidate["dimension_key"],
-            ).values(label=candidate["dimension_label"],
+            ).values(label=candidate["dimension_label"], category=category,
                      description=candidate["dimension_reason"]))
         else:
             connection.execute(insert(analysis_dimension).values(
                 account_id=account_id, dimension_key=candidate["dimension_key"],
-                label=candidate["dimension_label"], description=candidate["dimension_reason"],
-                created_at=utcnow()))
+                label=candidate["dimension_label"], category=category,
+                description=candidate["dimension_reason"], created_at=utcnow()))
     return {"candidate_id": candidate_id, "dimension": candidate["dimension_key"],
-            "label": candidate["dimension_label"]}
+            "label": candidate["dimension_label"], "category": category}
 
 
 def reject_candidate(engine, account_id: int, candidate_id: int, reviewer_id: int) -> bool:

@@ -215,3 +215,11 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 .analysis-technique .prose{margin:0;font-size:.85rem}
 .analysis-technique .consistency-quote{margin:2px 0;font-size:.82rem}
 
+/* 写作技法知识库选择 */
+.technique-picker{border:1px solid var(--line);border-radius:9px;padding:10px;margin:0}
+.technique-picker legend{padding:0 5px;font-size:.8rem;font-weight:680}
+.technique-picker-list{display:grid;gap:6px;max-height:230px;overflow:auto;margin-top:6px}
+.technique-choice{display:flex;align-items:flex-start;gap:8px;padding:7px;border:1px solid var(--line);border-radius:7px;cursor:pointer}
+.technique-choice input{flex:none;margin-top:3px}
+.technique-choice .muted{display:block;margin:2px 0 0;font-size:.75rem;line-height:1.45}
+

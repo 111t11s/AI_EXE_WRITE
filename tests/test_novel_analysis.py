@@ -1,13 +1,16 @@
 import asyncio
 import time
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from api import novel_analysis_api as analysis
+from api import novel_writing_api as writing
 from api.account_api import Account, get_current_account
 from api.novel_crud_api import get_database
 from api.writing_schemas import (NovelAnalysisCandidate, NovelAnalysisDimension, NovelAnalysisEvidence,
-                                 NovelAnalysisReport, NovelAnalysisTechnique)
+                                 NovelAnalysisReport, NovelAnalysisTechnique, WritingInput)
 from db import novel_analysis as analysis_db
 from db.migrate_accounts import create_account
 from main import app
@@ -88,7 +91,10 @@ def test_extra_dimension_requires_review_then_enters_technique_table():
     assert {item["name"] for item in analysis_db.list_techniques(engine, account_id)} == {
         "工具动作露底", "短判断压危机", "三拍递进"}
     assert analysis_db.list_candidates(engine, account_id) == []
-    assert [row["dimension_key"] for row in analysis_db.list_dimensions(engine, account_id)] == ["rhythm"]
+    dimensions = analysis_db.list_dimensions(engine, account_id)
+    assert [row["dimension_key"] for row in dimensions] == ["rhythm"]
+    assert dimensions[0]["category"] == "outline"
+    assert {item["name"]: item["category"] for item in analysis_db.list_techniques(engine, account_id)}["三拍递进"] == "outline"
 
     # 已批准维度下一次作为正常维度处理，不再进入候选。
     next_report = NovelAnalysisReport(
@@ -103,6 +109,30 @@ def test_extra_dimension_requires_review_then_enters_technique_table():
     assert cleaned_next.extra_techniques == []
     rhythm = next(item for item in cleaned_next.dimensions if item.dimension == "rhythm")
     assert rhythm.available and rhythm.label == "节奏构造"
+
+
+def test_selected_techniques_are_injected_into_generation_context():
+    engine = create_test_db()
+    account_id = create_account(engine, "analyst", "test-password")
+    cleaned = analysis.clean_analysis(report(), [{"name": "第一章.txt", "text": SOURCE}])
+    analysis_db.save_analysis(engine, account_id, ["第一章.txt"], len(SOURCE), "",
+                              cleaned.model_dump(mode="json"), set(analysis.FIXED_DIMENSIONS),
+                              analysis.DIMENSION_LABELS)
+    technique = next(item for item in analysis_db.list_techniques(engine, account_id)
+                     if item["name"] == "工具动作露底")
+    payload = WritingInput(technique_ids=[technique["id"]])
+    context = {}
+    result = asyncio.run(writing.apply_techniques(
+        context, payload, Account(id=account_id, username="analyst", display_name="拆解者"),
+        engine, writing.OUTLINE_TECHNIQUE_CATEGORIES))
+    assert result["techniques"][0]["name"] == "工具动作露底"
+    assert "工具动作露底" in result["technique_prompt"]
+    assert "不照搬原文" in result["technique_prompt"]
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(writing.apply_techniques(
+            {}, payload, Account(id=account_id, username="analyst", display_name="拆解者"),
+            engine, writing.PROSE_TECHNIQUE_CATEGORIES))
+    assert error.value.status_code == 422
 
 
 def test_clean_analysis_returns_none_without_evidence():
@@ -129,6 +159,79 @@ def test_analyze_documents_saves_report(monkeypatch):
     assert stored["report"]["dimensions"][0]["dimension"] == "character"
     techniques = analysis_db.list_techniques(engine, account_id)
     assert {item["name"] for item in techniques} == {"工具动作露底", "短判断压危机"}
+
+
+def test_pasted_chapter_is_accepted_and_limited(monkeypatch):
+    engine = create_test_db()
+    account_id = create_account(engine, "analyst", "test-password")
+    captured = {}
+
+    async def capture(role, context, request):
+        captured["documents"] = context["documents"]
+        return report()
+
+    monkeypatch.setattr(analysis, "generate", capture)
+    app.dependency_overrides[get_database] = lambda: engine
+    app.dependency_overrides[get_current_account] = lambda: Account(
+        id=account_id, username="analyst", display_name="拆解者")
+    try:
+        with TestClient(app) as client:
+            too_long = client.post("/api/v1/novel-analysis/analyze/tasks",
+                                   data={"text": "字" * 25001})
+            assert too_long.status_code == 422
+            response = client.post("/api/v1/novel-analysis/analyze/tasks",
+                                   data={"text": SOURCE, "instruction": "重点看人物"})
+            assert response.status_code == 202, response.text
+            job_id = response.json()["id"]
+            for _ in range(200):
+                detail = client.get(f"/api/v1/generation-jobs/{job_id}").json()
+                if detail["status"] != "running":
+                    break
+                time.sleep(0.02)
+            assert detail["status"] == "completed", detail
+            assert detail["title"] == "小说拆解 · 粘贴文本"
+            assert [row["name"] for row in captured["documents"]] == ["粘贴文本"]
+            assert captured["documents"][0]["text"] == SOURCE
+    finally:
+        app.dependency_overrides.pop(get_database, None)
+        app.dependency_overrides.pop(get_current_account, None)
+
+
+def test_approve_candidate_endpoint(monkeypatch):
+    engine = create_test_db()
+    account_id = create_account(engine, "analyst", "test-password")
+
+    async def fake_generate(role, context, request):
+        return report_with_extra()
+
+    monkeypatch.setattr(analysis, "generate", fake_generate)
+    app.dependency_overrides[get_database] = lambda: engine
+    app.dependency_overrides[get_current_account] = lambda: Account(
+        id=account_id, username="analyst", display_name="拆解者")
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/novel-analysis/analyze/tasks",
+                files={"files": ("第一章.txt", SOURCE.encode("utf-8"), "text/plain")})
+            assert response.status_code == 202, response.text
+            job_id = response.json()["id"]
+            for _ in range(200):
+                detail = client.get(f"/api/v1/generation-jobs/{job_id}").json()
+                if detail["status"] != "running":
+                    break
+                time.sleep(0.02)
+            candidates = client.get("/api/v1/novel-analysis/candidates").json()["items"]
+            assert [item["name"] for item in candidates] == ["三拍递进"]
+            approved = client.post(f"/api/v1/novel-analysis/candidates/{candidates[0]['id']}/approve?category=prose")
+            assert approved.status_code == 200, approved.text
+            assert approved.json()["category"] == "prose"
+            assert client.get("/api/v1/novel-analysis/candidates").json()["items"] == []
+            library = client.get("/api/v1/novel-analysis/techniques").json()
+            extra = next(item for item in library["items"] if item["name"] == "三拍递进")
+            assert extra["category"] == "prose" and extra["category_label"] == "正文"
+    finally:
+        app.dependency_overrides.pop(get_database, None)
+        app.dependency_overrides.pop(get_current_account, None)
 
 
 def test_upload_endpoint_and_library(monkeypatch):

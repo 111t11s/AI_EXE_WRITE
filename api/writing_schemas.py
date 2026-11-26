@@ -34,6 +34,17 @@ class WritingInput(BaseModel):
     instruction: str = Field(default="", max_length=2000)
     # 可选模型配置 ID（GET /api/v1/models）；省略时使用主模型。
     model: str | None = Field(default=None, max_length=40)
+    # 用户从写作技法知识库选择的技法，最多 5 条。
+    technique_ids: list[int] = Field(default_factory=list, max_length=5)
+
+    @field_validator("technique_ids")
+    @classmethod
+    def valid_technique_ids(cls, values):
+        if any(value <= 0 for value in values):
+            raise ValueError("技法编号必须为正整数")
+        if len(values) != len(set(values)):
+            raise ValueError("不能重复选择同一技法")
+        return values
 
 
 class OutlineRequest(WritingInput):

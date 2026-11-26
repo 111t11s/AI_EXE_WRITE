@@ -27,6 +27,7 @@ from api.novel_tables import tables
 from api.database import transaction
 from sqlalchemy import func, select
 from db.connection import legacy_json_columns
+from db import novel_analysis as analysis_db
 from api.writing_schemas import (
     ChapterPlanReceipt, ChapterPlanRequest, DraftReceipt, DraftRequest, OutlineReceipt, OutlineRequest,
     ReviewReport, WritingInput,
@@ -42,6 +43,8 @@ from core.models import ModelProfileError, endpoint_host, resolve_profile, safe_
 
 router = APIRouter(prefix="/writing", tags=["小说写作智能体"])
 logger = get_logger("novel_writing")
+OUTLINE_TECHNIQUE_CATEGORIES = {"worldbuilding", "outline"}
+PROSE_TECHNIQUE_CATEGORIES = {"prose"}
 
 
 async def read(session, table, record_id):
@@ -530,9 +533,39 @@ async def generate(role, context, payload):
 
 
 @router.post("/projects/{project_id}/outline", response_model=OutlineReceipt, status_code=201, summary="生成并保存小说大纲")
+async def apply_techniques(context: dict, payload: WritingInput, user: CurrentAccount, engine,
+                           categories: set[str]) -> dict:
+    """把用户选中的知识库技法注入生成上下文；只借鉴写法，不改既定事实。"""
+    ids = list(payload.technique_ids)
+    if not ids:
+        return context
+    rows = await run_in_threadpool(analysis_db.get_techniques, engine, user.id, ids)
+    if len(rows) != len(ids):
+        raise HTTPException(404, "所选技法不存在或已删除，请重新选择")
+    invalid = [row["name"] for row in rows if row.get("category") not in categories]
+    if invalid:
+        raise HTTPException(422, f"以下技法分类不适用于本次任务：{'、'.join(invalid)}")
+    context["techniques"] = rows
+    lines = ["\n用户从写作技法知识库选择的参考技法（只借鉴写法，不照搬原文；不得改变已确定的人物、世界观、大纲和正文事实）："]
+    for index, row in enumerate(rows, 1):
+        lines.append(f"{index}.〔{row.get('category_label', '')}·{row.get('dimension_label', '')}〕"
+                     f"{row.get('name', '')}：{row.get('summary', '')}")
+        if row.get("reuse"):
+            lines.append(f"   复用方式：{row['reuse']}")
+        evidence = row.get("evidence") or []
+        if evidence and evidence[0].get("quote"):
+            lines.append(f"   原文依据：{evidence[0]['quote'][:160]}")
+    lines.append("新建内容时用这些技法组织表达；重写、续写或润色时在当前内容基础上融入技法，"
+                 "保留原有情节、人物关系、视角和结果，不另起故事。")
+    context["technique_prompt"] = "\n".join(lines)
+    emit_generation_event("status", message=f"已加载 {len(rows)} 条写作技法参考。")
+    return context
+
+
 async def write_outline(project_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
     context = await load_context(project_context, project_id)
+    context = await apply_techniques(context, payload, user, engine, OUTLINE_TECHNIQUE_CATEGORIES)
     artifact = await generate(agents.OUTLINE, context, payload)
     if len(artifact.volumes) != payload.volume_count:
         raise HTTPException(502, "模型返回的分卷数量与请求不符")
@@ -562,6 +595,7 @@ async def write_chapter_plan(volume_id: RowId, payload: ChapterPlanRequest, user
 async def write_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     context = await load_context(chapter_context, chapter_id, False)
+    context = await apply_techniques(context, payload, user, engine, PROSE_TECHNIQUE_CATEGORIES)
     artifact = await generate(agents.DRAFT, context, payload)
     emit_generation_event("status", message="正文生成完成，正在保存正文；人物进展请另行启动分析任务…")
     # Legacy combined artifacts may still be returned by an older caller. New
@@ -595,7 +629,8 @@ async def write_batch_drafts(project_id: RowId, payload: BatchDraftRequest,
     for index, chapter in enumerate(chapters, 1):
         emit_generation_event("status", message=f"正在生成第 {chapter['chapter_number']} 章（{index}/{len(chapters)}）…")
         draft = await write_draft(chapter["id"], DraftRequest(
-            target_characters=payload.target_characters, instruction=payload.instruction, model=payload.model),
+            target_characters=payload.target_characters, instruction=payload.instruction,
+            model=payload.model, technique_ids=payload.technique_ids),
             user, engine)
         drafts.append((chapter, draft))
 
@@ -633,6 +668,7 @@ async def write_batch_draft(project_id: RowId, payload: BatchDraftRequest,
 async def rewrite_outline(outline_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
     project_id = await run_in_threadpool(task_project, engine, "novel_outline", outline_id, user.id)
     context, sources = await load_context(character_context, project_id, outline_id)
+    context = await apply_techniques(context, payload, user, engine, OUTLINE_TECHNIQUE_CATEGORIES)
     artifact = await generate(agents.OUTLINE_REWRITE, context, payload)
     if len(artifact.volumes) != payload.volume_count:
         raise HTTPException(502, "模型返回的分卷数量与请求不符，重写结果未保存")
@@ -644,6 +680,7 @@ async def rewrite_outline(outline_id: RowId, payload: OutlineRequest, user: Curr
 async def rewrite_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     context = await load_context(chapter_context, chapter_id, False, True)
+    context = await apply_techniques(context, payload, user, engine, PROSE_TECHNIQUE_CATEGORIES)
     artifact = await generate(agents.DRAFT_REWRITE, context, payload)
     emit_generation_event("status", message="重写正文生成完成，正在替换正文；人物进展请另行启动分析任务…")
     return await run_in_threadpool(save_rewritten_draft, engine, chapter_id, artifact.content, context["chapter"],
@@ -663,6 +700,7 @@ async def continue_chapter(chapter_id: RowId, payload: DraftRequest, user: Curre
 async def polish_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     context = await load_context(chapter_context, chapter_id, False, True)
+    context = await apply_techniques(context, payload, user, engine, PROSE_TECHNIQUE_CATEGORIES)
     artifact = await generate(agents.DRAFT_POLISH, context, payload)
     emit_generation_event("status", message="正文润色完成，正在核对原文并保存…")
     return await run_in_threadpool(save_rewritten_draft, engine, chapter_id, artifact.content,
@@ -672,6 +710,7 @@ async def polish_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAc
 async def continue_draft(chapter_id: RowId, payload: DraftRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_chapter", chapter_id, user.id)
     context = await load_context(chapter_context, chapter_id, False, True)
+    context = await apply_techniques(context, payload, user, engine, PROSE_TECHNIQUE_CATEGORIES)
     artifact = await generate(agents.DRAFT_CONTINUE, context, payload)
     emit_generation_event("status", message="续写完成，正在核对章节原文并追加保存…")
     return await run_in_threadpool(save_continued_draft, engine, chapter_id, artifact.content,

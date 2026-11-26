@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS app_analysis_dimension (
     account_id BIGINT UNSIGNED NOT NULL,
     dimension_key VARCHAR(40) NOT NULL,
     label VARCHAR(40) NOT NULL,
+    category VARCHAR(20) NOT NULL DEFAULT 'outline',
     description VARCHAR(600) NOT NULL DEFAULT '',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
