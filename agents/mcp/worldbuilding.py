@@ -49,7 +49,9 @@ def crewai_world_tools():
 @asynccontextmanager
 async def novel_session():
     async with stdio_client(server_parameters()) as (read, write):
-        async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=40)) as session:
+        # 角色生成、润色等工具内部会调用模型，耗时可能超过 40 秒；
+        # 这里必须与 server.py 的 WORKFLOW_TIMEOUT（300 秒）对齐。
+        async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=300)) as session:
             await session.initialize()
             yield session
 

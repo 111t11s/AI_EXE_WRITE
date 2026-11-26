@@ -28,6 +28,29 @@ from db.models import NovelBlueprint
 logger = get_logger("worldbuilding")
 
 
+def _exception_reason(exc: BaseException) -> str:
+    """把 anyio/crewai 的 ExceptionGroup 还原成可读的底层原因。"""
+    if isinstance(exc, NovelToolError):
+        return str(exc)
+    detail = getattr(exc, "detail", None)
+    if detail:
+        return str(detail)[:240]
+    if isinstance(exc, BaseExceptionGroup):
+        leaves = []
+        stack = [exc]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, BaseExceptionGroup):
+                stack.extend(current.exceptions)
+            else:
+                leaves.append(current)
+        if leaves:
+            first = leaves[0]
+            first_detail = getattr(first, "detail", None) or str(first) or type(first).__name__
+            return f"{type(first).__name__}: {first_detail}"[:240]
+    return (str(exc) or type(exc).__name__)[:240]
+
+
 SLOT_LABELS = {
     "genre": "小说类型",
     "setting": "时代与背景",
@@ -361,14 +384,14 @@ class WorldbuildingAssistant:
             state.persistence_error = "保存请求已中断，请核对项目、世界观、大纲和角色的保存状态。"
             raise
         except Exception as exc:
-            reason = (str(exc) if isinstance(exc, NovelToolError) else
-                      str(getattr(exc, "detail", type(exc).__name__)))
+            reason = _exception_reason(exc)
             state.persistence_error = f"保存{save_step}失败：{reason[:240]}；项目可能只保存了一部分。"
             logger.warning("世界观初始化流程异常：步骤=%s，异常类型=%s，原因=%s，项目已创建=%s，世界观已创建=%s，大纲已创建=%s",
                            save_step,
                            type(exc).__name__, reason[:240], "是" if state.project_id is not None else "否",
                            "是" if state.world_id is not None else "否",
-                           "是" if state.outline_id is not None else "否")
+                           "是" if state.outline_id is not None else "否",
+                           exc_info=True)
 
     @staticmethod
     def create_generation_agent(llm):
