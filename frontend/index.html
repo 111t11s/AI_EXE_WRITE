@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#191923">
   <title>墨间 · 小说工作台</title>
-  <link rel="stylesheet" href="/workbench.css?v=file-topics-20261126">
+  <link rel="stylesheet" href="/workbench.css?v=novel-analysis-20261126">
   <script src="/runtime-config.js?v=outline-skills-20261114"></script>
   <script type="importmap">
     {"imports": {
-      "/workbench.js": "/workbench.js?v=file-topics-20261126",
+      "/workbench.js": "/workbench.js?v=novel-analysis-20261126",
       "/api-client.js": "/api-client.js?v=character-progress-20261116",
       "/generation-stream.js": "/generation-stream.js?v=thinking-panel-20261125"
     }}
@@ -30,6 +30,7 @@
       <div class="account-bar"><span id="account-name"></span><span class="account-actions"><button type="button" class="account-logout" id="account-password-change">修改密码</button><button type="button" class="account-logout" id="account-logout">退出账号</button></span></div>
       <button class="button primary new-project" type="button" id="new-project"><span aria-hidden="true">＋</span> 新建小说</button>
       <button class="button secondary" type="button" id="open-trends">文件选题</button>
+      <button class="button secondary" type="button" id="open-analysis">小说拆解</button>
       <a class="button secondary" href="/public.html">公共书架 ↗</a>
       <div class="task-navigation"><button class="button secondary" type="button" id="generation-tasks" aria-expanded="false" aria-controls="task-submenus">任务中心 <span id="generation-task-count">0</span></button>
         <nav id="task-submenus" class="task-submenus" aria-label="任务分类" hidden></nav>

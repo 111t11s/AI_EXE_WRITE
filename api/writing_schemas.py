@@ -444,6 +444,54 @@ class TrendReceipt(TrendReport):
     record_id: int | None = None
 
 
+AnalysisDimensionName = Literal["character", "profession", "world", "plot", "prose"]
+
+
+class NovelAnalysisEvidence(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    quote: str = Field(min_length=2, max_length=600)
+    note: str = Field(default="", max_length=300)
+
+
+class NovelAnalysisTechnique(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    dimension: AnalysisDimensionName
+    name: str = Field(min_length=1, max_length=80)
+    summary: str = Field(min_length=1, max_length=600)
+    mechanism: str = Field(default="", max_length=1200)
+    reuse: str = Field(default="", max_length=1000)
+    evidence: list[NovelAnalysisEvidence] = Field(min_length=1, max_length=4)
+    confidence: Literal["high", "medium", "low"] = "medium"
+    applicable_genres: list[Annotated[str, Field(max_length=20)]] = Field(default_factory=list, max_length=8)
+
+
+class NovelAnalysisDimension(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    dimension: AnalysisDimensionName
+    available: bool = False
+    summary: str = Field(default="", max_length=800)
+    techniques: list[NovelAnalysisTechnique] = Field(default_factory=list, max_length=4)
+    missing: str = Field(default="", max_length=600)
+
+
+class NovelAnalysisReport(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    overview: str = Field(min_length=1, max_length=1000)
+    source_summary: str = Field(default="", max_length=800)
+    dimensions: list[NovelAnalysisDimension] = Field(min_length=1, max_length=5)
+    limitations: list[str] = Field(default_factory=list, max_length=10)
+
+
+class NovelAnalysisReceipt(NovelAnalysisReport):
+    file_names: list[str] = Field(default_factory=list)
+    generated_at: str
+    record_id: int | None = None
+
+
 class OutlineReceipt(BaseModel):
     project_id: RowId
     outline_id: RowId

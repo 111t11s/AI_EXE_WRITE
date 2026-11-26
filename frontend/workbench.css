@@ -209,3 +209,9 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 .document-paste textarea{width:100%}
 .document-paste .muted{justify-self:end}
 
+/* 小说拆解 */
+.analysis-technique{display:grid;gap:8px;padding:14px;border:1px solid var(--line);border-radius:9px;background:var(--soft)}
+.analysis-technique h3{margin:0;font-size:1.02rem}
+.analysis-technique .prose{margin:0;font-size:.85rem}
+.analysis-technique .consistency-quote{margin:2px 0;font-size:.82rem}
+

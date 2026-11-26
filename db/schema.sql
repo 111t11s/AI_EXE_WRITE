@@ -63,6 +63,19 @@ CREATE TABLE IF NOT EXISTS app_document_topic (
     CONSTRAINT fk_document_topic_account FOREIGN KEY (account_id) REFERENCES app_account(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='文件选题分析结果表';
 
+CREATE TABLE IF NOT EXISTS app_novel_analysis (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '拆解记录主键',
+    account_id BIGINT UNSIGNED NOT NULL COMMENT '所属账号',
+    file_names TEXT NOT NULL COMMENT '文件名 JSON 数组',
+    input_chars INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '读取的字符数',
+    instruction VARCHAR(2000) NOT NULL DEFAULT '' COMMENT '补充要求',
+    report LONGTEXT NOT NULL COMMENT '拆解报告 JSON',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    PRIMARY KEY (id),
+    KEY idx_novel_analysis_account_created (account_id, created_at),
+    CONSTRAINT fk_novel_analysis_account FOREIGN KEY (account_id) REFERENCES app_account(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='小说章节拆解结果表';
+
 CREATE TABLE IF NOT EXISTS novel_project (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '项目主键',
     account_id BIGINT UNSIGNED NULL COMMENT '所属账号，旧项目待迁移',

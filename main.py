@@ -60,6 +60,7 @@ from api.account_api import CurrentAccount, router as account_router
 from api.generation_jobs import router as jobs_router
 from api.model_api import router as model_router
 from api.document_topics_api import router as document_topics_router
+from api.novel_analysis_api import router as novel_analysis_router
 
 app = FastAPI(
     title="AI 小说工程 API",
@@ -98,6 +99,7 @@ app.include_router(assistant_router, prefix="/api/v1", tags=["小说设定助手
 app.include_router(account_router, prefix="/api/v1")
 app.include_router(model_router, prefix="/api/v1")
 app.include_router(document_topics_router, prefix="/api/v1")
+app.include_router(novel_analysis_router, prefix="/api/v1")
 app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(public_library_router, prefix=CRUD_PREFIX)
 app.include_router(project_trash_router, prefix=CRUD_PREFIX)

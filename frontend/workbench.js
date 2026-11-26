@@ -24,6 +24,8 @@ const initialState = () => ({projects: [], project: null, libraryOwner: 'all', w
   trends: null, trendsLoading: false, trendsError: null, trendsSelection: new Map(), trendsSelectedSources: null,
   trendsQuery: '', trendsSearched: null, trendsSearchedSelection: new Map(), documentFiles: [], documentText: '',
   documentHistory: null, documentReport: null,
+  analysisFiles: [], analysisHistory: null, analysisReport: null, analysisLibrary: null,
+  analysisLoading: false, analysisError: null, analysisNote: '重点看人物出场、职阶体系和对话节奏',
   trendSearchLoading: false, trendsGenre: '都市、玄幻、言情、悬疑等网文类型', trendsAudience: '关注热门网络小说的读者',
   trendsNote: '根据上传文本提炼可写题材；不得照搬原文、原有人物或情节。',
   taskCategory: 'all', taskProjectId: 'all', taskStatus: 'all', taskPage: 1, taskPageSize: 5,
@@ -95,7 +97,7 @@ const post = (path, data = {}) => api(path, {method: 'POST', data});
 const progressGeneration = createGenerationView($('task-progress-stream'));
 const jobStatuses = {running: '生成中', completed: '已完成', failed: '未完成'};
 const taskCategories = [['all', '全部任务'], ['worldbuilding', '世界观'], ['outline', '大纲'], ['characters', '角色'],
-  ['draft', '正文'], ['plan', '章节规划'], ['review', '审读'], ['consistency', '一致性核对'], ['topics', '选题'], ['other', '其他']];
+  ['draft', '正文'], ['plan', '章节规划'], ['review', '审读'], ['consistency', '一致性核对'], ['topics', '选题'], ['analysis', '拆解'], ['other', '其他']];
 const taskKindCategory = kind => kind === 'character_progress' ? 'characters' :
   kind === 'batch_draft' ? 'draft' : kind === 'consistency_repair' ? 'consistency' : kind === 'trends' ? 'topics' : kind;
 const taskCategoryName = kind => taskCategories.find(([value]) => value === taskKindCategory(kind))?.[1] || '其他';
@@ -360,6 +362,7 @@ function renderTaskResult(job, result) {
   if (job.kind === 'review') content.push(reviewView(result));
   else if (job.kind === 'consistency') content.push(consistencyReportView(result));
   else if (job.kind === 'trends' || job.kind === 'topics') content.push(trendReportView(result));
+  else if (job.kind === 'analysis') content.push(analysisReportView(result));
   else {
     let message = '生成结果已保存，可打开小说查看。';
     if (job.kind === 'worldbuilding') message = result.persistence?.error ? `生成完成但保存未完整：${result.persistence.error}` :
@@ -668,6 +671,49 @@ function openTrends() {
   void loadDocumentHistory();
 }
 
+function openAnalysis() {
+  stopProgress();
+  state.screen = 'analysis';
+  state.analysisError = null;
+  state.analysisReport = null;
+  render();
+  void loadAnalysisHistory();
+}
+
+async function loadAnalysisHistory() {
+  if (!account) return;
+  try {
+    const data = await api('/novel-analysis', {filters: {limit: 8}});
+    state.analysisHistory = data.items || [];
+  } catch (error) {
+    state.analysisHistory = [];
+    if (state.screen === 'analysis') notify(`拆解历史读取失败：${error.message}`, 'error');
+  }
+  if (state.screen === 'analysis') render();
+}
+
+async function openAnalysisReport(id) {
+  try {
+    const data = await api(`/novel-analysis/${id}`);
+    state.analysisReport = {...data, report: {...data.report, record_id: data.id}};
+    state.screen = 'analysis-report';
+    render();
+  } catch (error) {
+    notify(`拆解报告读取失败：${error.message}`, 'error');
+  }
+}
+
+async function openAnalysisLibrary() {
+  try {
+    const data = await api('/novel-analysis/techniques');
+    state.analysisLibrary = data;
+    state.screen = 'analysis-library';
+    render();
+  } catch (error) {
+    notify(`技法库读取失败：${error.message}`, 'error');
+  }
+}
+
 async function loadDocumentHistory() {
   if (!account) return;
   try {
@@ -922,6 +968,161 @@ function documentReportView() {
     trendReportView(data.report));
 }
 
+function analysisFileSize(bytes) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+async function analyzeNovel() {
+  if (state.busy || state.analysisLoading) return;
+  if (!state.analysisFiles.length) {
+    notify('请先选择要拆解的小说章节文件。', 'error');
+    return;
+  }
+  const form = new FormData();
+  for (const file of state.analysisFiles) form.append('files', file, file.name);
+  form.append('instruction', state.analysisNote.trim());
+  if (state.modelChoice) form.append('model', state.modelChoice);
+  state.analysisLoading = true;
+  state.analysisError = null;
+  render();
+  try {
+    const job = await api('/novel-analysis/analyze/tasks', {method: 'POST', data: form});
+    state.analysisFiles = [];
+    recordJob(job);
+    void openProgress(job.id);
+  } catch (error) {
+    state.analysisError = error.message;
+    notify(`小说拆解提交失败：${error.message}`, 'error');
+  } finally {
+    state.analysisLoading = false;
+    render();
+  }
+}
+
+const analysisDimensionLabels = {character: '人物构造', profession: '职介构造', world: '世界构造',
+  plot: '剧情构造', prose: '文笔写法'};
+const analysisConfidenceLabels = {high: '证据充分', medium: '线索明确', low: '仅作候选'};
+
+function analysisView() {
+  const picker = element('input', {type: 'file', multiple: true,
+    accept: '.txt,.md,.markdown,.docx,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+  picker.addEventListener('change', () => {
+    const known = new Set(state.analysisFiles.map(file => `${file.name}:${file.size}:${file.lastModified}`));
+    for (const file of [...picker.files]) {
+      if (state.analysisFiles.length >= 5) {
+        notify('一次最多选择 5 个文件。', 'error');
+        break;
+      }
+      const key = `${file.name}:${file.size}:${file.lastModified}`;
+      if (!known.has(key)) { state.analysisFiles.push(file); known.add(key); }
+    }
+    render();
+  });
+  const fileList = state.analysisFiles.length ? stack(
+    ...state.analysisFiles.map((file, index) => element('div', {class: 'document-file'},
+      element('span', {}, element('strong', {}, file.name), muted(` ${analysisFileSize(file.size)}`)),
+      button('移除', () => { state.analysisFiles.splice(index, 1); render(); }, 'secondary'))),
+    actions(button('清空文件', () => { state.analysisFiles = []; render(); }, 'secondary'))) :
+    muted('还没有选择章节文件。');
+  const note = element('textarea', {maxlength: 2000, rows: 3,
+    placeholder: '可指定重点，例如：重点看人物出场、职阶体系和对话节奏'}, state.analysisNote);
+  note.addEventListener('input', event => { state.analysisNote = event.target.value; });
+  const submit = button(state.analysisLoading ? '正在上传并拆解…' : '拆解并提取技法', analyzeNovel,
+    'primary', state.busy || state.analysisLoading || !state.analysisFiles.length);
+  const history = panel('拆解历史', state.analysisHistory === null ? muted('正在读取拆解历史…') :
+    state.analysisHistory.length ? stack(...state.analysisHistory.map(item => element('div', {class: 'document-file'},
+      element('span', {}, element('strong', {}, (item.file_names || []).join('、') || '章节文件'),
+        muted(` · ${item.technique_count || 0} 个技法 · ${new Date(item.created_at).toLocaleString()}`)),
+      button('查看', () => openAnalysisReport(item.id), 'secondary')))) :
+    muted('还没有保存的拆解报告。'), '报告会保存到数据库，可在技法库中复用。');
+  const uploadPanel = panel('上传章节', stack(
+    muted('支持 TXT、Markdown、DOCX；最多 5 个文件，单个不超过 10MB。'),
+    element('div', {class: 'document-drop'}, element('strong', {}, '选择章节文件'), picker,
+      muted('可以只上传一章或几章，系统会按文本实际内容做局部拆解。')),
+    fileList,
+    element('label', {class: 'control'}, '拆解要求（可选）', note),
+    state.analysisError ? prose(`读取失败：${state.analysisError}`) : null),
+    null, actions(button('返回书架', () => { state.screen = 'project'; render(); }, 'secondary')));
+  const outputPanel = panel('输出', stack(
+    muted('每个人物/职介/世界/剧情/文笔技法都会给出：写法总结、原文证据、可复用操作。'),
+    actions(submit, button('写作技法库', openAnalysisLibrary, 'secondary')),
+    muted('拆解结果保存在数据库，供其他小说后续查阅。')), '给出可直接复用的写法。');
+  return element('div', {}, stack(
+    panel('小说拆解', muted('上传小说章节，系统只从这段文本中提取有原文证据的写法：人物、职介、世界、剧情、文笔。材料不足的维度会明确标注，不臆造设定。')),
+    element('div', {class: 'layout'}, uploadPanel, outputPanel),
+    history));
+}
+
+function analysisTechniqueView(technique) {
+  return element('section', {class: 'analysis-technique'},
+    element('div', {class: 'hero-meta'}, pill(analysisDimensionLabels[technique.dimension] || technique.dimension),
+      pill(analysisConfidenceLabels[technique.confidence] || technique.confidence, true)),
+    element('h3', {}, technique.name),
+    prose(technique.summary),
+    technique.mechanism ? prose(`怎么写的：${technique.mechanism}`) : null,
+    technique.reuse ? prose(`怎么复用：${technique.reuse}`) : null,
+    technique.applicable_genres?.length ? muted(`适合类型：${technique.applicable_genres.join('、')}`) : null,
+    ...(technique.evidence || []).map(item => stack(
+      element('blockquote', {class: 'prose consistency-quote'}, item.quote),
+      item.note ? muted(item.note) : null)),
+    actions(button('复制写法', async () => {
+      try {
+        await navigator.clipboard.writeText(`${technique.name}\n${technique.summary}\n复用：${technique.reuse}`);
+        notify('写法已复制，可粘贴到新小说的补充要求中。');
+      } catch (error) {
+        notify('复制失败，请手动选择文本。', 'error');
+      }
+    }, 'secondary')));
+}
+
+function analysisReportView(report) {
+  const dimensions = (report.dimensions || []).slice().sort(
+    (left, right) => Object.keys(analysisDimensionLabels).indexOf(left.dimension) -
+      Object.keys(analysisDimensionLabels).indexOf(right.dimension));
+  return stack(
+    panel('小说拆解报告', stack(
+      prose(report.overview),
+      report.source_summary ? muted(`文本范围：${report.source_summary}`) : null,
+      report.record_id ? muted('已保存到拆解历史和写作技法库。') : null,
+      report.limitations?.length ? details(['分析边界', report.limitations.join('\n')]) : null)),
+    ...dimensions.map(dimension => panel(analysisDimensionLabels[dimension.dimension] || dimension.dimension,
+      dimension.available ? stack(
+        dimension.summary ? prose(dimension.summary) : null,
+        ...(dimension.techniques || []).map(analysisTechniqueView)) :
+        muted(dimension.missing || '本次文本没有足够内容分析这个维度。'),
+      dimension.available ? `${dimension.techniques?.length || 0} 个技法` : '材料不足',
+      null)));
+}
+
+function analysisLibraryView() {
+  const data = state.analysisLibrary;
+  if (!data) return empty('正在读取写作技法库', '请稍候。');
+  const labels = data.dimensions || analysisDimensionLabels;
+  const groups = {};
+  for (const item of data.items || []) {
+    (groups[item.dimension] ||= []).push(item);
+  }
+  return stack(
+    panel('写作技法库', muted('这里汇总所有已保存的拆解技法，可在新建小说或写作时参考、复制。'),
+      actions(button('返回小说拆解', () => { state.screen = 'analysis'; render(); }, 'secondary'))),
+    ...Object.entries(labels).filter(([key]) => groups[key]?.length).map(([key, label]) => {
+      const items = groups[key];
+      return panel(label, stack(...items.map(item => stack(
+        element('div', {class: 'hero-meta'}, pill(label), pill(analysisConfidenceLabels[item.confidence] || item.confidence, true)),
+        element('h3', {}, item.name), prose(item.summary),
+        item.reuse ? prose(`怎么复用：${item.reuse}`) : null,
+        muted(`来源：${(item.file_names || []).join('、')}`),
+        actions(button('复制写法', async () => {
+          try {
+            await navigator.clipboard.writeText(`${item.name}\n${item.summary}\n复用：${item.reuse}`);
+            notify('写法已复制。');
+          } catch (error) {
+            notify('复制失败，请手动选择文本。', 'error');
+          }
+        }, 'secondary'))))), `${items.length} 个技法`);
+    }));
+}
+
 function rememberedProject() {
   try { return Number(localStorage.getItem(`mojian-project-${account.id}`)); } catch { return null; }
 }
@@ -1118,7 +1319,7 @@ function render() {
   topline.hidden = taskScreen;
   const pageTitles = {overview: '作品概览', characters: '角色档案', outline: '章节大纲', chapters: '正文创作', consistency: '一致性核对'};
   topline.querySelector('span:first-child').textContent = state.screen === 'project' ?
-    (pageTitles[state.tab] || '创作空间') : state.screen === 'trends' ? '文件选题' : state.screen === 'document-report' ? '历史选题' : state.screen === 'trash' ? '回收站' : '任务进度';
+    (pageTitles[state.tab] || '创作空间') : state.screen === 'trends' ? '文件选题' : state.screen === 'document-report' ? '历史选题' : state.screen === 'analysis' ? '小说拆解' : state.screen === 'analysis-report' ? '拆解报告' : state.screen === 'analysis-library' ? '写作技法库' : state.screen === 'trash' ? '回收站' : '任务进度';
   topline.querySelector('.topline-note').textContent = state.screen === 'project' ?
     (state.project?.title || '从设定到正文') : '墨间 · 小说工作台';
   view.hidden = state.screen === 'progress';
@@ -1142,6 +1343,18 @@ function render() {
   }
   if (state.screen === 'document-report') {
     view.replaceChildren(documentReportView());
+    return;
+  }
+  if (state.screen === 'analysis') {
+    view.replaceChildren(analysisView());
+    return;
+  }
+  if (state.screen === 'analysis-report') {
+    view.replaceChildren(analysisReportView(state.analysisReport?.report || {}));
+    return;
+  }
+  if (state.screen === 'analysis-library') {
+    view.replaceChildren(analysisLibraryView());
     return;
   }
   view.setAttribute('aria-busy', String(Boolean(state.projectLoading)));
@@ -2494,6 +2707,7 @@ async function sendMessage(content) {
 
 $('new-project').onclick = openWizard;
 $('open-trends').onclick = openTrends;
+$('open-analysis').onclick = openAnalysis;
 $('refresh').onclick = () => loadLibrary();
 $('open-trash').onclick = openTrash;
 $('close-wizard').onclick = () => { if (!session.busy) wizard.close(); };

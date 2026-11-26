@@ -3,19 +3,20 @@
 网页地址为 http://49.232.132.111/，Android 使用同一台服务器的 /api/v1。后端只监听本机 8000，经 Nginx 的 80 端口提供服务。推荐 Ubuntu 24.04、Python 3.12、MySQL 8。安装脚本面向 systemd 系统，不会自动连接或修改远程服务器。其他 Ubuntu 版本的软件源可能没有 python3.12；脚本会在需要时通过 uv 下载项目独立的 Python 3.12，不替换系统 Python。当前 CrewAI 依赖要求 Python 3.10–3.13，不支持直接使用 Python 3.14。
 
 
-## 更新文件选题（2026-11-26）
+## 更新文件选题与小说拆解（2026-11-26）
 
-`ash
+```bash
 sudo systemctl stop aitxt
 sudo unzip -o /home/ubuntu/<更新包>.zip -d /opt
 cd /opt/aitxt
 sudo .venv/bin/pip install python-multipart==0.0.27
-sudo .venv/bin/python -m db.migrate_document_topics
+sudo mysql --default-character-set=utf8mb4 AI_TEXT < deployment/document-topics.sql
+sudo mysql --default-character-set=utf8mb4 AI_TEXT < deployment/novel-analysis.sql
 sudo nginx -t && sudo systemctl reload nginx
 sudo systemctl start aitxt
-`
+```
 
-本次新增文件上传和文本粘贴（粘贴上限 25,000 字符），分析结果写入 pp_document_topic；必须安装 python-multipart，并执行上面的建表命令；仓库的 deployment/nginx.conf 已将 client_max_body_size 调整为 55MB，如果使用自定义 Nginx 配置，请同样调大，否则上传会被 413 拦截。前端有更新，部署后页面 Ctrl+F5。无需数据库迁移。
+本次新增文件上传和文本粘贴（粘贴上限 25,000 字符），分析结果写入 app_document_topic（文件选题）和 app_novel_analysis（小说拆解）；必须安装 python-multipart，并由数据库管理员执行上面的建表 SQL（应用账号 aitxt 通常没有 CREATE 权限）；仓库的 deployment/nginx.conf 已将 client_max_body_size 调整为 55MB，如果使用自定义 Nginx 配置，请同样调大，否则上传会被 413 拦截。前端有更新，部署后页面 Ctrl+F5。需由数据库管理员执行上面的两个建表 SQL。
 
 ## 安装
 
