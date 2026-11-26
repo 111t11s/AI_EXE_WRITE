@@ -25,8 +25,9 @@ router = APIRouter(prefix="/generation-jobs", tags=["后台生成任务"])
 TERMINAL = {"completed", "failed"}
 MAX_TEXT = 250_000
 # 与前端任务分类保持一致：把细分任务类型归到页面上的分类。
-CATEGORY_KINDS = {"worldbuilding", "outline", "characters", "draft", "plan", "review", "consistency", "trends"}
-KIND_CATEGORY = {"character_progress": "characters", "batch_draft": "draft", "consistency_repair": "consistency"}
+CATEGORY_KINDS = {"worldbuilding", "outline", "characters", "draft", "plan", "review", "consistency", "topics", "trends"}
+KIND_CATEGORY = {"character_progress": "characters", "batch_draft": "draft", "consistency_repair": "consistency",
+                 "trends": "topics"}
 STATUSES = {"all", "running", "completed", "failed"}
 
 

@@ -193,7 +193,7 @@ def save_draft(engine, chapter_id: int, content: str, original: dict, character_
         require_empty_plan(current)
         if any(current[key] != original[key] for key in ("project_id", "volume_id", "chapter_number", "title", "summary")):
             raise HTTPException(409, "生成期间章节计划发生变化，请重新生成")
-        replace_progress(connection, current, content, character_updates)
+        # 正文落库与人物档案解耦；人物档案由后续分析/一致性核对处理。
         connection.execute(update(chapter).where(chapter.c.id == chapter_id).values(**storage_values(
             {"content": content, "word_count": count, "status": "draft"}, json_columns)))
         return DraftReceipt(chapter_id=chapter_id, word_count=count)
@@ -210,7 +210,8 @@ def save_rewritten_draft(engine, chapter_id: int, content: str, original: dict, 
                 "project_id", "volume_id", "chapter_number", "title", "summary", "content", "status")):
             raise HTTPException(409, "重写期间章节发生变化，未覆盖原文，请刷新后重新重写")
         values = storage_values({"content": content, "word_count": count, "status": "draft"}, json_columns)
-        replace_progress(connection, current, content, character_updates)
+        # Rewritten text may invalidate old progress evidence; the body hash
+        # makes stale facts unreadable until the next analysis refreshes them.
         connection.execute(update(chapter).where(chapter.c.id == chapter_id).values(**values))
         return DraftReceipt(chapter_id=chapter_id, word_count=count)
 
@@ -232,7 +233,6 @@ def save_continued_draft(engine, chapter_id: int, continuation: str, original: d
         if any(current[key] != original[key] for key in (
                 "project_id", "volume_id", "chapter_number", "title", "summary", "content", "status")):
             raise HTTPException(409, "续写期间章节发生变化，未追加正文，请刷新后重新续写")
-        replace_progress(connection, current, content, ())
         values = storage_values({"content": content, "word_count": count, "status": "draft"}, json_columns)
         connection.execute(update(chapter).where(chapter.c.id == chapter_id).values(**values))
         return DraftReceipt(chapter_id=chapter_id, word_count=count)

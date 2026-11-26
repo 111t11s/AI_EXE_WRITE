@@ -97,9 +97,13 @@ export async function watchGeneration(url, onEvent, {signal} = {}) {
 // The same incremental view is used by the worldbuilding and writing dialogs.
 export function createGenerationView(root) {
   const output = root.querySelector('.generation-output');
+  const thinking = root.querySelector('.generation-thinking');
+  const thinkingOutput = thinking?.querySelector('pre');
   const status = root.querySelector('[role="status"]');
   let text = '';
+  let thinkingText = '';
   let characters = 0;
+  let thinkingCharacters = 0;
   let frame = null;
   let revealOutput = false;
 
@@ -117,6 +121,10 @@ export function createGenerationView(root) {
   function flush() {
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
+    if (thinking && thinkingOutput) {
+      thinking.hidden = !thinkingText;
+      render(thinkingOutput, formatThinkingText(thinkingText));
+    }
     const formatted = structured() ? '' : formatGenerationText(text);
     render(output, formatted || (structured() ? '正在生成结构化内容，完成后展示结果…' : '等待模型返回内容…'));
     if (revealOutput) {
@@ -129,21 +137,27 @@ export function createGenerationView(root) {
     hide() {
       if (frame !== null) cancelAnimationFrame(frame);
       frame = null;
-      text = '';
-      characters = 0;
+      text = thinkingText = '';
+      characters = thinkingCharacters = 0;
       revealOutput = false;
       output.textContent = status.textContent = '';
+      if (thinkingOutput) thinkingOutput.textContent = '';
+      if (thinking) thinking.hidden = true;
       root.hidden = true;
       root.setAttribute('aria-busy', 'false');
     },
     begin() {
       text = '';
+      thinkingText = '';
       characters = 0;
+      thinkingCharacters = 0;
       root.hidden = false;
       root.dataset.state = 'running';
       root.setAttribute('aria-busy', 'true');
       status.textContent = '正在连接模型…';
+      if (thinking) thinking.open = true;
       output.scrollTop = 0;
+      if (thinkingOutput) thinkingOutput.scrollTop = 0;
       flush();
       revealOutput = true;
       frame = requestAnimationFrame(flush);
@@ -151,32 +165,41 @@ export function createGenerationView(root) {
     event(event, data) {
       if (event === 'snapshot') {
         text = data.text || '';
+        thinkingText = data.thinking || '';
         characters = Array.from(text).length;
+        thinkingCharacters = Array.from(thinkingText).length;
         status.textContent = data.message || '正在生成…';
         if (data.truncated) status.textContent += ' · 仅显示最近生成的内容';
         flush();
-      } else if (event === 'delta') {
+      } else if (event === 'thinking' || event === 'delta') {
         if (typeof data.text !== 'string' || !data.text) return;
-        if (!text) revealOutput = true;
-        text += data.text;
-        characters += Array.from(data.text).length;
-        status.textContent = `正在生成 · 已接收 ${characters} 字符`;
+        if (event === 'thinking') {
+          if (!thinkingText) revealOutput = true;
+          thinkingText += data.text;
+          thinkingCharacters += Array.from(data.text).length;
+          status.textContent = `思考中 · 已接收 ${thinkingCharacters} 字符`;
+        } else {
+          if (!text) revealOutput = true;
+          text += data.text;
+          characters += Array.from(data.text).length;
+          status.textContent = `正在生成 · 已接收 ${characters} 字符`;
+        }
         if (frame === null) frame = requestAnimationFrame(flush);
       } else if (event === 'status') status.textContent = data.message;
     },
     finish(message = '生成完成') {
       flush();
+      if (structured()) output.textContent = '结构化内容已生成，结果见下方。';
       status.textContent = message;
       root.dataset.state = 'done';
       root.setAttribute('aria-busy', 'false');
     },
     isEmpty() {
-      return !text || structured();
+      return !thinkingText && (!text || structured());
     },
     fail(message) {
-      if (frame !== null) cancelAnimationFrame(frame);
-      frame = null;
-      if (!text) output.textContent = '任务未完成，请查看上方提示。';
+      flush();
+      if (!text || structured()) output.textContent = '任务未完成，请查看上方提示。';
       status.textContent = message;
       root.dataset.state = 'error';
       root.setAttribute('aria-busy', 'false');
@@ -217,6 +240,20 @@ const valueNames = {ready: '可用', revise: '建议修改', protagonist: '主�
   growth_rules: '成长规则', breakthrough_condition: '突破条件', source: '力量来源', growth_path: '成长路径',
   story_secret: '剧情秘密', territory: '领地', status: '人物状态',
   planned: '已规划', draft: '草稿', running: '进行中', completed: '已完成', failed: '未完成'};
+
+function formatThinkingText(value) {
+  if (!value) return '';
+  let text = String(value);
+  // 把模型思考里出现的结构化字段名和枚举值换成中文，保留推理过程但不直接展示参数名。
+  text = text.replace(/"([A-Za-z_][A-Za-z0-9_]*)"\s*:/g,
+    (match, key) => `${fieldNames[key] || '内容'}：`);
+  text = text.replace(/"([a-z][a-z0-9_]*)"/g, (match, key) => valueNames[key] || match);
+  text = text.replace(/\b(chapter|plot_beat|volume_character|character_relationship|power_system|power_rank|cheat_system|chapter_id|outline_id|record_id|basis|verdict|reference_topics)\b/gi,
+    term => valueNames[term.toLowerCase()] || fieldNames[term.toLowerCase()] || term);
+  text = text.replace(/[{}[\]]/g, ' ');
+  if (text.length > 60000) text = `……（思考过长，仅显示最近部分）\n${text.slice(-60000)}`;
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+}
 
 export function formatGenerationText(text) {
   // 结构化内容只显示中文进度提示，不把字段名和枚举值直接铺到页面上。

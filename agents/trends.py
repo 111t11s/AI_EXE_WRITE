@@ -1,83 +1,210 @@
-"""抓取并筛选 AI、数码、娱乐类公开热搜，供「热点选题」分析使用。
-
-只访问服务端配置的地址（默认百度热搜），不接受用户提交的 URL；抓取失败时
-保留上一次缓存，并把错误信息交给页面。解析函数独立于网络，便于离线测试。
-"""
+"""Fetch popular fiction titles from public novel-platform rankings."""
 
 import html as html_module
+import json
 import re
 import threading
+import unicodedata
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from html.parser import HTMLParser
+from pathlib import Path
+from urllib.parse import quote_plus, urljoin, urlparse
 
 import httpx
+from charset_normalizer import from_bytes
 
 from core.config import get_settings
 from core.app_logging import get_logger
 
 
 logger = get_logger("trends")
-BAIDU_URL = "https://top.baidu.com/board?tab=realtime"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 )
 MAX_ITEMS = 40
-TITLE_KEYS = ("title", "name", "word", "hotword", "query", "keyword")
+TITLE_KEYS = ("title", "book_title", "bookTitle", "book_name", "bookName",
+              "novel_name", "novelName", "name")
 HEAT_KEYS = ("hot", "heat", "score", "num", "hotValue", "hot_value", "index", "view_count")
-
-_cache = {"items": [], "updated_at": None, "errors": [], "sources": []}
-_lock = threading.Lock()
-
-SEARCH_HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
-                   "(KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36"),
-    "Accept-Language": "zh-CN,zh;q=0.9",
-}
-SEARCH_ENGINES = (
-    ("搜狗搜索", "https://www.sogou.com/web", "query"),
-    ("360搜索", "https://www.so.com/s", "q"),
+DEFAULT_NOVEL_SITES = (
+    ("番茄小说", "https://fanqienovel.com/rank"),
+    ("起点中文网", "https://m.qidian.com/rank/hotsales/"),
 )
-SEARCH_SKIP = {"大家还在搜", "相关搜索", "其他人还在搜", "热搜榜", "热点资讯"}
-SKIP_TITLE_WORDS = ("百科", "辞典", "词典", "读音", "笔顺", "小说简介", "人物介绍", "剧情介绍")
-HOT_WORDS = ("热", "爆", "争议", "话题", "官宣", "开播", "收视", "讨论", "评价", "关注", "刷屏", "破万")
-CURATED_CATEGORIES = {
-    "AI": ("AI", "人工智能", "大模型", "生成式", "智能体", "机器学习", "深度学习", "ChatGPT", "GPT", "DeepSeek", "通义", "豆包", "文心", "Kimi", "Claude", "Gemini", "机器人", "具身智能"),
-    "数码": ("数码", "手机", "平板", "电脑", "笔记本", "芯片", "显卡", "处理器", "耳机", "相机", "智能手表", "智能家居", "苹果", "华为", "小米", "荣耀", "OPPO", "vivo", "三星", "索尼", "任天堂", "Switch", "游戏机"),
-    "娱乐": ("娱乐", "影视", "电影", "电视剧", "综艺", "明星", "演员", "歌手", "演唱会", "开播", "收视", "票房", "剧集", "艺人", "音乐", "动漫", "动画", "电竞", "游戏", "网剧", "综艺节目"),
-}
+# 移动版榜单链接文字常带“最新章节在线阅读”等后缀，只保留书名。
+TITLE_SUFFIXES = ("最新章节在线阅读", "最新章节列表", "全文免费阅读", "全文阅读", "免费阅读", "无弹窗")
+BOOK_LINK_HINTS = ("/book/", "/novel/", "/page/", "/info/", "bookid=", "novelid=", "bid=")
+
+_cache: dict[tuple[str, ...], dict] = {}
+_lock = threading.Lock()
+# 番茄小说榜单把书名、作者等文本映射到私有区字符，再用自定义字体显示。
+# 这里保存字体映射表（键为十进制码位），用于把排行榜标题还原成中文。
+_FONT_MAP_PATH = Path(__file__).with_name("fanqie_font.json")
+_FONT_MAP = json.loads(_FONT_MAP_PATH.read_text(encoding="utf-8")) if _FONT_MAP_PATH.is_file() else {}
+
 POLITICAL_WORDS = (
     "政治", "时政", "两会", "人大", "政协", "政府", "总书记", "国家主席", "国家领导", "总理", "外交", "国防",
     "军事", "军方", "解放军", "军演", "选举", "议会", "白宫", "总统", "国会", "台湾", "台海", "两岸", "中美",
     "涉政", "政治局", "外交部", "国防部", "制裁", "内阁", "议员", "政党", "政策", "特朗普", "拜登", "习近平",
     "普京", "泽连斯基", "赖清德", "金正恩", "首相", "外长", "议长",
 )
-_search_cache: dict[tuple[str, str], tuple[datetime, list[dict]]] = {}
+_search_cache: dict[tuple[str, ...], tuple[datetime, list[dict]]] = {}
+
+
+def _decode_font_text(value: str) -> str:
+    """还原番茄小说等站点用自定义字体混淆的私有区字符。"""
+    if not _FONT_MAP:
+        return value
+    return "".join(_FONT_MAP.get(str(ord(char)), char) for char in value)
 
 
 def _clean(value: str) -> str:
-    return " ".join(html_module.unescape(value).split())
+    value = unicodedata.normalize("NFKC", html_module.unescape(str(value)))
+    value = _decode_font_text(value)
+    # Repair the common UTF-8-as-Latin-1 mojibake produced by misconfigured
+    # upstream pages before the title reaches the browser.
+    if re.search(r"[ÃÂâ€™œžš]|�", value):
+        try:
+            repaired = value.encode("latin1").decode("utf-8")
+            if repaired.count("�") < value.count("�"):
+                value = repaired
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    # 移除仍无法映射的私有区/替换字符，避免页面出现方框乱码。
+    value = "".join(char for char in value if unicodedata.category(char) != "Co")
+    return " ".join(value.replace("\ufffd", "").split())
 
 
-def parse_baidu(page: str) -> list[dict]:
-    """从百度热搜页面提取标题与热搜指数；页面结构变化时返回能解析到的部分。"""
-    titles = [_clean(match) for match in re.findall(
-        r'c-single-text-ellipsis"\s*>\s*([^<]+?)\s*</div>', page)]
-    heats = [int(match.replace(",", "")) for match in re.findall(
-        r'class="hot-index[^"]*"[^>]*>\s*([\d,]+)', page)]
-    # 首个条目可能是置顶推荐，没有热搜指数；按数量差对齐。
-    if titles and len(titles) == len(heats) + 1:
-        titles = titles[1:]
-    items = []
-    for index, title in enumerate(titles):
-        if not title:
+class _NovelAnchorParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.anchors = []
+        self.current = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == "a":
+            values = dict(attrs)
+            self.current = {"href": values.get("href", ""), "title": values.get("title", ""), "text": []}
+
+    def handle_data(self, data):
+        if self.current is not None:
+            self.current["text"].append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self.current is not None:
+            self.anchors.append(self.current)
+            self.current = None
+
+
+class _SearchResultParser(HTMLParser):
+    """提取搜索引擎结果里的 h3 标题与真实落地地址（360 的 data-mdurl）。"""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.in_heading = False
+        self.current = None
+        self.results = []
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if tag.lower() == "h3":
+            self.in_heading = True
+            self.current = {"text": [], "href": "", "mdurl": ""}
+        elif self.in_heading and tag.lower() == "a" and self.current is not None:
+            self.current["href"] = values.get("href", "")
+            self.current["mdurl"] = values.get("data-mdurl", "")
+
+    def handle_data(self, data):
+        if self.in_heading and self.current is not None:
+            self.current["text"].append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "h3" and self.current is not None:
+            self.results.append(self.current)
+            self.current = None
+            self.in_heading = False
+
+
+SEARCH_RESULT_URL = "https://www.so.com/s?q={query}"
+SEARCH_TITLE_MARKERS = ("完整版在线免费阅读", "全文阅读", "免费阅读", "最新章节", "在线阅读", "小说大全")
+SEARCH_TITLE_SUFFIX = re.compile(r"[_-](番茄小说|起点中文网|晋江文学城|纵横中文网|17K小说网).*$")
+
+
+def _search_title(value: str) -> str:
+    title = _clean(value)
+    for marker in SEARCH_TITLE_MARKERS:
+        title = title.split(marker)[0]
+    title = SEARCH_TITLE_SUFFIX.sub("", title).strip(" -_|·")
+    title = re.sub(r"\s*([:：,，.!！?？])\s*", r"\1", title)
+    title = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", title)
+    if "排行榜" in title:
+        return ""
+    return title
+
+
+def search_novel_sites_via_web(keyword: str, sites: list[tuple[str, str]], timeout: int) -> list[dict]:
+    """榜单没有匹配作品时，用搜索引擎按站点检索真实书名。"""
+    keyword = keyword.strip()
+    if len(keyword) < 2:
+        return []
+    found, seen = [], set()
+    for name, site_url in sites:
+        host = urlparse(site_url).hostname or ""
+        if not host:
             continue
-        items.append({
-            "title": title,
-            "source": "百度热搜",
-            "heat": heats[index] if index < len(heats) else None,
-            "url": "https://www.baidu.com/s?wd=" + quote(title),
-        })
+        try:
+            response = httpx.get(
+                SEARCH_RESULT_URL.format(query=quote_plus(f"site:{host} {keyword}")),
+                headers={"User-Agent": USER_AGENT, "Accept-Language": "zh-CN,zh;q=0.9"},
+                timeout=timeout, follow_redirects=True)
+            response.raise_for_status()
+        except Exception as exc:
+            logger.warning("站内书名检索失败：来源=%s，异常类型=%s", name, type(exc).__name__)
+            continue
+        parser = _SearchResultParser()
+        parser.feed(response.text)
+        for item in parser.results:
+            target = item["mdurl"] or item["href"]
+            parsed = urlparse(target)
+            if host not in parsed.netloc or not any(hint in parsed.path for hint in BOOK_LINK_HINTS):
+                continue
+            title = _search_title(" ".join(item["text"]))
+            if not title or keyword not in title or title in seen:
+                continue
+            seen.add(title)
+            found.append({"title": title, "source": name, "heat": None, "url": target})
+    return found
+
+
+def parse_novel_site_html(page: str, source: str, base_url: str) -> list[dict]:
+    """Extract book-title links from common HTML ranking pages."""
+    parser = _NovelAnchorParser()
+    parser.feed(page)
+    items, seen = [], set()
+    for anchor in parser.anchors:
+        href = urljoin(base_url, anchor["href"].strip())
+        parsed = urlparse(href)
+        if parsed.scheme not in {"http", "https"}:
+            continue
+        path_and_query = (parsed.path + "?" + parsed.query).casefold()
+        if not any(hint in path_and_query for hint in BOOK_LINK_HINTS):
+            continue
+        title = _clean(anchor["title"] or " ".join(anchor["text"]))
+        for suffix in TITLE_SUFFIXES:
+            if title.endswith(suffix):
+                title = title[:-len(suffix)].strip()
+                break
+        title = title.strip(" -_|·")
+        if not title or len(title) < 2 or len(title) > 80:
+            continue
+        if title.casefold() in {"首页", "排行榜", "分类", "登录", "注册", "目录", "下一页", "上一页"}:
+            continue
+        key = title.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append({"title": title, "source": source, "heat": None, "url": href})
+        if len(items) >= MAX_ITEMS:
+            break
     return items
 
 
@@ -106,19 +233,69 @@ def parse_json_source(payload, source: str) -> list[dict]:
     return found
 
 
-def fetch_baidu(timeout: int) -> list[dict]:
-    response = httpx.get(BAIDU_URL, headers={"User-Agent": USER_AGENT},
-                        timeout=timeout, follow_redirects=True)
+def fetch_novel_site(name: str, url: str, timeout: int) -> list[dict]:
+    response = httpx.get(url, headers={"User-Agent": USER_AGENT, "Accept-Language": "zh-CN,zh;q=0.9"},
+                         timeout=timeout, follow_redirects=True)
     response.raise_for_status()
-    return parse_baidu(response.text)
+    if "json" in response.headers.get("content-type", "").casefold():
+        return parse_json_source(response.json(), name)
+    return parse_novel_site_html(_decode_html_response(response), name, str(response.url))
 
 
-def fetch_json_source(url: str, timeout: int) -> list[dict]:
-    host = httpx.URL(url).host or "自定义来源"
-    response = httpx.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout,
-                        follow_redirects=True)
-    response.raise_for_status()
-    return parse_json_source(response.json(), host)
+def _decode_html_response(response: httpx.Response) -> str:
+    """Decode ranking HTML using its declared charset, then detect Chinese legacy encodings."""
+    raw = response.content
+    content_type = response.headers.get("content-type", "")
+    declared = re.search(r"charset\s*=\s*[\"']?([\w.-]+)", content_type, re.I)
+    if not declared:
+        head = raw[:8192].decode("ascii", errors="ignore")
+        declared = re.search(r"<meta[^>]+charset\s*=\s*[\"']?([\w.-]+)", head, re.I)
+    encodings = [declared.group(1)] if declared else []
+    # UTF-8 and GB18030 cover the encodings used by the supported Chinese sites.
+    # Charset-normalizer is only a fallback because short Chinese pages can be
+    # confidently misclassified as a western single-byte encoding.
+    encodings.extend(("utf-8", "gb18030"))
+    detected = from_bytes(raw).best()
+    if detected and detected.encoding:
+        encodings.append(detected.encoding)
+    candidates = []
+    tried = set()
+    for encoding in encodings:
+        normalized = encoding.casefold()
+        if normalized in tried:
+            continue
+        tried.add(normalized)
+        try:
+            candidates.append(raw.decode(encoding))
+        except (LookupError, UnicodeDecodeError):
+            continue
+    if not candidates:
+        return raw.decode("utf-8", errors="replace")
+
+    def score(text: str) -> int:
+        cjk = len(re.findall(r"[\u3400-\u9fff]", text))
+        replacement = text.count("�")
+        controls = sum(unicodedata.category(char) == "Cc" for char in text)
+        mojibake = len(re.findall(r"[ÃÂâ][^\s]{0,3}", text))
+        return cjk * 3 - replacement * 30 - controls * 5 - mojibake * 10
+
+    return max(candidates, key=score)
+
+
+def novel_sites(settings) -> list[tuple[str, str]]:
+    """Use site ranking URLs from env when supplied; otherwise use platform defaults."""
+    configured = getattr(settings, "TREND_NOVEL_SOURCE_URLS", "")
+    if not configured.strip():
+        return list(DEFAULT_NOVEL_SITES)
+    sites = []
+    for entry in configured.split(","):
+        label, separator, url = entry.strip().partition("|")
+        if not separator:
+            url, label = label, (urlparse(label).hostname or "小说网站")
+        url = url.strip()
+        if url.startswith(("http://", "https://")):
+            sites.append((label.strip() or (urlparse(url).hostname or "小说网站"), url))
+    return sites
 
 
 def dedupe(items: list[dict]) -> list[dict]:
@@ -137,95 +314,40 @@ def contains_political_content(text: str) -> bool:
     return any(word.casefold() in value for word in POLITICAL_WORDS)
 
 
-def is_curated_title(title: str) -> bool:
-    """默认来源只展示 AI、数码、娱乐相关标题，并排除时政内容。"""
-    if contains_political_content(title):
-        return False
-    value = title.casefold()
-    return any(word.casefold() in value for words in CURATED_CATEGORIES.values() for word in words)
-
-
 def filter_political_items(items: list[dict]) -> list[dict]:
     return [item for item in items if not contains_political_content(item.get("title", ""))]
 
 
-def brief_anchor(brief: str) -> str:
-    """取选题要求里最像主题词的短句，作为搜索关键词。"""
-    for part in re.split(r"[，,。;；、\s]+", brief):
-        part = part.strip()
-        if 2 <= len(part) <= 12:
-            return part
-    return " ".join(brief.split())[:12]
-
-
-def brief_queries(brief: str, genre: str = "") -> list[str]:
-    anchor = brief_anchor(brief)
-    queries = []
-    if anchor:
-        queries.append(f"{anchor} 小说 热点")
-        queries.append(f"{anchor} 热议")
-    if genre and genre.strip() and genre.strip() != anchor:
-        queries.append(f"{genre.strip()} 小说 热点")
-    return queries[:3]
-
-
-def clean_search_title(text: str) -> str:
-    """去掉搜索结果标题里的站点后缀、中文之间的空格与常见噪声。"""
-    text = re.sub(r"(?<=[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])\s+"
-                  r"(?=[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])", "", text)
-    # 站点后缀可能叠了两层，例如“_娱乐频道_中华网”。
-    for _ in range(2):
-        text = re.sub(r"\s*[_|]\s*[^_|]{1,12}$", "", text).strip()
-    text = re.sub(r"\s+(?=[：:，,。.！!？?；;])", "", text)
-    text = re.sub(r"\s+-\s+[^-]{1,12}$", "", text).strip()
-    return text
-
-
-def parse_search_results(page: str, source: str) -> list[dict]:
-    rows = []
-    for block in re.findall(r"<h3[^>]*>(.*?)</h3>", page, re.S):
-        text = _clean(re.sub(r"<[^>]+>", " ", block))
-        for label in ("媒体原创", "热点资讯", "广告"):
-            text = text.replace(label, "").strip()
-        text = clean_search_title(text)
-        if not text or text in SEARCH_SKIP or len(text) < 6 or len(text) > 80:
-            continue
-        if any(word in text for word in SKIP_TITLE_WORDS):
-            continue
-        if contains_political_content(text):
-            continue
-        rows.append({"title": text, "source": source, "heat": None, "url": None})
-    return rows
-
-
-def search_related(brief: str, genre: str = "", limit: int = 20) -> list[dict]:
-    """按选题要求检索相关新闻/热点，优先返回带热度、争议等词的条目。"""
+def search_related(brief: str, genre: str = "", limit: int = 20,
+                   selected_sources: list[str] | None = None) -> list[dict]:
+    """在小说网站的最新榜单中筛选与选题要求相关的作品。"""
     if contains_political_content(brief) or contains_political_content(genre):
         return []
-    key = (brief.strip()[:200], genre.strip())
     settings = get_settings()
+    sites = _selected_sites(settings, selected_sources)
+    key = (brief.strip()[:200], genre.strip(), "|".join(name for name, _ in sites), str(limit))
     now = datetime.now(timezone.utc)
     with _lock:
         cached = _search_cache.get(key)
         if cached and now - cached[0] < timedelta(minutes=settings.TREND_CACHE_MINUTES):
             return filter_political_items(list(cached[1]))[:limit]
     items = []
-    for name, url, param in SEARCH_ENGINES:
-        for query in brief_queries(brief, genre):
-            try:
-                response = httpx.get(url, params={param: query}, headers=SEARCH_HEADERS,
-                                    timeout=settings.TREND_TIMEOUT, follow_redirects=True)
-                response.raise_for_status()
-            except Exception as exc:
-                logger.warning("相关热点搜索失败：来源=%s，异常类型=%s", name, type(exc).__name__)
-                continue
-            items.extend(parse_search_results(response.text, name))
-        if len(items) >= 6:
-            break
+    tokens = [part.casefold() for part in re.split(r"[，,。;；、\s]+", f"{brief} {genre}") if len(part.strip()) >= 2]
+    query_tokens = [part.casefold() for part in re.split(r"[，,。;；、\s]+", brief) if len(part.strip()) >= 2]
+    for name, url in sites:
+        try:
+            items.extend(fetch_novel_site(name, url, settings.TREND_TIMEOUT))
+        except Exception as exc:
+            logger.warning("小说榜单查询失败：来源=%s，异常类型=%s", name, type(exc).__name__)
     items = dedupe(filter_political_items(items))
-    # 含“热度、争议、开播”等词的条目更像热点，排到前面；其余保持搜索顺序。
-    items.sort(key=lambda row: not any(word in row["title"] for word in HOT_WORDS))
-    items = items[:limit]
+    # 只保留真正命中主题词的榜单作品；不能把整张榜单当作搜索结果返回。
+    required = query_tokens or tokens
+    matched = [row for row in items if any(token in row["title"].casefold() for token in required)]
+    if not matched and query_tokens and len(query_tokens) <= 4:
+        matched = search_novel_sites_via_web(" ".join(query_tokens[:2]), sites, settings.TREND_TIMEOUT)
+    matched.sort(key=lambda row: (-sum(token in row["title"].casefold() for token in tokens),
+                                  row["title"]))
+    items = matched[:limit]
     with _lock:
         _search_cache[key] = (now, items)
         if len(_search_cache) > 50:
@@ -234,19 +356,31 @@ def search_related(brief: str, genre: str = "", limit: int = 20) -> list[dict]:
     return items
 
 
-def collect_trends(refresh: bool = False) -> dict:
+def _selected_sites(settings, selected_sources: list[str] | None) -> list[tuple[str, str]]:
+    sites = novel_sites(settings)
+    if selected_sources is None:
+        return sites
+    requested = set(selected_sources)
+    return [(name, url) for name, url in sites if name in requested]
+
+
+def collect_trends(refresh: bool = False, selected_sources: list[str] | None = None) -> dict:
     """返回热点列表；未过期时直接使用缓存，抓取失败时保留旧数据。"""
     settings = get_settings()
+    sites = _selected_sites(settings, selected_sources)
+    cache_key = tuple(name for name, _ in sites)
+    available_sources = [name for name, _ in novel_sites(settings)]
     ttl = timedelta(minutes=settings.TREND_CACHE_MINUTES)
     with _lock:
         now = datetime.now(timezone.utc)
-        fresh = _cache["updated_at"] is not None and now - _cache["updated_at"] < ttl
-        if fresh and not refresh and _cache["items"]:
-            _cache["items"] = [row for row in _cache["items"] if is_curated_title(row.get("title", ""))]
-            return {**_cache, "cached": True}
+        cached_data = _cache.get(cache_key, {"items": [], "updated_at": None, "errors": [], "sources": []})
+        fresh = cached_data["updated_at"] is not None and now - cached_data["updated_at"] < ttl
+        if fresh and not refresh and cached_data["items"]:
+            return {**cached_data, "available_sources": available_sources,
+                    "selected_sources": list(cache_key), "cached": True}
 
         items, errors, sources = [], [], []
-        for loader in _loaders(settings):
+        for loader in _loaders(settings, sites):
             name, fetch = loader
             try:
                 rows = fetch()
@@ -254,25 +388,24 @@ def collect_trends(refresh: bool = False) -> dict:
                 logger.warning("热点抓取失败：来源=%s，异常类型=%s", name, type(exc).__name__)
                 errors.append(f"{name}：{type(exc).__name__}")
                 continue
-            rows = [row for row in rows if is_curated_title(row.get("title", ""))]
+            rows = [row for row in rows if row.get("title", "").strip()]
             if rows:
                 sources.append(name)
                 items.extend(rows)
         items = dedupe(filter_political_items(items))[:MAX_ITEMS]
         if items:
-            _cache.update(items=items, updated_at=now, errors=errors, sources=sources)
-        elif _cache["items"]:
+            cached_data = {"items": items, "updated_at": now, "errors": errors, "sources": sources}
+        elif cached_data["items"]:
             # 全部失败时继续提供上一次结果，但把本次错误带回页面。
-            _cache.update(items=[row for row in _cache["items"] if is_curated_title(row.get("title", ""))],
-                          errors=errors)
+            cached_data = {**cached_data, "items": list(cached_data["items"]), "errors": errors}
         else:
-            _cache.update(items=[], errors=errors, sources=sources)
-        return {**_cache, "cached": False}
+            cached_data = {"items": [], "updated_at": None, "errors": errors, "sources": sources}
+        _cache[cache_key] = cached_data
+        return {**cached_data, "available_sources": available_sources,
+                "selected_sources": list(cache_key), "cached": False}
 
 
-def _loaders(settings):
+def _loaders(settings, sites=None):
     timeout = settings.TREND_TIMEOUT
-    yield "百度热搜", lambda: fetch_baidu(timeout)
-    for url in (part.strip() for part in settings.TREND_SOURCE_URLS.split(",")):
-        if url.startswith(("http://", "https://")):
-            yield url, lambda url=url: fetch_json_source(url, timeout)
+    for name, url in (sites if sites is not None else novel_sites(settings)):
+        yield name, lambda name=name, url=url: fetch_novel_site(name, url, timeout)

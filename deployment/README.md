@@ -2,6 +2,21 @@
 
 网页地址为 http://49.232.132.111/，Android 使用同一台服务器的 /api/v1。后端只监听本机 8000，经 Nginx 的 80 端口提供服务。推荐 Ubuntu 24.04、Python 3.12、MySQL 8。安装脚本面向 systemd 系统，不会自动连接或修改远程服务器。其他 Ubuntu 版本的软件源可能没有 python3.12；脚本会在需要时通过 uv 下载项目独立的 Python 3.12，不替换系统 Python。当前 CrewAI 依赖要求 Python 3.10–3.13，不支持直接使用 Python 3.14。
 
+
+## 更新文件选题（2026-11-26）
+
+`ash
+sudo systemctl stop aitxt
+sudo unzip -o /home/ubuntu/<更新包>.zip -d /opt
+cd /opt/aitxt
+sudo .venv/bin/pip install python-multipart==0.0.27
+sudo .venv/bin/python -m db.migrate_document_topics
+sudo nginx -t && sudo systemctl reload nginx
+sudo systemctl start aitxt
+`
+
+本次新增文件上传和文本粘贴（粘贴上限 25,000 字符），分析结果写入 pp_document_topic；必须安装 python-multipart，并执行上面的建表命令；仓库的 deployment/nginx.conf 已将 client_max_body_size 调整为 55MB，如果使用自定义 Nginx 配置，请同样调大，否则上传会被 413 拦截。前端有更新，部署后页面 Ctrl+F5。无需数据库迁移。
+
 ## 安装
 
 上传 aitxt-server-linux-0.1.0.zip 到服务器。以下命令在服务器执行：
@@ -15,7 +30,7 @@ sudo bash deployment/install.sh
 sudo nano /opt/aitxt/.env
 ~~~
 
-install.sh 创建独立运行用户和虚拟环境、安装 Linux 依赖，并注册 systemd 服务，但不会立即启动。修改 .env 的 DB_HOST、DB_PORT、DB_USER、DB_PASSWORD、DB_NAME，以及模型密钥 GPT_API_KEY、GEMINI_API_KEY、DEEPSEEK_API_KEY 和服务地址 GPT_BASE_URL、GEMINI_BASE_URL、DEEPSEEK_BASE_URL。模型名称和默认主模型在 `core/model_config.py` 中维护；同时配置密钥和服务地址的模型会自动出现在模型选择器中。旧部署中的 GPT `API_KEY` 仍可作为兼容密钥。侧栏的「热点选题」默认抓取百度热搜，服务器无法访问时可设置 TREND_SOURCE_URLS 指向可用的 JSON 热搜源，或在页面里手动粘贴热点标题；缓存与超时用 TREND_CACHE_MINUTES、TREND_TIMEOUT 调整。不要把本机 .venv 或原始 Windows requirements.txt 上传用于安装。
+install.sh 创建独立运行用户和虚拟环境、安装 Linux 依赖，并注册 systemd 服务，但不会立即启动。修改 .env 的 DB_HOST、DB_PORT、DB_USER、DB_PASSWORD、DB_NAME，以及模型密钥 GPT_API_KEY、GEMINI_API_KEY、DEEPSEEK_API_KEY 和服务地址 GPT_BASE_URL、GEMINI_BASE_URL、DEEPSEEK_BASE_URL。模型名称和默认主模型在 `core/model_config.py` 中维护；同时配置密钥和服务地址的模型会自动出现在模型选择器中。旧部署中的 GPT `API_KEY` 仍可作为兼容密钥。侧栏的「文件选题」支持上传 TXT、Markdown、DOCX 文本，由后台读取内容并推荐原创题材；上传依赖 python-multipart，Nginx 需允许较大的请求体。不要把本机 .venv 或原始 Windows requirements.txt 上传用于安装。
 
 通过 Git 部署时，将仓库克隆到 /opt/aitxt 后执行同一个 install.sh，无需解压。脚本优先复用已有的兼容虚拟环境，再使用系统 python3.12，否则将 uv 和 Python 安装到 /opt/aitxt/.build-tools/。自动下载需要访问 Astral/GitHub；下载失败时可以先自行安装兼容 Python，再运行 `sudo env PYTHON_BIN=/实际路径/python3.12 bash deployment/install.sh`。不要把运行时安装在 /root 下，服务的 ProtectHome 设置会阻止访问该目录。已有不兼容虚拟环境会使安装停止，需要先备份并移走 .venv 后重新安装。
 

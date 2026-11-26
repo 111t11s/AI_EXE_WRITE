@@ -329,7 +329,7 @@ def test_brief_mode_accepts_ideas_without_related_topics():
 
 
 def test_search_endpoint_returns_related_items(monkeypatch):
-    monkeypatch.setattr(trends, "search_related", lambda q, genre="": [
+    monkeypatch.setattr(trends, "search_related", lambda q, genre="", **_: [
         {"title": "《嫁金钗》开播热度破万", "source": "搜狗搜索", "heat": None, "url": None}])
     payload = trends_api.search_trends(object(), q="嫁金钗", genre="古装")
     assert payload["query"] == "嫁金钗"
@@ -353,3 +353,10 @@ def test_prefill_sets_slots_and_rejects_unknown_keys():
     with pytest.raises(HTTPException) as error:
         assistant.prefill_session(session_id, assistant.PrefillRequest(values=values), SimpleNamespace(id=2))
     assert error.value.status_code == 404
+
+def test_fanqie_font_obfuscated_titles_are_decoded():
+    from agents.trends import _clean
+
+    assert _clean("伪\ue4c2\ue47c\ue4c4穿古\ue50c,\ue4c7朝\ue410武皆素材") == "伪人作者穿古代,满朝文武皆素材"
+    assert _clean("测\ue000试") == "测试"
+

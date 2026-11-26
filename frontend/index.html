@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#191923">
   <title>墨间 · 小说工作台</title>
-  <link rel="stylesheet" href="/workbench.css?v=character-trees-20261124">
+  <link rel="stylesheet" href="/workbench.css?v=file-topics-20261126">
   <script src="/runtime-config.js?v=outline-skills-20261114"></script>
   <script type="importmap">
     {"imports": {
-      "/workbench.js": "/workbench.js?v=character-trees-20261124",
+      "/workbench.js": "/workbench.js?v=file-topics-20261126",
       "/api-client.js": "/api-client.js?v=character-progress-20261116",
-      "/generation-stream.js": "/generation-stream.js?v=plan-default-20261123"
+      "/generation-stream.js": "/generation-stream.js?v=thinking-panel-20261125"
     }}
   </script>
   <script defer src="/bootstrap.js?v=outline-skills-20261114"></script>
@@ -29,7 +29,7 @@
       <header class="brand"><span class="brand-mark" aria-hidden="true">墨</span><div class="brand-title"><strong>墨间</strong><small>小说工作台</small></div><label class="rail-model-control" id="current-model-control"><span>当前模型</span><select id="current-model" aria-label="当前模型" disabled></select></label></header>
       <div class="account-bar"><span id="account-name"></span><span class="account-actions"><button type="button" class="account-logout" id="account-password-change">修改密码</button><button type="button" class="account-logout" id="account-logout">退出账号</button></span></div>
       <button class="button primary new-project" type="button" id="new-project"><span aria-hidden="true">＋</span> 新建小说</button>
-      <button class="button secondary" type="button" id="open-trends">热点选题</button>
+      <button class="button secondary" type="button" id="open-trends">文件选题</button>
       <a class="button secondary" href="/public.html">公共书架 ↗</a>
       <div class="task-navigation"><button class="button secondary" type="button" id="generation-tasks" aria-expanded="false" aria-controls="task-submenus">任务中心 <span id="generation-task-count">0</span></button>
         <nav id="task-submenus" class="task-submenus" aria-label="任务分类" hidden></nav>
@@ -50,6 +50,7 @@
         <p class="muted">离开此页面后任务仍会继续，可随时回来查看。</p>
         <section class="generation-stream" id="task-progress-stream" aria-label="实时生成内容">
           <div class="generation-head"><strong>实时生成</strong><span class="muted" role="status"></span></div>
+          <details class="generation-thinking" hidden open><summary>模型思考</summary><pre tabindex="0" aria-label="模型思考过程"></pre></details>
           <pre class="generation-output" tabindex="0" aria-label="模型正在生成的内容"></pre>
         </section>
         <div class="actions progress-actions"><button class="button secondary" type="button" id="reconnect-progress" hidden>重新连接进度</button></div>

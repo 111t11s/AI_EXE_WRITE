@@ -59,10 +59,10 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
 
-    # 热点选题：抓取公开热搜时的缓存分钟数、超时秒数与额外的 JSON 数据源（逗号分隔）
+    # 热点选题：抓取小说网站榜单；可用“网站名|URL”逗号分隔覆盖默认来源
     TREND_CACHE_MINUTES: int = Field(default=30, ge=1, le=1440)
     TREND_TIMEOUT: int = Field(default=8, ge=1, le=60)
-    TREND_SOURCE_URLS: str = ""
+    TREND_NOVEL_SOURCE_URLS: str = ""
 
     # 日志配置
     LOG_LEVEL: str = "INFO"

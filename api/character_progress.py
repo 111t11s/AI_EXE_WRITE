@@ -18,19 +18,28 @@ def body_hash(content):
 def replace_progress(connection, chapter, content, updates, strict=True):
     """Caller locks the chapter and commits its body and facts together.
 
-    strict=True 用于正文保存：任何一条人物档案不合法都不保存正文。
-    strict=False 用于单独的人物进展分析：跳过无法核实的角色，保留其余角色。
+    strict=True 用于要求原子校验的调用。
+    strict=False 用于后续人物进展/一致性分析：跳过无法核实的角色并返回提示。
     """
     people = tables["novel_character"]
     ids = [item.character_id for item in updates]
     if len(ids) != len(set(ids)):
-        raise HTTPException(502, "正文人物档案包含重复角色，本章未保存")
+        if strict:
+            raise HTTPException(502, "正文人物档案包含重复角色，本章未保存")
+        # Progress analysis is advisory. Keep the first update for a repeated
+        # character and let the consistency pass review the model output.
+        seen = set()
+        updates = [item for item in updates if not (item.character_id in seen or seen.add(item.character_id))]
+        ids = [item.character_id for item in updates]
     found = {row["id"]: row for row in connection.execute(select(people.c.id, people.c.name).where(
         people.c.project_id == chapter["project_id"], people.c.id.in_(ids)
     ).order_by(people.c.id).with_for_update()).mappings()}
-    if set(found) != set(ids):
+    missing_ids = set(ids) - set(found)
+    if missing_ids and strict:
         raise HTTPException(502, "正文人物档案引用了当前小说之外的角色，本章未保存")
-    valid, problems = [], []
+    problems = [f"跳过不存在的角色 ID：{record_id}" for record_id in sorted(missing_ids)]
+    updates = [item for item in updates if item.character_id in found]
+    valid = []
     for item in updates:
         name = found[item.character_id]["name"]
         problem = None
@@ -46,9 +55,10 @@ def replace_progress(connection, chapter, content, updates, strict=True):
         problems.append(f"角色「{name}」{problem}")
         if strict:
             raise HTTPException(502, f"人物进展未保存：角色「{name}」{problem}，请重试分析")
-    if problems and not valid:
+    if problems and not valid and strict:
         raise HTTPException(502, f"人物进展未保存：{problems[0]}，请重试分析")
-    connection.execute(delete(progress).where(progress.c.chapter_id == chapter["id"]))
+    if valid or not problems:
+        connection.execute(delete(progress).where(progress.c.chapter_id == chapter["id"]))
     if valid:
         connection.execute(insert(progress), [dict(
             project_id=chapter["project_id"], chapter_id=chapter["id"], content_hash=body_hash(content),

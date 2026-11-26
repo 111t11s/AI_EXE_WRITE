@@ -52,6 +52,7 @@ body{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset
 .reuse-characters legend{font-size:.88rem;font-weight:650;color:var(--green)}
 .reuse-character{display:flex;align-items:flex-start;gap:10px;padding:12px 0;cursor:pointer;border-bottom:1px solid var(--line)}
 .reuse-character:last-child{border-bottom:0}.reuse-character input{flex:none;width:18px;height:18px;margin-top:3px}.reuse-character>span{min-width:0;overflow-wrap:anywhere}.reuse-character .muted{margin-top:4px;font-size:.8rem}
+.trend-search-form{display:flex;align-items:center;gap:8px}.trend-search-form input{flex:1}.trend-source-picker{position:relative}.trend-source-picker>summary{list-style:none}.trend-source-picker>summary::-webkit-details-marker{display:none}.trend-source-options{position:absolute;z-index:4;top:calc(100% + 6px);left:0;min-width:220px;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface);box-shadow:0 10px 26px #2530282b}.trend-source-option{display:flex;align-items:center;gap:8px;padding:8px 2px}.trend-source-option input{width:17px;height:17px}.trend-results{max-height:none;overflow:visible}.trend-pagination{margin-top:4px}
 .export-chapters{min-width:0;margin:0;padding:12px;border:1px solid var(--line);border-radius:8px;display:grid;gap:12px}.export-chapters legend{font-size:.88rem;font-weight:650;color:var(--green)}.export-chapters .mini-list{max-height:38dvh;overflow-y:auto;overscroll-behavior-y:contain}
 .character-fact{border:1px solid var(--line);border-radius:8px;padding:12px}.character-fact summary{cursor:pointer;color:var(--green);font-weight:650}.character-fact .details{margin-top:12px}.character-fact .prose,.character-fact dd{white-space:pre-wrap}
 
@@ -197,4 +198,14 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 .tree-action{grid-column:1/-1;justify-self:start;padding:3px 7px;min-height:28px;font-size:.68rem}
 .tree-empty{padding:5px 0;list-style:none}
 @media(max-width:620px){.tree-person,.tree-faction{grid-template-columns:minmax(0,1fr) max-content}.tree-person>.pill,.tree-faction>.pill{grid-column:2;grid-row:1}.tree-person>.muted,.tree-faction>.muted,.tree-faction>.details{grid-column:1/-1}}
+
+/* 文件选题 */
+.document-drop{display:grid;gap:10px;padding:16px;border:1px dashed var(--line);border-radius:10px;background:var(--soft)}
+.document-file{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;border:1px solid var(--line);border-radius:8px}
+.document-file>span{min-width:0;overflow-wrap:anywhere}
+
+/* 文件选题：文本粘贴 */
+.document-paste{display:grid;gap:6px}
+.document-paste textarea{width:100%}
+.document-paste .muted{justify-self:end}
 

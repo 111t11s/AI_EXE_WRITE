@@ -347,8 +347,16 @@ class ConsistencyReceipt(ConsistencyReport):
     chapter_fingerprints: dict[str, str] = Field(default_factory=dict)
 
 
-DEFAULT_TREND_INSTRUCTION = ("只围绕 AI/人工智能、数码产品与科技体验、影视、综艺、游戏、音乐等娱乐话题选材；"
-                            "严禁涉及政治、时政、外交、军事、选举和政策争议。")
+DEFAULT_TREND_INSTRUCTION = ("优先参考各小说网站最新热门榜单中的作品类型、题材设定和读者偏好，"
+                            "提炼原创网文选题，不直接改编真实人物或事件；避开政治、时政、外交、军事、选举和政策争议。")
+
+
+class TrendBook(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=200)
+    url: str | None = Field(default=None, max_length=500)
+    source: str | None = Field(default=None, max_length=80)
 
 
 class TrendRequest(WritingInput):
@@ -357,8 +365,10 @@ class TrendRequest(WritingInput):
     topics: list[Annotated[str, Field(min_length=2, max_length=200)]] = Field(default_factory=list, max_length=40)
     # 手动粘贴的选题要求（不是热点标题时），先理解要求再从热点中挑选相关条目。
     brief: str = Field(default="", max_length=1000)
-    genre_preference: str = Field(default="AI、数码、娱乐", max_length=40)
-    audience: str = Field(default="关注 AI、数码与娱乐的网文读者", max_length=40)
+    genre_preference: str = Field(default="都市、玄幻、言情、悬疑等网文类型", max_length=40)
+    audience: str = Field(default="关注热门网络小说的读者", max_length=40)
+    sources: list[Annotated[str, Field(min_length=1, max_length=80)]] | None = Field(default=None, max_length=20)
+    books: list[TrendBook] = Field(default_factory=list, max_length=40)
     instruction: str = Field(default=DEFAULT_TREND_INSTRUCTION, max_length=2000)
     idea_count: int = Field(default=4, ge=2, le=5)
 
@@ -431,6 +441,7 @@ class TrendReceipt(TrendReport):
     generated_at: str
     topics: list[str]
     sources: list[str] = Field(default_factory=list)
+    record_id: int | None = None
 
 
 class OutlineReceipt(BaseModel):

@@ -1,12 +1,15 @@
-"""热点选题：读取公开热搜，并让模型推荐可直接开写的题材。"""
+"""热点选题：读取小说网站热门榜单，并推荐可直接开写的题材。"""
 
 import hashlib
 import json
 from datetime import datetime, timezone
 
+from typing import Annotated
+
 from fastapi import APIRouter, HTTPException, Query
 from starlette.concurrency import run_in_threadpool
 
+from agents import novel_preview
 from agents import trends as trend_source
 from agents import writing_agents as agents
 from agents.llm_streaming import emit_generation_event
@@ -49,26 +52,27 @@ def rank_topics(topics: list[str], brief: str) -> list[str]:
 
 
 def resolve_topics(payload: TrendRequest) -> tuple[list[str], list[str]]:
-    """优先使用用户粘贴的热点；有选题要求时先按它检索相关热点，再退回热搜榜单。"""
+    """优先使用用户粘贴的作品；有选题要求时先按它筛选小说网站榜单，再退回热门榜单。"""
     user_preferences = " ".join((payload.brief, payload.genre_preference, payload.audience))
     custom_instruction = payload.instruction != DEFAULT_TREND_INSTRUCTION and payload.instruction
     if (trend_source.contains_political_content(user_preferences)
             or custom_instruction and trend_source.contains_political_content(custom_instruction)):
-        raise HTTPException(422, "热点选题不接受政治或时政相关要求，请改为 AI、数码或娱乐方向")
+        raise HTTPException(422, "热点选题不接受政治或时政相关要求，请改为非政治的小说题材方向")
     if payload.topics:
         safe_items = trend_source.filter_political_items([{"title": title} for title in payload.topics])
         topics = normalize_topics([item["title"] for item in safe_items])
         if not topics:
-            raise HTTPException(422, "选择的热点均为政治或时政内容，请改选一条 AI、数码、娱乐或其他非政治热点")
+            raise HTTPException(422, "选择的内容均为政治或时政内容，请改选一部非政治热门小说")
         return topics, []
     brief = payload.brief.strip()
     if brief:
-        searched = trend_source.search_related(brief, payload.genre_preference)
+        searched = trend_source.search_related(brief, payload.genre_preference,
+                                               selected_sources=payload.sources)
         searched = trend_source.filter_political_items(searched)
         if len(searched) >= 2:
             sources = list(dict.fromkeys(row["source"] for row in searched))
             return normalize_topics([row["title"] for row in searched]), sources
-    data = trend_source.collect_trends()
+    data = trend_source.collect_trends(selected_sources=payload.sources)
     safe_items = trend_source.filter_political_items(data["items"])
     topics = normalize_topics([row["title"] for row in safe_items])
     return rank_topics(topics, brief), list(data.get("sources", []))
@@ -118,11 +122,21 @@ def retryable(exc: HTTPException) -> bool:
 async def analyze(payload: TrendRequest) -> TrendReceipt:
     topics, sources = await run_in_threadpool(resolve_topics, payload)
     if not topics:
-        raise HTTPException(409, "暂时没有符合 AI、数码、娱乐方向且不涉及政治的热点，请刷新或粘贴非政治热点")
+        raise HTTPException(409, "暂时没有抓到热门小说，请刷新榜单或手动粘贴小说标题")
     emit_generation_event("status", message=f"已准备 {len(topics)} 条热点，正在提炼题材方向…")
+    books = []
+    if payload.books:
+        emit_generation_event("status", message=f"正在阅读所选 {len(payload.books)} 部作品的简介与前三章…")
+        books = await run_in_threadpool(novel_preview.fetch_previews,
+                                        [book.model_dump() for book in payload.books])
+        if books:
+            emit_generation_event("status", message=f"已读取 {len(books)} 部参考作品的简介与章节节选，正在提炼题材…")
+        else:
+            emit_generation_event("status", message="所选作品暂时无法读取正文，将按标题和热点继续分析…")
     context = {
         "topics": topics,
         "brief": payload.brief.strip(),
+        "books": books,
         "preferences": {"genre_preference": payload.genre_preference,
                         "audience": payload.audience, "idea_count": payload.idea_count},
     }
@@ -147,17 +161,33 @@ async def analyze(payload: TrendRequest) -> TrendReceipt:
 
 
 @router.get("", summary="查询最近热点（缓存时间可配置）")
-def list_trends(user: CurrentAccount, refresh: bool = False) -> dict:
-    return trend_source.collect_trends(refresh=refresh)
+def list_trends(user: CurrentAccount, refresh: bool = False,
+                sources: Annotated[str | None, Query()] = None) -> dict:
+    selected = sources.split(",") if sources is not None else None
+    return trend_source.collect_trends(refresh=refresh, selected_sources=selected)
 
 
-@router.get("/search", summary="按输入内容查询相关热搜")
+@router.get("/sources", summary="查询可用小说榜单来源")
+def list_trend_sources(user: CurrentAccount) -> dict:
+    settings = trend_source.get_settings()
+    return {"items": [name for name, _ in trend_source.novel_sites(settings)]}
+
+
+@router.get("/search", summary="按输入内容查询相关热门小说")
 def search_trends(user: CurrentAccount,
-                  q: str = Query(min_length=2, max_length=200),
-                  genre: str = Query(default="", max_length=40)) -> dict:
-    items = trend_source.search_related(q, genre)
+                  q: Annotated[str, Query(min_length=2, max_length=200)],
+                  genre: Annotated[str, Query(max_length=40)] = "",
+                  sources: Annotated[str | None, Query()] = None,
+                  page: Annotated[int, Query(ge=1)] = 1,
+                  page_size: Annotated[int, Query(ge=1, le=40)] = 10) -> dict:
+    selected = sources.split(",") if sources is not None else None
+    all_items = trend_source.search_related(q, genre, limit=200, selected_sources=selected)
+    total = len(all_items)
+    start = (page - 1) * page_size
+    items = all_items[start:start + page_size]
     sources = list(dict.fromkeys(row["source"] for row in items))
-    return {"items": items, "sources": sources, "query": q}
+    return {"items": items, "sources": sources, "query": q, "page": page,
+            "page_size": page_size, "total": total, "pages": (total + page_size - 1) // page_size}
 
 
 @router.post("/analyze", response_model=TrendReceipt, summary="根据最近热点推荐小说题材")
