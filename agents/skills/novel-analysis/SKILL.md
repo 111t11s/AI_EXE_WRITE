@@ -109,13 +109,28 @@ description: 拆解用户上传的小说章节，从人物构造、职介构造�
 
 同一技法在多处出现时合并成一张卡，证据选最清楚的两条；不要按章节重复出卡。
 
+## 扩展维度与候选
+
+技能不是封闭的。只要文本里有稳定的写法，而它确实不属于人物、职介、世界、剧情、文笔五个维度，就允许提出新维度：
+
+1. 先看上下文 `extension_dimensions`：这是用户已经审核通过的扩展维度，每项包含 `dimension_key`、`label`、`description`。它们应作为正常维度使用，写在 `dimensions` 里，不需要再进候选。
+2. 不在固定五维、也不在 `extension_dimensions` 中的写法，写入 `extra_techniques`，每项必须给出：
+   - `dimension`：英文小写键，例如 `rhythm`、`dialogue_subtext`、`chapter_hook`，不超过 40 字符；
+   - `dimension_label`：中文维度名，例如“节奏构造”“对话潜台词”；
+   - `dimension_reason`：为什么它不能被现有五个维度覆盖，缺少它会损失什么；
+   - 完整的技法卡字段：名称、摘要、机制、复用、证据、置信度、适用类型。
+3. 候选只代表你的提议，**不能假装它已经通过审核**；不要把它写进 `dimensions`，也不要把它当作已批准的固定维度。
+4. 一个候选维度下可以只放一张卡；如果同一新维度有很多写法，选最可复用的 1–3 张，不要用候选堆量。
+5. 如果新维度只是五维中某一维的子类（例如“开篇钩子”属于剧情），应归入原维度，不要另立候选。
+
 ## 输出
 
 只输出 `NovelAnalysisReport` JSON：
 
 - `overview`：这段文本最值得学习的 2–4 个整体判断。
 - `source_summary`：文本范围、叙事视角、类型倾向和明显未完成之处。
-- `dimensions`：五个维度各一项；可分析就填 summary + techniques，不可分析就 `available: false` 并在 `missing` 说明缺什么。
+- `dimensions`：固定五维 + `extension_dimensions` 中已批准的扩展维度各一项；可分析就填 summary + techniques，不可分析就 `available: false` 并在 `missing` 说明缺什么。每项填 `dimension` 和 `label`。
+- `extra_techniques`：不属于现有维度的候选技法；没有就返回空数组。每项包含 `dimension`、`dimension_label`、`dimension_reason` 和完整技法卡。
 - `limitations`：本次分析的证据边界，例如“只有前三章，无法判断长线伏笔回收”。
 
-每个维度最多 4 张卡，总数控制在 12 张以内。宁少勿滥：没有证据的技法不要写。
+每个维度最多 4 张卡，总数控制在 12 张以内；候选最多 5 条。宁少勿滥：没有证据的技法不要写。

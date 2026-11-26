@@ -28,6 +28,7 @@
 
 左侧栏的「文件选题」支持上传 TXT、Markdown、DOCX（最多 5 个，单个 10MB，总读取约 6 万字符），也可以直接粘贴文本（上限 25,000 字符）：后台任务读取材料，提炼题材类型、人物关系、核心冲突、读者情绪与可传播话题，输出 3—5 个可直接开写的原创方案（类型、背景、力量体系、金手指、主角、目标、基调、篇幅、书名、卖点、话题点、风险）。上传文本只用于本次分析，不写入小说项目，也不会照搬原有人物、情节或原文。推荐卡的「用此题材新建小说」会预填问答的 8 项基础设定，仍可继续调整。接口为 `POST /api/v1/document-topics/analyze/tasks`（multipart：`files`、`text`、`instruction`、`genre_preference`、`audience`、`idea_count`、`model`），任务类型为 `topics`，报告保存在任务中心；预填接口为 `POST /api/v1/novel-assistant/sessions/{id}/prefill`。分析结果保存到 `app_document_topic`，可在「文件选题」页的历史选题中查看；升级数据库需由数据库管理员导入 `deployment/document-topics.sql`。文件格式不支持或解析失败时页面会提示；nginx 的 `client_max_body_size` 需不小于 55MB，并安装 `python-multipart`。
 左侧栏的「小说拆解」是专门的小说章节分析智能体：上传 TXT、Markdown、DOCX 章节后，按人物构造、职介构造、世界构造、剧情构造、文笔写法五个维度提取可复用技法。它只分析上传文本，逐条给出原文证据、写法机制和复用方法；材料不足的维度会标记为不可分析，不推断未写出的设定。每张技法卡包含名称、摘要、机制、复用方式、证据、置信度和适用类型。接口为 `POST /api/v1/novel-analysis/analyze/tasks`，结果保存到 `app_novel_analysis`，可在「小说拆解 → 写作技法库」中跨小说查阅、复制；升级数据库需由数据库管理员导入 `deployment/novel-analysis.sql`。技能文件为 `agents/skills/novel-analysis/SKILL.md`，由 `NOVEL_ANALYST` 智能体加载。
+小说拆解支持自我进化：固定五维之外的写法会作为新维度候选存入 app_analysis_candidate；审核通过后写入 app_analysis_technique，并把该维度加入 app_analysis_dimension，后续拆解会自动带上这个扩展维度。候选审核在「小说拆解 → 技法审核」中完成。
 
 首次升级需执行账号迁移，详见 [账号与旧小说迁移](deployment/README.md#账号与旧小说迁移)。普通账号登录后只显示自己的小说；新建小说自动绑定登录账号。密码使用加盐 scrypt 哈希，登录状态可退出注销，默认有效期为 7 天。
 

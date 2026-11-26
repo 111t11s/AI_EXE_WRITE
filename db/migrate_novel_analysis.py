@@ -5,11 +5,13 @@
 """
 
 from db.connection import get_engine
-from db.novel_analysis import novel_analysis
+from db.novel_analysis import (analysis_candidate, analysis_dimension, analysis_technique,
+                              novel_analysis)
 
 
 def migrate(engine) -> bool:
-    novel_analysis.create(engine, checkfirst=True)
+    for table in (novel_analysis, analysis_dimension, analysis_candidate, analysis_technique):
+        table.create(engine, checkfirst=True)
     return True
 
 

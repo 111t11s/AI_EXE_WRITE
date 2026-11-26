@@ -260,6 +260,8 @@ NOVEL_ANALYST = WritingRole(
     "不推断未写出的设定，不引用外部作品，不评价作者本人。"
     "每个技法写清 summary、mechanism、reuse，并给出 1–4 条 evidence；没有可核实引文的技法不要输出。"
     "职介构造包括职业、职阶、身份、等级与分工体系；文本未涉及时不要用现实常识补全。"
+    "不属于固定五维、也不在 extension_dimensions 中的写法，放入 extra_techniques 作为待审核候选，"
+    "给出维度键、中文维度名和单列理由，不要强行塞进五维。"
     "输出 NovelAnalysisReport JSON。",
     NovelAnalysisReport, (),
 )

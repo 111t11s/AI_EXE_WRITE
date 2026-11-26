@@ -76,6 +76,68 @@ CREATE TABLE IF NOT EXISTS app_novel_analysis (
     CONSTRAINT fk_novel_analysis_account FOREIGN KEY (account_id) REFERENCES app_account(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='小说章节拆解结果表';
 
+CREATE TABLE IF NOT EXISTS app_analysis_dimension (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '维度主键',
+    account_id BIGINT UNSIGNED NOT NULL COMMENT '所属账号',
+    dimension_key VARCHAR(40) NOT NULL COMMENT '维度键',
+    label VARCHAR(40) NOT NULL COMMENT '维度名称',
+    description VARCHAR(600) NOT NULL DEFAULT '' COMMENT '维度说明',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_analysis_dimension_account_key (account_id, dimension_key),
+    CONSTRAINT fk_analysis_dimension_account FOREIGN KEY (account_id) REFERENCES app_account(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='已批准的自定义拆解维度';
+
+CREATE TABLE IF NOT EXISTS app_analysis_candidate (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '候选技法主键',
+    account_id BIGINT UNSIGNED NOT NULL COMMENT '所属账号',
+    analysis_id BIGINT UNSIGNED NOT NULL COMMENT '拆解记录主键',
+    dimension_key VARCHAR(40) NOT NULL COMMENT '提议维度键',
+    dimension_label VARCHAR(40) NOT NULL COMMENT '提议维度名称',
+    dimension_reason VARCHAR(600) NOT NULL DEFAULT '' COMMENT '为什么不属于固定五维',
+    name VARCHAR(80) NOT NULL COMMENT '技法名',
+    summary VARCHAR(600) NOT NULL COMMENT '技法摘要',
+    mechanism VARCHAR(1200) NOT NULL DEFAULT '' COMMENT '写法机制',
+    reuse VARCHAR(1000) NOT NULL DEFAULT '' COMMENT '复用方法',
+    evidence LONGTEXT NOT NULL COMMENT '原文证据 JSON',
+    confidence VARCHAR(10) NOT NULL DEFAULT 'medium',
+    applicable_genres TEXT NOT NULL COMMENT '适用类型 JSON',
+    status VARCHAR(10) NOT NULL DEFAULT 'pending' COMMENT 'pending/approved/rejected',
+    reviewer_id BIGINT UNSIGNED NULL COMMENT '审核账号',
+    reviewed_at DATETIME NULL COMMENT '审核时间',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_analysis_candidate_account_status (account_id, status),
+    KEY idx_analysis_candidate_analysis (analysis_id),
+    CONSTRAINT fk_analysis_candidate_account FOREIGN KEY (account_id) REFERENCES app_account(id) ON DELETE CASCADE,
+    CONSTRAINT fk_analysis_candidate_analysis FOREIGN KEY (analysis_id) REFERENCES app_novel_analysis(id) ON DELETE CASCADE,
+    CONSTRAINT fk_analysis_candidate_reviewer FOREIGN KEY (reviewer_id) REFERENCES app_account(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='待审核的新维度技法';
+
+CREATE TABLE IF NOT EXISTS app_analysis_technique (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '技法主键',
+    account_id BIGINT UNSIGNED NOT NULL COMMENT '所属账号',
+    analysis_id BIGINT UNSIGNED NOT NULL COMMENT '拆解记录主键',
+    candidate_id BIGINT UNSIGNED NULL COMMENT '来源候选主键',
+    dimension_key VARCHAR(40) NOT NULL COMMENT '维度键',
+    dimension_label VARCHAR(40) NOT NULL COMMENT '维度名称',
+    name VARCHAR(80) NOT NULL COMMENT '技法名',
+    summary VARCHAR(600) NOT NULL COMMENT '技法摘要',
+    mechanism VARCHAR(1200) NOT NULL DEFAULT '',
+    reuse VARCHAR(1000) NOT NULL DEFAULT '',
+    evidence LONGTEXT NOT NULL COMMENT '原文证据 JSON',
+    confidence VARCHAR(10) NOT NULL DEFAULT 'medium',
+    applicable_genres TEXT NOT NULL COMMENT '适用类型 JSON',
+    source VARCHAR(20) NOT NULL DEFAULT 'standard' COMMENT 'standard/extension/extra',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_analysis_technique_account (account_id, created_at),
+    KEY idx_analysis_technique_analysis (analysis_id),
+    CONSTRAINT fk_analysis_technique_account FOREIGN KEY (account_id) REFERENCES app_account(id) ON DELETE CASCADE,
+    CONSTRAINT fk_analysis_technique_analysis FOREIGN KEY (analysis_id) REFERENCES app_novel_analysis(id) ON DELETE CASCADE,
+    CONSTRAINT fk_analysis_technique_candidate FOREIGN KEY (candidate_id) REFERENCES app_analysis_candidate(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='已审核通过的写作技法表';
+
 CREATE TABLE IF NOT EXISTS novel_project (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '项目主键',
     account_id BIGINT UNSIGNED NULL COMMENT '所属账号，旧项目待迁移',

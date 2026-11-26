@@ -457,7 +457,8 @@ class NovelAnalysisEvidence(BaseModel):
 class NovelAnalysisTechnique(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
-    dimension: AnalysisDimensionName
+    dimension: str = Field(min_length=1, max_length=40)
+    dimension_label: str = Field(default="", max_length=40)
     name: str = Field(min_length=1, max_length=80)
     summary: str = Field(min_length=1, max_length=600)
     mechanism: str = Field(default="", max_length=1200)
@@ -470,11 +471,29 @@ class NovelAnalysisTechnique(BaseModel):
 class NovelAnalysisDimension(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
-    dimension: AnalysisDimensionName
+    dimension: str = Field(min_length=1, max_length=40)
+    label: str = Field(default="", max_length=40)
     available: bool = False
     summary: str = Field(default="", max_length=800)
     techniques: list[NovelAnalysisTechnique] = Field(default_factory=list, max_length=4)
     missing: str = Field(default="", max_length=600)
+
+
+class NovelAnalysisCandidate(BaseModel):
+    """不属于固定五维、等待用户审核的新维度技法。"""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    dimension: str = Field(min_length=1, max_length=40)
+    dimension_label: str = Field(min_length=1, max_length=40)
+    dimension_reason: str = Field(default="", max_length=600)
+    name: str = Field(min_length=1, max_length=80)
+    summary: str = Field(min_length=1, max_length=600)
+    mechanism: str = Field(default="", max_length=1200)
+    reuse: str = Field(default="", max_length=1000)
+    evidence: list[NovelAnalysisEvidence] = Field(min_length=1, max_length=4)
+    confidence: Literal["high", "medium", "low"] = "medium"
+    applicable_genres: list[Annotated[str, Field(max_length=20)]] = Field(default_factory=list, max_length=8)
 
 
 class NovelAnalysisReport(BaseModel):
@@ -482,7 +501,8 @@ class NovelAnalysisReport(BaseModel):
 
     overview: str = Field(min_length=1, max_length=1000)
     source_summary: str = Field(default="", max_length=800)
-    dimensions: list[NovelAnalysisDimension] = Field(min_length=1, max_length=5)
+    dimensions: list[NovelAnalysisDimension] = Field(min_length=1, max_length=10)
+    extra_techniques: list[NovelAnalysisCandidate] = Field(default_factory=list, max_length=5)
     limitations: list[str] = Field(default_factory=list, max_length=10)
 
 

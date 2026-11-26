@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 from api import novel_analysis_api as analysis
 from api.account_api import Account, get_current_account
 from api.novel_crud_api import get_database
-from api.writing_schemas import (NovelAnalysisDimension, NovelAnalysisEvidence, NovelAnalysisReport,
-                                 NovelAnalysisTechnique)
+from api.writing_schemas import (NovelAnalysisCandidate, NovelAnalysisDimension, NovelAnalysisEvidence,
+                                 NovelAnalysisReport, NovelAnalysisTechnique)
 from db import novel_analysis as analysis_db
 from db.migrate_accounts import create_account
 from main import app
@@ -56,6 +56,53 @@ def test_clean_analysis_drops_unverified_and_fills_missing_dimensions():
     assert dimensions["world"].available is False
     assert dimensions["profession"].missing
     assert sum(len(item.techniques) for item in cleaned.dimensions) == 2
+
+
+def report_with_extra():
+    data = report()
+    data.extra_techniques = [NovelAnalysisCandidate(
+        dimension="rhythm", dimension_label="节奏构造",
+        dimension_reason="五维之外，专门研究段落长短和场景切换的节奏",
+        name="三拍递进", summary="用三个越来越短的动作推进紧张感",
+        mechanism="长句铺垫、中句转折、短句落锤", reuse="把新故事的高潮拆成三拍",
+        evidence=[NovelAnalysisEvidence(quote="旧港的维修铺只剩他一个人。", note="短句收束")],
+        confidence="high", applicable_genres=["都市"])]
+    return data
+
+
+def test_extra_dimension_requires_review_then_enters_technique_table():
+    engine = create_test_db()
+    account_id = create_account(engine, "analyst", "test-password")
+    cleaned = analysis.clean_analysis(report_with_extra(), [{"name": "第一章.txt", "text": SOURCE}])
+    assert len(cleaned.extra_techniques) == 1
+    record_id = analysis_db.save_analysis(
+        engine, account_id, ["第一章.txt"], len(SOURCE), "重点看节奏", cleaned.model_dump(mode="json"),
+        set(analysis.FIXED_DIMENSIONS), analysis.DIMENSION_LABELS)
+
+    assert {item["name"] for item in analysis_db.list_techniques(engine, account_id)} == {
+        "工具动作露底", "短判断压危机"}
+    candidates = analysis_db.list_candidates(engine, account_id)
+    assert [item["name"] for item in candidates] == ["三拍递进"]
+    result = analysis_db.approve_candidate(engine, account_id, candidates[0]["id"], account_id)
+    assert result["dimension"] == "rhythm"
+    assert {item["name"] for item in analysis_db.list_techniques(engine, account_id)} == {
+        "工具动作露底", "短判断压危机", "三拍递进"}
+    assert analysis_db.list_candidates(engine, account_id) == []
+    assert [row["dimension_key"] for row in analysis_db.list_dimensions(engine, account_id)] == ["rhythm"]
+
+    # 已批准维度下一次作为正常维度处理，不再进入候选。
+    next_report = NovelAnalysisReport(
+        overview="节奏是这段文本最突出的写法。", source_summary="同一章。", limitations=[],
+        dimensions=[NovelAnalysisDimension(
+            dimension="rhythm", label="节奏构造", available=True, summary="三拍推进",
+            techniques=[technique("rhythm", "三拍递进", "旧港的维修铺只剩他一个人。")])],
+        extra_techniques=[])
+    cleaned_next = analysis.clean_analysis(
+        next_report, [{"name": "第一章.txt", "text": SOURCE}],
+        analysis_db.list_dimensions(engine, account_id))
+    assert cleaned_next.extra_techniques == []
+    rhythm = next(item for item in cleaned_next.dimensions if item.dimension == "rhythm")
+    assert rhythm.available and rhythm.label == "节奏构造"
 
 
 def test_clean_analysis_returns_none_without_evidence():
