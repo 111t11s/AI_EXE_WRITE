@@ -16,6 +16,7 @@ This is the new canonical structure for the novel-design workflow. The legacy XM
 - `generation_jobs.py` / `migrate_generation_jobs.py`: task-center history stored in `app_generation_job`, restored on service start and removed only by the user. Run `python -m db.migrate_generation_jobs` when upgrading an existing database; `deployment/generation-jobs.sql` is the equivalent schema-admin migration.
 - document_topics.py / migrate_document_topics.py: uploaded/pasted text topic reports stored in app_document_topic. Run deployment/document-topics.sql as a database administrator when upgrading; deployment/document-topics.sql is the schema-admin equivalent.
 - novel_analysis.py / migrate_novel_analysis.py: uploaded chapter analysis reports stored in app_novel_analysis. Run deployment/novel-analysis.sql as a database administrator when upgrading.
+- setting_expansion.py / migrate_setting_expansion.py: existing-setting expansion reports stored in app_setting_expansion. Run deployment/setting-expansion.sql as a database administrator when upgrading.
 - analysis_technique / analysis_candidate / analysis_dimension: approved technique table, pending new-dimension candidates, and approved extension dimensions; approved dimensions and techniques are categorized as worldbuilding, outline, or prose for the writing knowledge base. Approving a candidate writes the technique and makes its dimension available to later analyses.
 - `reset_password.py`: interactive administrator password reset that revokes all sessions.
 

@@ -24,6 +24,8 @@ const initialState = () => ({projects: [], project: null, libraryOwner: 'all', w
   trends: null, trendsLoading: false, trendsError: null, trendsSelection: new Map(), trendsSelectedSources: null,
   trendsQuery: '', trendsSearched: null, trendsSearchedSelection: new Map(), documentFiles: [], documentText: '',
   documentHistory: null, documentReport: null,
+  settingHistory: null, settingReport: null, settingLoading: false,
+  expansionNote: '保留已有核心概念和力量来源，只补充细节，不要重新拆题。',
   analysisFiles: [], analysisHistory: null, analysisReport: null, analysisLibrary: null,
   analysisLoading: false, analysisError: null, analysisNote: '重点看人物出场、职阶体系和对话节奏',
   analysisText: '', analysisCandidates: [], analysisCategory: 'all',
@@ -98,7 +100,7 @@ const post = (path, data = {}) => api(path, {method: 'POST', data});
 const progressGeneration = createGenerationView($('task-progress-stream'));
 const jobStatuses = {running: '生成中', completed: '已完成', failed: '未完成'};
 const taskCategories = [['all', '全部任务'], ['worldbuilding', '世界观'], ['outline', '大纲'], ['characters', '角色'],
-  ['draft', '正文'], ['plan', '章节规划'], ['review', '审读'], ['consistency', '一致性核对'], ['topics', '选题'], ['analysis', '拆解'], ['other', '其他']];
+  ['draft', '正文'], ['plan', '章节规划'], ['review', '审读'], ['consistency', '一致性核对'], ['topics', '选题'], ['setting', '设定'], ['analysis', '拆解'], ['other', '其他']];
 const taskKindCategory = kind => kind === 'character_progress' ? 'characters' :
   kind === 'batch_draft' ? 'draft' : kind === 'consistency_repair' ? 'consistency' : kind === 'trends' ? 'topics' : kind;
 const taskCategoryName = kind => taskCategories.find(([value]) => value === taskKindCategory(kind))?.[1] || '其他';
@@ -364,6 +366,7 @@ function renderTaskResult(job, result) {
   else if (job.kind === 'consistency') content.push(consistencyReportView(result));
   else if (job.kind === 'trends' || job.kind === 'topics') content.push(trendReportView(result));
   else if (job.kind === 'analysis') content.push(analysisReportView(result));
+  else if (job.kind === 'setting') content.push(settingExpansionView(result));
   else {
     let message = '生成结果已保存，可打开小说查看。';
     if (job.kind === 'worldbuilding') message = result.persistence?.error ? `生成完成但保存未完整：${result.persistence.error}` :
@@ -668,8 +671,10 @@ function openTrends() {
   state.screen = 'trends';
   state.trendsError = null;
   state.documentReport = null;
+  state.settingReport = null;
   render();
   void loadDocumentHistory();
+  void loadSettingHistory();
 }
 
 function openAnalysis() {
@@ -766,6 +771,58 @@ async function openDocumentReport(id) {
     render();
   } catch (error) {
     notify(`选题记录读取失败：${error.message}`, 'error');
+  }
+}
+
+async function loadSettingHistory() {
+  if (!account) return;
+  try {
+    const data = await api('/document-topics/expansions', {filters: {limit: 8}});
+    state.settingHistory = data.items || [];
+  } catch (error) {
+    state.settingHistory = [];
+    if (state.screen === 'trends') notify(`设定补全历史读取失败：${error.message}`, 'error');
+  }
+  if (state.screen === 'trends') render();
+}
+
+async function openSettingReport(id) {
+  try {
+    const data = await api(`/document-topics/expansions/${id}`);
+    state.settingReport = {...data, report: {...data.report, record_id: data.id}};
+    state.screen = 'setting-report';
+    render();
+  } catch (error) {
+    notify(`设定补全稿读取失败：${error.message}`, 'error');
+  }
+}
+
+async function expandSetting() {
+  if (state.busy || state.settingLoading) return;
+  if (!state.documentFiles.length && !state.documentText.trim()) {
+    notify('请先粘贴已有设定或选择文件。', 'error');
+    return;
+  }
+  const form = new FormData();
+  for (const file of state.documentFiles) form.append('files', file, file.name);
+  if (state.documentText.trim()) form.append('text', state.documentText);
+  form.append('instruction', state.expansionNote.trim());
+  if (state.modelChoice) form.append('model', state.modelChoice);
+  state.settingLoading = true;
+  state.trendsError = null;
+  render();
+  try {
+    const job = await api('/document-topics/expand/tasks', {method: 'POST', data: form});
+    state.documentFiles = [];
+    state.documentText = '';
+    recordJob(job);
+    void openProgress(job.id);
+  } catch (error) {
+    state.trendsError = error.message;
+    notify(`设定补全提交失败：${error.message}`, 'error');
+  } finally {
+    state.settingLoading = false;
+    render();
   }
 }
 
@@ -943,14 +1000,18 @@ function trendsView() {
   const note = element('textarea', {maxlength: 2000, rows: 3,
     placeholder: '例如：希望保留废稿里的旧港设定，但换成轻松基调'}, state.trendsNote);
   note.addEventListener('input', event => { state.trendsNote = event.target.value; });
+  const expansionNote = element('textarea', {maxlength: 2000, rows: 3,
+    placeholder: '例如：保留已有力量来源和境界名称，只补充晋升代价、日常限制和势力冲突'}, state.expansionNote);
+  expansionNote.addEventListener('input', event => { state.expansionNote = event.target.value; });
   const paste = element('textarea', {maxlength: 25000, rows: 8,
     placeholder: '也可以直接粘贴小说片段、设定或素材，最多 25,000 字符'}, state.documentText);
   const pasteCount = muted(`${state.documentText.length} / 25000 字符`);
   paste.addEventListener('input', event => {
     state.documentText = event.target.value;
     pasteCount.textContent = `${state.documentText.length} / 25000 字符`;
-    submit.disabled = state.busy || state.trendsLoading ||
-      !(state.documentFiles.length || state.documentText.trim());
+    const has = state.documentFiles.length > 0 || Boolean(state.documentText.trim());
+    submit.disabled = state.busy || state.trendsLoading || state.settingLoading || !has;
+    expand.disabled = state.busy || state.trendsLoading || state.settingLoading || !has;
   });
   const files = state.documentFiles.length ? stack(
     ...state.documentFiles.map((file, index) => element('div', {class: 'document-file'},
@@ -960,7 +1021,9 @@ function trendsView() {
     muted('还没有选择文件。');
   const hasInput = state.documentFiles.length > 0 || Boolean(state.documentText.trim());
   const submit = button(state.trendsLoading ? '正在上传并分析…' : '分析并推荐题材', analyzeDocumentTopics,
-    'primary', state.busy || state.trendsLoading || !hasInput);
+    'primary', state.busy || state.trendsLoading || state.settingLoading || !hasInput);
+  const expand = button(state.settingLoading ? '正在补全…' : '补充世界观', expandSetting, 'secondary',
+    state.busy || state.trendsLoading || state.settingLoading || !hasInput);
   const left = panel('文件选题', stack(
     muted('上传小说文稿、废稿、设定或参考文本，系统会通读文件内容并提炼可开写的原创题材；文件只用于本次分析，不会写入小说项目。'),
     element('div', {class: 'document-drop'}, element('strong', {}, '选择文件'), picker,
@@ -972,19 +1035,27 @@ function trendsView() {
   const right = panel('分析设置', stack(
     element('label', {class: 'control'}, '类型偏好', genre),
     element('label', {class: 'control'}, '目标读者', audience),
-    element('label', {class: 'control'}, '补充要求（可选）', note),
-    actions(submit),
-    muted('分析在后台运行；完成后可在任务中心打开结果，或直接用推荐题材新建小说。')), '给出可直接开写的题材方向。');
+    element('label', {class: 'control'}, '题材补充要求（可选）', note),
+    element('label', {class: 'control'}, '设定补全要求（可选）', expansionNote),
+    actions(submit, expand),
+    muted('「分析并推荐题材」会提炼新的原创题材；「补充世界观」则把你粘贴的设定当作既定事实，只补全世界、力量体系、职介、社会和剧情细节，不重新拆题。')), '给出可直接开写的题材方向。');
   const history = panel('历史选题', state.documentHistory === null ? muted('正在读取历史选题…') :
     state.documentHistory.length ? stack(...state.documentHistory.map(item => element('div', {class: 'document-file'},
       element('span', {}, element('strong', {}, (item.file_names || []).join('、') || '文本选题'),
         muted(` · ${item.idea_count || 0} 个方案 · ${new Date(item.created_at).toLocaleString()}`)),
       button('查看', () => openDocumentReport(item.id), 'secondary')))) :
     muted('还没有保存的选题记录。'), '分析结果会保存在数据库，可随时回来查看。');
+  const settingHistory = panel('设定补全历史', state.settingHistory === null ? muted('正在读取设定补全记录…') :
+    state.settingHistory.length ? stack(...state.settingHistory.map(item => element('div', {class: 'document-file'},
+      element('span', {}, element('strong', {}, item.title || (item.file_names || []).join('、') || '世界观补全稿'),
+        muted(` · ${item.input_chars || 0} 字符 · ${new Date(item.created_at).toLocaleString()}`)),
+      button('查看', () => openSettingReport(item.id), 'secondary')))) :
+    muted('还没有保存的设定补全稿。'), '补全稿会保存在数据库，可随时回来查看。');
   return element('div', {}, stack(
-    panel('文件选题', muted('把已经写过的文稿、废稿、参考文本或一段素材交给系统，提取可复用的题材、人物关系和读者情绪，生成原创选题。')),
+    panel('文件选题', muted('把已经写过的文稿、废稿、参考文本或一段素材交给系统，可以提炼原创选题，也可以在你已有设定上直接补全细节。')),
     element('div', {class: 'layout'}, left, right),
-    history));
+    history,
+    settingHistory));
 }
 
 function documentReportView() {
@@ -1000,6 +1071,55 @@ function documentReportView() {
         render();
       }, 'secondary'))),
     trendReportView(data.report));
+}
+
+function settingExpansionView(report) {
+  const blocks = [
+    ['世界总览', report.world_overview],
+    ['力量体系', report.power_system],
+    ['职介/职业体系', report.profession_system],
+    ['社会与日常', report.society],
+    ['势力与冲突', report.factions],
+  ].filter(([, text]) => text);
+  return stack(
+    panel('设定补全稿', stack(
+      element('h2', {}, report.title || '世界观补全'),
+      prose(report.core_concept),
+      report.record_id ? muted('已保存到设定补全历史。') : null,
+      actions(button('复制完整设定', async () => {
+        const text = [report.title, report.core_concept, ...blocks.map(([label, value]) => `${label}\n${value}`),
+          ...(report.story_hooks?.length ? [`剧情钩子\n${report.story_hooks.map(item => `- ${item}`).join('\n')}`] : [])]
+          .filter(Boolean).join('\n\n');
+        try {
+          await navigator.clipboard.writeText(text);
+          notify('完整设定已复制。');
+        } catch (error) {
+          notify('复制失败，请手动选择文本。', 'error');
+        }
+      }, 'secondary')))),
+    ...blocks.map(([label, value]) => panel(label, prose(value))),
+    report.story_hooks?.length ? panel('剧情钩子', stack(
+      ...report.story_hooks.map((item, index) => element('p', {class: 'prose'}, `${index + 1}. ${item}`)))) : null,
+    report.preserved_elements?.length ? panel('保留的原始设定', stack(
+      ...report.preserved_elements.map(item => element('p', {class: 'prose'}, item)))) : null,
+    report.additions?.length ? panel('本次新增', stack(
+      ...report.additions.map(item => element('p', {class: 'prose'}, item)))) : null,
+    report.open_questions?.length ? panel('待确认', stack(
+      ...report.open_questions.map(item => element('p', {class: 'prose'}, item)))) : null);
+}
+
+function settingReportView() {
+  if (!state.settingReport) return empty('正在读取设定补全稿', '请稍候。');
+  const data = state.settingReport;
+  const origin = (data.file_names || []).join('、') || '粘贴文本';
+  return stack(
+    panel('设定补全稿', muted(`来源：${origin} · ${data.input_chars || 0} 字符`),
+      actions(button('返回文件选题', () => {
+        state.settingReport = null;
+        state.screen = 'trends';
+        render();
+      }, 'secondary'))),
+    settingExpansionView(data.report));
 }
 
 function analysisFileSize(bytes) {
@@ -1419,7 +1539,7 @@ function render() {
   topline.hidden = taskScreen;
   const pageTitles = {overview: '作品概览', characters: '角色档案', outline: '章节大纲', chapters: '正文创作', consistency: '一致性核对'};
   topline.querySelector('span:first-child').textContent = state.screen === 'project' ?
-    (pageTitles[state.tab] || '创作空间') : state.screen === 'trends' ? '文件选题' : state.screen === 'document-report' ? '历史选题' : state.screen === 'analysis' ? '小说拆解' : state.screen === 'analysis-report' ? '拆解报告' : state.screen === 'analysis-library' ? '写作技法库' : state.screen === 'analysis-review' ? '技法审核' : state.screen === 'trash' ? '回收站' : '任务进度';
+    (pageTitles[state.tab] || '创作空间') : state.screen === 'trends' ? '文件选题' : state.screen === 'document-report' ? '历史选题' : state.screen === 'setting-report' ? '设定补全' : state.screen === 'analysis' ? '小说拆解' : state.screen === 'analysis-report' ? '拆解报告' : state.screen === 'analysis-library' ? '写作技法库' : state.screen === 'analysis-review' ? '技法审核' : state.screen === 'trash' ? '回收站' : '任务进度';
   topline.querySelector('.topline-note').textContent = state.screen === 'project' ?
     (state.project?.title || '从设定到正文') : '墨间 · 小说工作台';
   view.hidden = state.screen === 'progress';
@@ -1443,6 +1563,10 @@ function render() {
   }
   if (state.screen === 'document-report') {
     view.replaceChildren(documentReportView());
+    return;
+  }
+  if (state.screen === 'setting-report') {
+    view.replaceChildren(settingReportView());
     return;
   }
   if (state.screen === 'analysis') {

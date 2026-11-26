@@ -12,12 +12,13 @@ cd /opt/aitxt
 sudo .venv/bin/pip install python-multipart==0.0.27
 sudo mysql --default-character-set=utf8mb4 AI_TEXT < deployment/document-topics.sql
 sudo mysql --default-character-set=utf8mb4 AI_TEXT < deployment/novel-analysis.sql
+sudo mysql --default-character-set=utf8mb4 AI_TEXT < deployment/setting-expansion.sql
 sudo nginx -t && sudo systemctl reload nginx
 sudo systemctl start aitxt
 ```
 
 如果上一版已经建过 app_analysis_dimension 但还没有 category 列，再由数据库管理员执行 deployment/novel-analysis-category.sql；全新安装不要执行。
-本次新增文件上传和文本粘贴（文件选题与小说拆解的粘贴上限均为 25,000 字符），分析结果写入 app_document_topic（文件选题）和 app_novel_analysis（小说拆解）；固定维度技法写入 app_analysis_technique，新维度候选写入 app_analysis_candidate，审核通过后再写入技法表和 app_analysis_dimension；必须安装 python-multipart，并由数据库管理员执行上面的建表 SQL（应用账号 aitxt 通常没有 CREATE 权限）；仓库的 deployment/nginx.conf 已将 client_max_body_size 调整为 55MB，如果使用自定义 Nginx 配置，请同样调大，否则上传会被 413 拦截。前端有更新，部署后页面 Ctrl+F5。
+本次新增文件上传和文本粘贴（文件选题与小说拆解的粘贴上限均为 25,000 字符），分析结果写入 app_document_topic（文件选题）和 app_novel_analysis（小说拆解）；固定维度技法写入 app_analysis_technique，新维度候选写入 app_analysis_candidate，审核通过后再写入技法表和 app_analysis_dimension；设定补全稿写入 app_setting_expansion；必须安装 python-multipart，并由数据库管理员执行上面的建表 SQL（应用账号 aitxt 通常没有 CREATE 权限）；仓库的 deployment/nginx.conf 已将 client_max_body_size 调整为 55MB，如果使用自定义 Nginx 配置，请同样调大，否则上传会被 413 拦截。前端有更新，部署后页面 Ctrl+F5。
 
 ## 安装
 

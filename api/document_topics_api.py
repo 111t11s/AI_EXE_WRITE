@@ -21,9 +21,10 @@ from api.account_api import CurrentAccount
 from api.database import Database
 from api.novel_writing_api import generate
 from api.trends_api import clean_report, retryable
-from api.writing_schemas import TrendReceipt, WritingInput
+from api.writing_schemas import SettingExpansionReceipt, TrendReceipt, WritingInput
 from core.app_logging import get_logger
 from db import document_topics as topic_db
+from db import setting_expansion as setting_db
 
 
 router = APIRouter(prefix="/document-topics", tags=["文件选题"])
@@ -35,6 +36,7 @@ MAX_TEXT_CHARS = 25000
 MAX_DOC_CHARS = 25000
 MAX_TOTAL_CHARS = 60000
 DEFAULT_DOCUMENT_INSTRUCTION = "根据上传文本提炼可开写的原创题材；不要照搬原文、原有人物或情节。"
+DEFAULT_EXPANSION_INSTRUCTION = "以粘贴或上传的文本为已定设定，只补充世界观、力量体系、职介、社会和剧情细节；不要重新拆题或替换核心概念。"
 WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
@@ -136,6 +138,56 @@ def _source_type(documents: list[dict]) -> str:
     return "text" if has_text else "files"
 
 
+async def _collect_materials(files: list[UploadFile] | None, text: str):
+    if len(text) > MAX_TEXT_CHARS:
+        raise HTTPException(422, f"粘贴文本不能超过 {MAX_TEXT_CHARS} 字符")
+    documents = await run_in_threadpool(_read_uploads, files or [])
+    text = text.strip()
+    added_text = False
+    if text:
+        remaining = MAX_TOTAL_CHARS - sum(len(row["text"]) for row in documents)
+        if remaining > 0:
+            take = min(len(text), MAX_TEXT_CHARS, remaining)
+            documents.append({"name": "粘贴文本", "chars": len(text), "text": text[:take],
+                              "truncated": take < len(text)})
+            added_text = True
+    if not documents:
+        raise HTTPException(422, "请上传文件或粘贴一段文本")
+    return documents, text, added_text
+
+
+async def expand_setting(documents: list[dict], instruction: str, model: str | None,
+                         account_id: int, engine) -> SettingExpansionReceipt:
+    emit_generation_event("status", message="已读取已有设定，正在沿原有核心概念补充细节…")
+    context = {"documents": documents}
+    request = WritingInput(instruction=instruction or DEFAULT_EXPANSION_INSTRUCTION, model=model)
+    for attempt in (1, 2):
+        try:
+            report = await generate(agents.SETTING_EXPANDER, context, request)
+        except HTTPException as exc:
+            if attempt == 1 and retryable(exc):
+                emit_generation_event("status", message="设定补全结果未通过校验，正在重新补全…")
+                continue
+            raise
+        receipt = SettingExpansionReceipt(
+            **report.model_dump(),
+            file_names=[row["name"] for row in documents],
+            generated_at=datetime.now(timezone.utc).isoformat())
+        try:
+            emit_generation_event("status", message="补全完成，正在保存设定稿…")
+            record_id = await run_in_threadpool(
+                setting_db.save_report, engine, account_id,
+                [row["name"] for row in documents], sum(row["chars"] for row in documents),
+                instruction, receipt.model_dump(mode="json"))
+            receipt = receipt.model_copy(update={"record_id": record_id})
+            emit_generation_event("status", message="设定补全稿已保存。")
+        except Exception as exc:
+            logger.warning("设定补全保存失败：异常类型=%s", type(exc).__name__)
+            emit_generation_event("status", message="补全完成，但保存失败；请检查数据库迁移。")
+        return receipt
+    raise HTTPException(502, "设定补全结果未通过校验，请重试")
+
+
 async def analyze_documents(documents: list[dict], instruction: str, genre_preference: str,
                             audience: str, idea_count: int, model: str | None,
                             account_id: int, engine) -> TrendReceipt:
@@ -184,12 +236,51 @@ async def list_document_topics(user: CurrentAccount, engine: Database,
     return await run_in_threadpool(topic_db.list_reports, engine, user.id, limit, offset)
 
 
+@router.get("/expansions", summary="查询设定补全历史")
+async def list_setting_expansions(user: CurrentAccount, engine: Database,
+                                  limit: int = Query(default=20, ge=1, le=50),
+                                  offset: int = Query(default=0, ge=0)):
+    return await run_in_threadpool(setting_db.list_reports, engine, user.id, limit, offset)
+
+
+@router.get("/expansions/{report_id}", summary="查看设定补全稿")
+async def get_setting_expansion(report_id: int, user: CurrentAccount, engine: Database):
+    report = await run_in_threadpool(setting_db.get_report, engine, user.id, report_id)
+    if report is None:
+        raise HTTPException(404, "设定补全记录不存在")
+    return report
+
+
 @router.get("/{report_id}", summary="查看历史选题详情")
 async def get_document_topic(report_id: int, user: CurrentAccount, engine: Database):
     report = await run_in_threadpool(topic_db.get_report, engine, user.id, report_id)
     if report is None:
         raise HTTPException(404, "选题记录不存在")
     return report
+
+
+@router.post("/expand/tasks", status_code=202, summary="在已有设定基础上补全世界观细节")
+async def start_setting_expansion(
+        user: CurrentAccount, engine: Database,
+        files: list[UploadFile] | None = File(default=None),
+        text: str = Form(""),
+        instruction: str = Form(DEFAULT_EXPANSION_INSTRUCTION),
+        model: str | None = Form(None)):
+    documents, text, added_text = await _collect_materials(files, text)
+    instruction = instruction.strip()[:2000]
+    signature = hashlib.sha256(json.dumps({
+        "names": [row["name"] for row in documents],
+        "chars": [row["chars"] for row in documents],
+        "text_hash": hashlib.sha256(text.encode()).hexdigest()[:16] if text else "",
+        "instruction": instruction,
+    }, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+    file_count = sum(1 for row in documents if row["name"] != "粘贴文本")
+    title = ("设定补全 · 文件与粘贴文本" if file_count and added_text else
+             "设定补全 · 粘贴文本" if added_text else f"设定补全 · {file_count} 个文件")
+    return generation_jobs.store.start(
+        account_id=user.id, key=f"setting-expansion:{signature}", kind="setting",
+        title=title,
+        operation=lambda: expand_setting(documents, instruction, model, user.id, engine)).summary()
 
 
 @router.post("/analyze/tasks", status_code=202, summary="从上传文件或粘贴文本分析并推荐题材")
@@ -202,20 +293,7 @@ async def start_document_analysis(
         audience: str = Form("关注热门网络小说的读者"),
         idea_count: int = Form(4),
         model: str | None = Form(None)):
-    if len(text) > MAX_TEXT_CHARS:
-        raise HTTPException(422, f"粘贴文本不能超过 {MAX_TEXT_CHARS} 字符")
-    documents = await run_in_threadpool(_read_uploads, files or [])
-    text = text.strip()
-    added_text = False
-    if text:
-        remaining = MAX_TOTAL_CHARS - sum(len(row["text"]) for row in documents)
-        if remaining > 0:
-            take = min(len(text), MAX_TEXT_CHARS, remaining)
-            documents.append({"name": "粘贴文本", "chars": len(text), "text": text[:take],
-                              "truncated": take < len(text)})
-            added_text = True
-    if not documents:
-        raise HTTPException(422, "请上传文件或粘贴一段文本")
+    documents, text, added_text = await _collect_materials(files, text)
     idea_count = max(2, min(5, idea_count))
     instruction = instruction.strip()[:2000]
     genre_preference = genre_preference.strip()[:40] or "都市、玄幻、言情、悬疑等网文类型"

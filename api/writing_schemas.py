@@ -523,6 +523,28 @@ class NovelAnalysisReceipt(NovelAnalysisReport):
     record_id: int | None = None
 
 
+class SettingExpansionReport(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=120)
+    core_concept: str = Field(min_length=1, max_length=4000)
+    world_overview: str = Field(min_length=1, max_length=5000)
+    power_system: str = Field(min_length=1, max_length=5000)
+    profession_system: str = Field(default="", max_length=4000)
+    society: str = Field(default="", max_length=4000)
+    factions: str = Field(default="", max_length=4000)
+    story_hooks: list[str] = Field(default_factory=list, max_length=12)
+    preserved_elements: list[str] = Field(default_factory=list, max_length=20)
+    additions: list[str] = Field(default_factory=list, max_length=20)
+    open_questions: list[str] = Field(default_factory=list, max_length=12)
+
+
+class SettingExpansionReceipt(SettingExpansionReport):
+    file_names: list[str] = Field(default_factory=list)
+    generated_at: str
+    record_id: int | None = None
+
+
 class OutlineReceipt(BaseModel):
     project_id: RowId
     outline_id: RowId
