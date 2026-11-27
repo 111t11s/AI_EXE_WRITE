@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
 from agents.worldbuilding_agent import SLOT_LABELS, ConversationState, WorldbuildingAssistant, WorldbuildingGenerationError
 from api.generation_stream import generation_response
@@ -34,6 +35,22 @@ class MessageRequest(BaseModel):
     outline_theme: OutlineTheme = "development"
     # 可选模型配置 ID（GET /api/v1/models）；省略时使用主模型。
     model: str | None = Field(default=None, max_length=40)
+    world_template: dict[str, str] | None = None
+
+
+class WorldTemplateParseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=30000)
+    model: str | None = Field(default=None, max_length=40)
+
+
+@router.post("/world-template/parse", summary="把整段世界观文本拆解到模板字段")
+async def parse_world_template(request: WorldTemplateParseRequest, user: CurrentAccount) -> dict:
+    try:
+        template = await run_in_threadpool(_assistant.parse_world_template, request.text, request.model)
+    except WorldbuildingGenerationError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+    return {"template": template}
 
 
 class PrefillRequest(BaseModel):
@@ -61,7 +78,7 @@ async def send_message(session_id: str, request: MessageRequest, user: CurrentAc
     message = request.content.strip()
     if message in {"确认生成", "确认", "开始生成"}:
         try:
-            result = await _assistant.confirm(state, request.outline_theme, request.model)
+            result = await _assistant.confirm(state, request.outline_theme, request.model, request.world_template)
         except WorldbuildingGenerationError as exc:
             raise HTTPException(exc.status, str(exc)) from None
         except ValueError as exc:

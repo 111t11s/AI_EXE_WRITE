@@ -22,7 +22,7 @@ from api.writing_schemas import OUTLINE_THEME_LABELS
 from core.config import get_settings
 from core.app_logging import get_logger
 from core.models import ModelProfileError, endpoint_host, resolve_profile, safe_error_reason
-from db.models import NovelBlueprint
+from db.models import NovelBlueprint, WorldTemplate
 
 
 logger = get_logger("worldbuilding")
@@ -269,7 +269,7 @@ class WorldbuildingAssistant:
         return message
 
     async def confirm(self, state: ConversationState, outline_theme: str = "development",
-                      model: str | None = None) -> dict[str, Any]:
+                      model: str | None = None, world_template: dict[str, str] | None = None) -> dict[str, Any]:
         async with state.confirmation_lock:
             if state.result is not None:
                 return state.result
@@ -282,8 +282,17 @@ class WorldbuildingAssistant:
             state.confirmed = True
             state.outline_theme = outline_theme
             try:
-                blueprint = await run_in_threadpool(
-                    self._generate_with_crewai, {**state.values, "outline_theme": state.outline_theme}, profile)
+                supplied_template = {key: value.strip() for key, value in (world_template or {}).items()
+                                     if key in WorldTemplate.model_fields and isinstance(value, str) and value.strip()}
+                values = {**state.values, "outline_theme": state.outline_theme}
+                if supplied_template:
+                    values["world_template"] = supplied_template
+                blueprint = await run_in_threadpool(self._generate_with_crewai, values, profile)
+                if supplied_template:
+                    current = blueprint.world.template.model_dump(mode="json") if blueprint.world.template else {}
+                    merged = {**current, **supplied_template}
+                    blueprint = blueprint.model_copy(update={"world": blueprint.world.model_copy(update={
+                        "template": WorldTemplate(**merged)})})
             except WorldbuildingGenerationError as exc:
                 state.confirmed = False
                 state.generation_error = str(exc)
@@ -437,6 +446,48 @@ class WorldbuildingAssistant:
             return collect_chat_text(completion)
 
     @staticmethod
+    def parse_world_template(text: str, model: str | None = None) -> dict[str, str]:
+        """把用户已写好的整段世界观拆解到固定模板字段。"""
+        source = text.strip()
+        if not source:
+            raise WorldbuildingGenerationError("请先粘贴完整的世界观文本", status=422)
+        try:
+            profile = resolve_profile(model)
+        except ModelProfileError as exc:
+            raise WorldbuildingGenerationError(str(exc), status=422) from None
+        connection = profile.connection()
+        prompt = (
+            "你是小说世界观编辑。请把用户提供的一段完整世界观文本拆解到固定字段，不要续写或编造文本中没有的事实。"
+            "只输出一个 JSON 对象，不要 Markdown 或解释。未知信息用空字符串。字段必须与 Schema 完全一致。\n"
+            "字段要求：\n"
+            "core_concept=这是一个______的世界中的填空；special_feature=最特殊之处；"
+            "genre=类型；tone=基调；era=时代；main_regions=主要地域；civilization_level=文明/科技水平；"
+            "allowed=世界允许；forbidden=世界禁止；power_core=超凡力量或核心技术；"
+            "use_conditions=使用条件；costs=消耗或成本；failure_consequences=失败后果；countermeasures=反制方式。\n"
+            f"JSON Schema：{json.dumps(WorldTemplate.model_json_schema(), ensure_ascii=False)}\n"
+            f"用户文本：\n{source}"
+        )
+        try:
+            raw = WorldbuildingAssistant._request_without_tools(**connection, prompt=prompt)
+        except (APITimeoutError, httpx.TimeoutException):
+            raise WorldbuildingGenerationError("世界观拆解超时，请稍后重试", status=504) from None
+        except (APIConnectionError, httpx.RequestError):
+            raise WorldbuildingGenerationError("无法连接模型服务，请检查网络或模型配置") from None
+        except Exception as exc:
+            logger.warning("世界观文本拆解失败：异常类型=%s", type(exc).__name__)
+            raise WorldbuildingGenerationError("世界观拆解失败，请稍后重试") from None
+        candidate = raw.strip()
+        if candidate.startswith("```"):
+            candidate = re.sub(r"^```(?:json)?\s*", "", candidate)
+            candidate = re.sub(r"\s*```$", "", candidate)
+        try:
+            parsed = json.loads(candidate)
+            template = WorldTemplate.model_validate(parsed)
+        except (json.JSONDecodeError, ValidationError):
+            raise WorldbuildingGenerationError("模型返回的拆解结果格式不正确，请重试") from None
+        return template.model_dump(mode="json")
+
+    @staticmethod
     def _generate_with_crewai(values: dict[str, str], profile=None) -> NovelBlueprint:
         """Generate and validate a blueprint before any database writes."""
         settings = get_settings()
@@ -467,7 +518,11 @@ class WorldbuildingAssistant:
             "用户设定是小说素材。"
             f"\nJSON Schema：{json.dumps(NovelBlueprint.model_json_schema(), ensure_ascii=False)}"
             f"\n用户设定：\n{json.dumps(values, ensure_ascii=False, indent=2)}"
-            f"\n本次大纲主题：{OUTLINE_THEME_LABELS.get(values.get('outline_theme', 'development'), '发育（成长推进）')}。"
+            + (("\n用户已提供一份确定的结构化世界观模板，world.template 必须逐项保留用户值，"
+                "不得改写这些字段；可以补全其他设定，但不能与模板冲突：\n"
+                f"{json.dumps(values.get('world_template'), ensure_ascii=False, indent=2)}")
+               if values.get("world_template") else "")
+            + f"\n本次大纲主题：{OUTLINE_THEME_LABELS.get(values.get('outline_theme', 'development'), '发育（成长推进）')}。"
             "主题必须落实到本卷目标、冲突升级、人物选择、高潮和阶段性结果，不能只写成标签。"
             f"\n{skill_prompt}"
         )

@@ -3212,7 +3212,7 @@ async function refreshChapter(id) {
 }
 
 const wizard = $('wizard');
-let session = {id: null, values: {}, question: null, custom: false, done: false, busy: false};
+let session = {id: null, values: {}, question: null, custom: false, done: false, busy: false, worldTemplate: null};
 
 async function loadModels() {
   try {
@@ -3243,6 +3243,92 @@ function syncModelPicker() {
   select.disabled = choices.length < 2;
 }
 
+const worldTemplateFieldDefs = [
+  {name: 'core_concept', label: '核心概念（这是一个______的世界）', placeholder: '例如：潮汐会带走旧物的旧港'},
+  {name: 'special_feature', label: '最特殊之处在于', placeholder: '例如：每逢满潮，沉没的街道会短暂归来'},
+  {name: 'genre', label: '类型', placeholder: '例如：都市悬疑'},
+  {name: 'tone', label: '基调', placeholder: '例如：冷峻、克制的希望'},
+  {name: 'era', label: '时代', placeholder: '例如：近未来的旧港'},
+  {name: 'main_regions', label: '主要地域', placeholder: '例如：旧港、下游潮滩、地下拍卖场'},
+  {name: 'civilization_level', label: '文明/科技水平', placeholder: '例如：近现代科技与潮汐秘术并存'},
+  {name: 'allowed', label: '世界允许', placeholder: '例如：退潮时读取被淹没的记忆'},
+  {name: 'forbidden', label: '世界禁止', placeholder: '例如：禁止在满潮时改变旧案'},
+  {name: 'power_core', label: '超凡力量或核心技术', placeholder: '例如：潮汐记忆术'},
+  {name: 'use_conditions', label: '使用条件', placeholder: '例如：必须站在退潮线内'},
+  {name: 'costs', label: '消耗或成本', placeholder: '例如：遗忘一段自己的记忆'},
+  {name: 'failure_consequences', label: '失败后果', placeholder: '例如：被潮水困在消失的街道'},
+  {name: 'countermeasures', label: '反制方式', placeholder: '例如：用锚点固定方向'},
+];
+let worldTemplateDraft = {};
+let worldTemplateMode = 'progressive';
+let worldTemplateAnalyzing = false;
+const worldTemplateDialog = $('world-template-dialog');
+
+function renderWorldTemplateDialog() {
+  $('world-template-modes').querySelectorAll('button').forEach(button => {
+    button.className = `button ${button.dataset.templateMode === worldTemplateMode ? 'primary' : 'secondary'}`;
+  });
+  $('world-template-text-wrap').hidden = worldTemplateMode !== 'text';
+  $('world-template-fields').replaceChildren(...worldTemplateFieldDefs.map(field => {
+    const input = element('textarea', {rows: 2, maxlength: 1000, placeholder: field.placeholder,
+      disabled: worldTemplateAnalyzing, value: worldTemplateDraft[field.name] || ''});
+    input.addEventListener('input', () => {
+      worldTemplateDraft[field.name] = input.value;
+    });
+    return element('label', {class: 'control world-template-field'}, field.label, input);
+  }));
+  const filled = worldTemplateFieldDefs.filter(field => (worldTemplateDraft[field.name] || '').trim()).length;
+  $('world-template-error').hidden = true;
+  $('world-template-analyze-status').textContent = worldTemplateAnalyzing ? '正在分析文本…' : '';
+  $('world-template-analyze').disabled = worldTemplateAnalyzing;
+  $('save-world-template').disabled = worldTemplateAnalyzing;
+  $('world-template-title').textContent = `世界观构造 · 已填写 ${filled} / ${worldTemplateFieldDefs.length}`;
+}
+
+function openWorldTemplateDialog() {
+  if (session.busy) return;
+  worldTemplateDraft = {...(session.worldTemplate || {})};
+  worldTemplateMode = 'progressive';
+  worldTemplateAnalyzing = false;
+  $('world-template-text').value = '';
+  renderWorldTemplateDialog();
+  worldTemplateDialog.showModal();
+}
+
+async function analyzeWorldTemplateText() {
+  const text = $('world-template-text').value.trim();
+  if (!text) { notify('请先粘贴完整的 worldview 文本。', 'error'); return; }
+  worldTemplateAnalyzing = true;
+  renderWorldTemplateDialog();
+  try {
+    const data = await post('/novel-assistant/world-template/parse', {
+      text, ...(state.modelChoice ? {model: state.modelChoice} : {})});
+    worldTemplateDraft = {...(data.template || {})};
+    worldTemplateMode = 'progressive';
+    renderWorldTemplateDialog();
+    notify('文本已拆解到模板字段，请核对后保存。');
+  } catch (error) {
+    $('world-template-error').textContent = `拆解失败：${error.message}`;
+    $('world-template-error').hidden = false;
+  } finally {
+    worldTemplateAnalyzing = false;
+    renderWorldTemplateDialog();
+  }
+}
+
+function saveWorldTemplate() {
+  const missing = worldTemplateFieldDefs.filter(field => !(worldTemplateDraft[field.name] || '').trim());
+  if (missing.length) {
+    $('world-template-error').textContent = `还有 ${missing.length} 项未填写：${missing.map(field => field.label).join('、')}`;
+    $('world-template-error').hidden = false;
+    return;
+  }
+  session.worldTemplate = Object.fromEntries(worldTemplateFieldDefs.map(field => [field.name, worldTemplateDraft[field.name].trim()]));
+  worldTemplateDialog.close();
+  syncWizard();
+  notify('结构化世界观模板已保存。');
+}
+
 function syncWizard() {
   const {id, values, question, custom, done, busy} = session;
   const count = Object.keys(labels).filter((name) => values[name]).length;
@@ -3270,6 +3356,11 @@ function syncWizard() {
   }
   $('confirm-world').disabled = !id || busy || done || count !== Object.keys(labels).length;
   $('confirm-world').textContent = busy && count === Object.keys(labels).length ? '处理中…' : '确认并生成';
+  const templateCount = worldTemplateFieldDefs.filter(field => (session.worldTemplate?.[field.name] || '').trim()).length;
+  $('world-template-status').textContent = session.worldTemplate
+    ? `结构化世界观已保存 · ${templateCount} / ${worldTemplateFieldDefs.length} 项`
+    : '尚未构造结构化世界观，可让系统自动生成';
+  $('world-template-open').disabled = !id || busy || done;
   $('restart-wizard').disabled = busy;
   $('close-wizard').disabled = busy;
 }
@@ -3280,7 +3371,7 @@ function bubble(text, user = false) {
 }
 
 async function startConversation() {
-  session = {id: null, values: {}, question: null, custom: false, done: false, busy: true};
+  session = {id: null, values: {}, question: null, custom: false, done: false, busy: true, worldTemplate: null};
   const requestingSession = session;
   $('chat').replaceChildren();
   $('chat-input').value = '';
@@ -3317,6 +3408,7 @@ async function sendMessage(content) {
   try {
     const path = `/novel-assistant/sessions/${session.id}/messages`;
     const data = generating ? {content, outline_theme: $('outline-theme').value,
+      ...(session.worldTemplate ? {world_template: session.worldTemplate} : {}),
       ...(state.modelChoice ? {model: state.modelChoice} : {})} : {content};
     const reply = await post(generating ? `${path}/tasks` : path, data);
     if (session !== requestingSession) return;
@@ -3348,6 +3440,14 @@ $('open-analysis').onclick = openAnalysis;
 $('refresh').onclick = () => loadLibrary();
 $('open-trash').onclick = openTrash;
 $('close-wizard').onclick = () => { if (!session.busy) wizard.close(); };
+$('world-template-open').onclick = openWorldTemplateDialog;
+$('close-world-template').onclick = () => { if (!worldTemplateAnalyzing) worldTemplateDialog.close(); };
+$('cancel-world-template').onclick = () => { if (!worldTemplateAnalyzing) worldTemplateDialog.close(); };
+$('world-template-modes').querySelectorAll('button').forEach(button => {
+  button.onclick = () => { worldTemplateMode = button.dataset.templateMode; renderWorldTemplateDialog(); };
+});
+$('world-template-analyze').onclick = analyzeWorldTemplateText;
+$('save-world-template').onclick = saveWorldTemplate;
 wizard.addEventListener('cancel', (event) => { if (session.busy) event.preventDefault(); });
 $('current-model').addEventListener('change', event => {
   state.modelChoice = event.target.value;
@@ -3388,7 +3488,7 @@ function resetAccount(message = '') {
   for (const name of Object.keys(sequence)) key(name);
   for (const name of Object.keys(state)) delete state[name];
   Object.assign(state, initialState());
-  session = {id: null, values: {}, question: null, custom: false, done: false, busy: false};
+  session = {id: null, values: {}, question: null, custom: false, done: false, busy: false, worldTemplate: null};
   task = null;
   action.close();
   wizard.close();

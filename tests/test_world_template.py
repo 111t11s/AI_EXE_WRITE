@@ -1,5 +1,27 @@
 from test_character_generation import novel  # noqa: F401 - pytest fixture
 
+from agents.worldbuilding_agent import WorldbuildingAssistant
+
+
+def test_world_template_text_is_split_into_fields(novel, monkeypatch):
+    project, client, headers = novel["project"], novel["client"], novel["headers"]["writer"]
+    fields = {
+        "core_concept": "潮汐城市", "special_feature": "街道随潮水移动",
+        "genre": "奇幻", "tone": "希望", "era": "洪水之后",
+        "main_regions": "沉没的旧城", "civilization_level": "低科技",
+        "allowed": "低潮读取旧图", "forbidden": "满潮使用旧图",
+        "power_core": "潮汐魔法", "use_conditions": "站在潮线内",
+        "costs": "消耗记忆", "failure_consequences": "被困街道",
+        "countermeasures": "锚点固定",
+    }
+    monkeypatch.setattr(WorldbuildingAssistant, "parse_world_template",
+                        staticmethod(lambda text, model=None: fields))
+    response = client.post("/api/v1/novel-assistant/world-template/parse",
+                           headers=headers, json={"text": "这是一个潮汐城市，街道会随潮水移动。"})
+    assert response.status_code == 200, response.text
+    assert response.json()["template"]["core_concept"] == "潮汐城市"
+    assert response.json()["template"]["countermeasures"] == "锚点固定"
+
 
 def test_world_template_is_persisted_and_returned(novel):
     project, client, headers = novel["project"], novel["client"], novel["headers"]["writer"]

@@ -244,3 +244,13 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 .world-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px;color:var(--muted);font-size:.75rem}
 @media(max-width:720px){.world-template{grid-template-columns:minmax(0,1fr)}}
 
+/* 世界观模板构造 */
+.template-status{display:grid;gap:6px;padding:8px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.template-status span{color:var(--muted);font-size:.72rem;line-height:1.4}
+.world-template-dialog{width:min(980px,96vw)}
+.world-template-builder{display:grid;gap:10px;max-height:min(68vh,720px);overflow:auto;padding-right:4px}
+.world-template-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.world-template-field textarea{min-height:58px;resize:vertical}
+#world-template-text{min-height:120px;resize:vertical}
+@media(max-width:760px){.world-template-fields{grid-template-columns:minmax(0,1fr)}}
+
