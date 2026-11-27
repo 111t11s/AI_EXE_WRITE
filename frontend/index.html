@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#191923">
   <title>墨间 · 小说工作台</title>
-  <link rel="stylesheet" href="/workbench.css?v=compact-layout-20261128">
+  <link rel="stylesheet" href="/workbench.css?v=template-task-20261128">
   <script src="/runtime-config.js?v=outline-skills-20261114"></script>
   <script type="importmap">
     {"imports": {
-      "/workbench.js": "/workbench.js?v=compact-layout-20261128",
+      "/workbench.js": "/workbench.js?v=template-task-20261128",
       "/api-client.js": "/api-client.js?v=character-progress-20261116",
       "/generation-stream.js": "/generation-stream.js?v=thinking-panel-20261125"
     }}
@@ -101,34 +101,22 @@
     </form>
   </dialog>
 
-  <dialog class="dialog wizard" id="wizard" aria-labelledby="wizard-title">
-    <header class="dialog-head"><div><p class="eyebrow">新建小说</p><h2 id="wizard-title">选择小说基础设定</h2></div><button class="icon-button" type="button" id="close-wizard" aria-label="关闭">×</button></header>
-    <div class="wizard-grid">
-      <div class="wizard-conversation">
-        <div class="chat" id="chat" role="log" aria-label="设定问答"></div>
-        <div class="question-picker" id="question-picker" hidden><p class="muted" id="question-label"></p><div class="question-options" id="question-options" role="group" aria-labelledby="question-label"></div></div>
-        <form class="composer" id="chat-form" hidden><label class="sr-only" for="chat-input">自定义设定或修改已收集设定</label><input id="chat-input" required maxlength="4000" autocomplete="off" placeholder="输入自定义设定…"><button class="button primary" type="submit" id="chat-send">发送</button></form>
-      </div>
-      <aside class="wizard-settings"><h3>已收集设定 <span id="slot-count" class="muted"></span></h3><dl class="slots" id="slots"></dl><p class="muted" id="outline-skill" role="status" aria-live="polite">选择小说类型后自动加载大纲设计技能。</p><div class="template-status"><span id="world-template-status">尚未构造结构化世界观</span><button class="button secondary" type="button" id="world-template-open">构造世界观模板</button></div><label class="control">本版大纲主题<select id="outline-theme"><option value="development">发育（成长推进）</option><option value="comeback">逆袭</option><option value="ending">结尾收束</option><option value="survival">逃杀（生存竞逐）</option><option value="revenge">复仇</option><option value="mystery">揭秘</option><option value="relationship">关系推进</option><option value="custom">自定义主题（结合上方设定）</option></select></label><button class="button primary" type="button" id="confirm-world" disabled>确认并生成</button></aside>
-    </div>
-    <footer class="dialog-foot"><button class="button secondary" type="button" id="restart-wizard">开始新对话</button></footer>
-  </dialog>
-
   <dialog class="dialog world-template-dialog" id="world-template-dialog" aria-labelledby="world-template-title">
-    <header class="dialog-head"><div><p class="eyebrow">世界观构造</p><h2 id="world-template-title">选择输入方式</h2></div><button class="icon-button" type="button" id="close-world-template" aria-label="关闭">×</button></header>
+    <header class="dialog-head"><div><p class="eyebrow">新建小说</p><h2 id="world-template-title">构造世界观模板</h2></div><button class="icon-button" type="button" id="close-world-template" aria-label="关闭">×</button></header>
     <div class="world-template-builder">
+      <label class="control">小说名称（可选，留空由 AI 生成）<input id="novel-title" maxlength="200" autocomplete="off" placeholder="例如：潮汐旧港"></label>
       <div class="actions" id="world-template-modes">
         <button class="button primary" type="button" data-template-mode="progressive">渐进式填写</button>
         <button class="button secondary" type="button" data-template-mode="text">整段文本拆解</button>
       </div>
       <div id="world-template-text-wrap" hidden>
-        <label class="control">已构造完成的世界观文本<textarea id="world-template-text" rows="6" maxlength="30000" placeholder="把整段世界观设定粘贴到这里，系统会拆解到下方字段，拆解后仍可逐项修改。"></textarea></label>
-        <div class="actions"><button class="button primary" type="button" id="world-template-analyze">分析并拆解到字段</button><span class="muted" id="world-template-analyze-status"></span></div>
+        <label class="control">已构造完成的世界观文本<textarea id="world-template-text" rows="6" maxlength="30000" placeholder="把整段世界观设定粘贴到这里，AI 会先理解全文，再拆解到下方字段；拆解后仍可逐项修改。"></textarea></label>
+        <div class="actions"><button class="button primary" type="button" id="world-template-analyze">AI 分析并拆解到字段</button><span class="muted" id="world-template-analyze-status"></span></div>
       </div>
       <div class="world-template-fields" id="world-template-fields"></div>
       <p class="muted" id="world-template-error" role="alert" hidden></p>
     </div>
-    <footer class="dialog-foot"><button class="button secondary" type="button" id="cancel-world-template">取消</button><button class="button primary" type="button" id="save-world-template">保存模板</button></footer>
+    <footer class="dialog-foot"><button class="button secondary" type="button" id="cancel-world-template">取消</button><button class="button primary" type="button" id="save-world-template">生成小说</button></footer>
   </dialog>
 </body>
 </html>

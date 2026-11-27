@@ -27,7 +27,7 @@ MAX_TEXT = 250_000
 # 与前端任务分类保持一致：把细分任务类型归到页面上的分类。
 CATEGORY_KINDS = {"worldbuilding", "outline", "characters", "draft", "plan", "review", "consistency", "topics", "analysis", "setting", "trends"}
 KIND_CATEGORY = {"character_progress": "characters", "batch_draft": "draft", "consistency_repair": "consistency",
-                 "trends": "topics"}
+                 "trends": "topics", "world_template": "worldbuilding"}
 STATUSES = {"all", "running", "completed", "failed"}
 
 

@@ -3,8 +3,10 @@
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
+
+from db.models import WorldTemplate
 
 from agents.worldbuilding_agent import SLOT_LABELS, ConversationState, WorldbuildingAssistant, WorldbuildingGenerationError
 from api.generation_stream import generation_response
@@ -42,6 +44,58 @@ class WorldTemplateParseRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1, max_length=30000)
     model: str | None = Field(default=None, max_length=40)
+
+
+class NovelFromTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    world_template: dict[str, str]
+    title: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=40)
+
+
+@router.post("/from-template/tasks", status_code=202, summary="按结构化世界观模板新建小说")
+async def start_novel_from_template(request: NovelFromTemplateRequest, user: CurrentAccount):
+    try:
+        template = WorldTemplate.model_validate(request.world_template)
+    except ValidationError:
+        raise HTTPException(422, "世界观模板字段不完整或格式不正确") from None
+    missing = [label for label, value in (
+        ("核心概念", template.core_concept), ("最特殊之处", template.special_feature),
+        ("类型", template.genre), ("基调", template.tone), ("时代", template.era),
+        ("主要地域", template.main_regions), ("文明/科技水平", template.civilization_level),
+        ("世界允许", template.allowed), ("世界禁止", template.forbidden),
+        ("超凡力量或核心技术", template.power_core), ("使用条件", template.use_conditions),
+        ("消耗或成本", template.costs), ("失败后果", template.failure_consequences),
+        ("反制方式", template.countermeasures)) if not value.strip()]
+    if missing:
+        raise HTTPException(422, "世界观模板缺少：" + "、".join(missing))
+    session_id = uuid4().hex
+    values = {
+        "genre": template.genre,
+        "setting": f"{template.era}；{template.main_regions}",
+        "power_system": template.power_core,
+        "cheat": template.special_feature,
+        "protagonist": "由当前世界观自动生成的男女主",
+        "goal": f"在{template.core_concept}的世界中掌握核心规则并解决主要冲突",
+        "tone": template.tone,
+        "length": "长篇",
+    }
+    state = ConversationState(account_id=user.id, values=values)
+    _sessions[session_id] = state
+    payload = template.model_dump(mode="json")
+    return generation_jobs.store.start(
+        account_id=user.id, key=f"worldbuilding:template:{session_id}", kind="worldbuilding",
+        title="按世界观模板生成小说", resource_id=session_id,
+        operation=lambda: _assistant.confirm(state, "development", request.model, payload, request.title)).summary()
+
+
+@router.post("/world-template/parse/tasks", status_code=202, summary="后台 AI 拆解世界观文本")
+async def parse_world_template_task(request: WorldTemplateParseRequest, user: CurrentAccount):
+    async def operation():
+        return {"template": await run_in_threadpool(_assistant.parse_world_template, request.text, request.model)}
+    return generation_jobs.store.start(
+        account_id=user.id, key=f"world-template:{uuid4().hex}", kind="world_template",
+        title="AI 拆解世界观文本", operation=operation).summary()
 
 
 @router.post("/world-template/parse", summary="把整段世界观文本拆解到模板字段")

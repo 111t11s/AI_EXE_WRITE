@@ -105,7 +105,8 @@ const jobStatuses = {running: '生成中', completed: '已完成', failed: '未�
 const taskCategories = [['all', '全部任务'], ['worldbuilding', '世界观'], ['outline', '大纲'], ['characters', '角色'],
   ['draft', '正文'], ['plan', '章节规划'], ['review', '审读'], ['consistency', '一致性核对'], ['topics', '选题'], ['setting', '设定'], ['analysis', '拆解'], ['other', '其他']];
 const taskKindCategory = kind => kind === 'character_progress' ? 'characters' :
-  kind === 'batch_draft' ? 'draft' : kind === 'consistency_repair' ? 'consistency' : kind === 'trends' ? 'topics' : kind;
+  kind === 'batch_draft' ? 'draft' : kind === 'consistency_repair' ? 'consistency' :
+    kind === 'trends' ? 'topics' : kind === 'world_template' ? 'worldbuilding' : kind;
 const taskCategoryName = kind => taskCategories.find(([value]) => value === taskKindCategory(kind))?.[1] || '其他';
 const taskProjectName = projectId => {
   if (projectId === 'all') return '全部书籍';
@@ -370,6 +371,16 @@ function renderTaskResult(job, result) {
   else if (job.kind === 'trends' || job.kind === 'topics') content.push(trendReportView(result));
   else if (job.kind === 'analysis') content.push(analysisReportView(result));
   else if (job.kind === 'setting') content.push(settingExpansionView(result));
+  else if (job.kind === 'world_template') {
+    const template = result.template || {};
+    content.push(panel('AI 世界观拆解结果', stack(
+      prose('已按语义把整段文本拆解为结构化模板，可核对后直接用于新建小说。'),
+      worldTemplateView({template}))));
+    content.push(actions(button('用此模板新建小说', () => {
+      stopProgress();
+      openWorldTemplateDialog(template);
+    }, 'primary')));
+  }
   else {
     let message = '生成结果已保存，可打开小说查看。';
     if (job.kind === 'worldbuilding') message = result.persistence?.error ? `生成完成但保存未完整：${result.persistence.error}` :
@@ -2183,31 +2194,11 @@ function trendReportView(report) {
     details(['本次参考来源', report.topics.join('\n')]),
     report.record_id ? muted('已保存到选题历史，可在「文件选题」页再次查看。') : null,
     muted(`生成时间：${new Date(report.generated_at).toLocaleString()}${report.sources?.length ? ` · 来源：${report.sources.join('、')}` : ''}`)),
-  '选一条直接进入新建小说，预填后仍可继续调整。'), ...cards);
+  '选一条进入世界观模板，按模板新建小说。'), ...cards);
 }
 
-async function startFromTrend(idea) {
-  const values = {};
-  for (const key of ['genre', 'setting', 'power_system', 'cheat', 'protagonist', 'goal', 'tone', 'length']) {
-    if (idea[key]) values[key] = String(idea[key]);
-  }
-  if (!wizard.open) wizard.showModal();
-  if (!session.id || session.done) {
-    await startConversation();
-    if (!session.id) { notify('无法开始新对话，请重试。', 'error'); return; }
-  }
-  try {
-    const reply = await post(`/novel-assistant/sessions/${session.id}/prefill`, {values});
-    session.values = reply.values;
-    session.question = reply.question;
-    session.outlineSkill = reply.outline_skill;
-    session.custom = false;
-    bubble(reply.message);
-    syncWizard();
-    notify('已按推荐题材预填设定，可继续调整后确认生成。');
-  } catch (error) {
-    notify(`预填失败：${error.message}`, 'error');
-  }
+function startFromTrend(idea) {
+  openWorldTemplateDialog();
 }
 
 function consistencySuggestionDialog(report, index, adopt = false) {
@@ -3213,7 +3204,6 @@ async function refreshChapter(id) {
   await loadChapters(state.page?.offset ?? 0, id);
 }
 
-const wizard = $('wizard');
 let session = {id: null, values: {}, question: null, custom: false, done: false, busy: false, worldTemplate: null};
 
 async function loadModels() {
@@ -3273,7 +3263,8 @@ function renderWorldTemplateDialog() {
   $('world-template-text-wrap').hidden = worldTemplateMode !== 'text';
   $('world-template-fields').replaceChildren(...worldTemplateFieldDefs.map(field => {
     const input = element('textarea', {rows: 2, maxlength: 1000, placeholder: field.placeholder,
-      disabled: worldTemplateAnalyzing, value: worldTemplateDraft[field.name] || ''});
+      disabled: worldTemplateAnalyzing});
+    input.value = worldTemplateDraft[field.name] || '';
     input.addEventListener('input', () => {
       worldTemplateDraft[field.name] = input.value;
     });
@@ -3281,34 +3272,51 @@ function renderWorldTemplateDialog() {
   }));
   const filled = worldTemplateFieldDefs.filter(field => (worldTemplateDraft[field.name] || '').trim()).length;
   $('world-template-error').hidden = true;
-  $('world-template-analyze-status').textContent = worldTemplateAnalyzing ? '正在分析文本…' : '';
+  $('world-template-analyze-status').textContent = worldTemplateAnalyzing ? 'AI 正在理解全文并拆解…' : '';
   $('world-template-analyze').disabled = worldTemplateAnalyzing;
   $('save-world-template').disabled = worldTemplateAnalyzing;
   $('world-template-title').textContent = `世界观构造 · 已填写 ${filled} / ${worldTemplateFieldDefs.length}`;
 }
 
-function openWorldTemplateDialog() {
-  if (session.busy) return;
-  worldTemplateDraft = {...(session.worldTemplate || {})};
+function openWorldTemplateDialog(initialTemplate = null) {
+  if (state.busy) return;
+  worldTemplateDraft = {...(initialTemplate || {})};
   worldTemplateMode = 'progressive';
   worldTemplateAnalyzing = false;
+  $('novel-title').value = '';
   $('world-template-text').value = '';
   renderWorldTemplateDialog();
   worldTemplateDialog.showModal();
 }
 
+async function waitForTemplateJob(jobId) {
+  while (true) {
+    const detail = await api(`/generation-jobs/${jobId}`);
+    if (detail.status === 'completed') return detail;
+    if (detail.status === 'failed') {
+      throw new Error(detail.error?.message || 'AI 世界观拆解失败，请重试');
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
 async function analyzeWorldTemplateText() {
   const text = $('world-template-text').value.trim();
-  if (!text) { notify('请先粘贴完整的 worldview 文本。', 'error'); return; }
+  if (!text) { notify('请先粘贴完整的世界观文本。', 'error'); return; }
   worldTemplateAnalyzing = true;
   renderWorldTemplateDialog();
   try {
-    const data = await post('/novel-assistant/world-template/parse', {
+    const job = await post('/novel-assistant/world-template/parse/tasks', {
       text, ...(state.modelChoice ? {model: state.modelChoice} : {})});
-    worldTemplateDraft = {...(data.template || {})};
+    recordJob(job);
+    notify('已提交任务中心，AI 正在分析世界观文本。');
+    const detail = await waitForTemplateJob(job.id);
+    const template = detail.result?.template;
+    if (!template) throw new Error('AI 没有返回可用模板');
+    worldTemplateDraft = {...template};
     worldTemplateMode = 'progressive';
     renderWorldTemplateDialog();
-    notify('文本已拆解到模板字段，请核对后保存。');
+    notify('AI 已拆解到模板字段，请核对后生成小说。');
   } catch (error) {
     $('world-template-error').textContent = `拆解失败：${error.message}`;
     $('world-template-error').hidden = false;
@@ -3318,122 +3326,36 @@ async function analyzeWorldTemplateText() {
   }
 }
 
-function saveWorldTemplate() {
+async function saveWorldTemplate() {
   const missing = worldTemplateFieldDefs.filter(field => !(worldTemplateDraft[field.name] || '').trim());
   if (missing.length) {
     $('world-template-error').textContent = `还有 ${missing.length} 项未填写：${missing.map(field => field.label).join('、')}`;
     $('world-template-error').hidden = false;
     return;
   }
-  session.worldTemplate = Object.fromEntries(worldTemplateFieldDefs.map(field => [field.name, worldTemplateDraft[field.name].trim()]));
-  worldTemplateDialog.close();
-  syncWizard();
-  notify('结构化世界观模板已保存。');
-}
-
-function syncWizard() {
-  const {id, values, question, custom, done, busy} = session;
-  const count = Object.keys(labels).filter((name) => values[name]).length;
-  $('slot-count').textContent = `${count} / ${Object.keys(labels).length}`;
-  $('slots').replaceChildren(...Object.entries(labels).map(([name, label]) =>
-    element('div', {}, element('dt', {}, label), element('dd', {}, values[name] || '待补充'))));
-  $('outline-skill').textContent = session.outlineSkill?.notice || '选择小说类型后自动加载大纲设计技能。';
-  $('chat-input').disabled = !id || busy || done;
-  $('chat-send').disabled = !id || busy || done;
-  $('outline-theme').disabled = !id || busy || done;
-  $('chat-form').hidden = !id || done || Boolean(question && !custom);
-  $('chat-input').placeholder = question ? `输入自定义${question.label}…` : '修改设定，例如：小说类型：仙侠';
-  $('question-picker').hidden = !id || !question || done;
-  $('question-options').replaceChildren();
-  if (question && !done) {
-    $('question-label').textContent = `${question.label} · 点击选择，或自定义填写`;
-    $('question-options').append(...question.options.map((option) =>
-      button(option, () => sendMessage(option), 'secondary question-option', busy)),
-    element('button', {type: 'button', class: 'button secondary question-option custom-option',
-      disabled: busy, 'aria-pressed': String(custom), 'aria-controls': 'chat-form', click: () => {
-        session.custom = !session.custom;
-        syncWizard();
-        if (session.custom) $('chat-input').focus();
-      }}, '自定义…'));
-  }
-  $('confirm-world').disabled = !id || busy || done || count !== Object.keys(labels).length;
-  $('confirm-world').textContent = busy && count === Object.keys(labels).length ? '处理中…' : '确认并生成';
-  const templateCount = worldTemplateFieldDefs.filter(field => (session.worldTemplate?.[field.name] || '').trim()).length;
-  $('world-template-status').textContent = session.worldTemplate
-    ? `结构化世界观已保存 · ${templateCount} / ${worldTemplateFieldDefs.length} 项`
-    : '尚未构造结构化世界观，可让系统自动生成';
-  $('world-template-open').disabled = !id || busy || done;
-  $('restart-wizard').disabled = busy;
-  $('close-wizard').disabled = busy;
-}
-
-function bubble(text, user = false) {
-  $('chat').append(element('p', {class: `bubble${user ? ' user' : ''}`}, text));
-  $('chat').scrollTop = $('chat').scrollHeight;
-}
-
-async function startConversation() {
-  session = {id: null, values: {}, question: null, custom: false, done: false, busy: true, worldTemplate: null};
-  const requestingSession = session;
-  $('chat').replaceChildren();
-  $('chat-input').value = '';
-  syncWizard();
+  const worldTemplate = Object.fromEntries(worldTemplateFieldDefs.map(field => [field.name, worldTemplateDraft[field.name].trim()]));
+  const title = $('novel-title').value.trim();
+  $('save-world-template').disabled = true;
   try {
-    const reply = await post('/novel-assistant/sessions');
-    if (session !== requestingSession) return;
-    session.id = reply.session_id;
-    session.values = reply.values;
-    session.question = reply.question;
-    session.outlineSkill = reply.outline_skill;
-    bubble(reply.message);
+    const job = await post('/novel-assistant/from-template/tasks', {
+      world_template: worldTemplate,
+      ...(title ? {title} : {}),
+      ...(state.modelChoice ? {model: state.modelChoice} : {}),
+    });
+    worldTemplateDialog.close();
+    recordJob(job);
+    notify('已按世界观模板开始生成小说、初始大纲和男女主。');
   } catch (error) {
-    if (session === requestingSession) bubble(`无法开始对话：${error.message}。可点击「开始新对话」重试。`);
+    $('world-template-error').textContent = `生成失败：${error.message}`;
+    $('world-template-error').hidden = false;
   } finally {
-    if (session === requestingSession) { session.busy = false; syncWizard(); }
+    $('save-world-template').disabled = false;
   }
 }
 
 function openWizard() {
   if (state.busy) return;
-  wizard.showModal();
-  if (!session.id || session.done) void startConversation();
-  else syncWizard();
-}
-
-async function sendMessage(content) {
-  if (!content || !session.id || session.busy || session.done) return;
-  const generating = ['确认生成', '确认', '开始生成'].includes(content);
-  const requestingSession = session;
-  session.busy = true;
-  syncWizard();
-  bubble(content, true);
-  try {
-    const path = `/novel-assistant/sessions/${session.id}/messages`;
-    const data = generating ? {content, outline_theme: $('outline-theme').value,
-      ...(session.worldTemplate ? {world_template: session.worldTemplate} : {}),
-      ...(state.modelChoice ? {model: state.modelChoice} : {})} : {content};
-    const reply = await post(generating ? `${path}/tasks` : path, data);
-    if (session !== requestingSession) return;
-    if (generating) {
-      session.done = true;
-      session.question = null;
-      wizard.close();
-      recordJob(reply);
-      return;
-    }
-    session.values = reply.values;
-    session.done = reply.done;
-    session.question = reply.question;
-    session.outlineSkill = reply.outline_skill;
-    session.custom = false;
-    $('chat-input').value = '';
-    bubble(reply.message);
-  } catch (error) {
-    if (session !== requestingSession) return;
-    bubble(error.status === 404 ? '这个会话已过期，请点击「开始新对话」。' : `请求失败：${error.message}`);
-  } finally {
-    if (session === requestingSession) { session.busy = false; syncWizard(); }
-  }
+  openWorldTemplateDialog();
 }
 
 $('new-project').onclick = openWizard;
@@ -3441,8 +3363,6 @@ $('open-trends').onclick = openTrends;
 $('open-analysis').onclick = openAnalysis;
 $('refresh').onclick = () => loadLibrary();
 $('open-trash').onclick = openTrash;
-$('close-wizard').onclick = () => { if (!session.busy) wizard.close(); };
-$('world-template-open').onclick = openWorldTemplateDialog;
 $('close-world-template').onclick = () => { if (!worldTemplateAnalyzing) worldTemplateDialog.close(); };
 $('cancel-world-template').onclick = () => { if (!worldTemplateAnalyzing) worldTemplateDialog.close(); };
 $('world-template-modes').querySelectorAll('button').forEach(button => {
@@ -3450,19 +3370,9 @@ $('world-template-modes').querySelectorAll('button').forEach(button => {
 });
 $('world-template-analyze').onclick = analyzeWorldTemplateText;
 $('save-world-template').onclick = saveWorldTemplate;
-wizard.addEventListener('cancel', (event) => { if (session.busy) event.preventDefault(); });
 $('current-model').addEventListener('change', event => {
   state.modelChoice = event.target.value;
   try { localStorage.setItem(modelStorageKey, state.modelChoice); } catch { /* Storage is optional. */ }
-});
-$('restart-wizard').onclick = startConversation;
-$('confirm-world').onclick = () => sendMessage('确认生成');
-$('chat-form').addEventListener('submit', (event) => {
-  event.preventDefault();
-  const input = $('chat-input');
-  const text = input.value.trim();
-  if (!text) return;
-  void sendMessage(text);
 });
 
 const accountDialog = $('account-dialog');
@@ -3493,19 +3403,15 @@ function resetAccount(message = '') {
   session = {id: null, values: {}, question: null, custom: false, done: false, busy: false, worldTemplate: null};
   task = null;
   action.close();
-  wizard.close();
   passwordDialog.close();
   $('password-form').reset();
   progressGeneration.hide();
   $('task-progress-result').replaceChildren();
-  $('chat').replaceChildren();
   $('action-fields').replaceChildren();
   $('action-title').textContent = '';
   $('action-description').textContent = '';
   $('action-error').textContent = '';
-  $('chat-input').value = '';
   notify();
-  syncWizard();
   $('account-name').textContent = '';
   $('account-password').value = '';
   $('activity').hidden = true;

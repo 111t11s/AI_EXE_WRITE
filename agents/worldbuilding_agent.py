@@ -269,7 +269,8 @@ class WorldbuildingAssistant:
         return message
 
     async def confirm(self, state: ConversationState, outline_theme: str = "development",
-                      model: str | None = None, world_template: dict[str, str] | None = None) -> dict[str, Any]:
+                      model: str | None = None, world_template: dict[str, str] | None = None,
+                      title: str | None = None) -> dict[str, Any]:
         async with state.confirmation_lock:
             if state.result is not None:
                 return state.result
@@ -293,6 +294,9 @@ class WorldbuildingAssistant:
                     merged = {**current, **supplied_template}
                     blueprint = blueprint.model_copy(update={"world": blueprint.world.model_copy(update={
                         "template": WorldTemplate(**merged)})})
+                if title and title.strip():
+                    blueprint = blueprint.model_copy(update={"project": blueprint.project.model_copy(update={
+                        "title": title.strip()[:200]})})
             except WorldbuildingGenerationError as exc:
                 state.confirmed = False
                 state.generation_error = str(exc)
@@ -447,7 +451,7 @@ class WorldbuildingAssistant:
 
     @staticmethod
     def parse_world_template(text: str, model: str | None = None) -> dict[str, str]:
-        """把用户已写好的整段世界观拆解到固定模板字段。"""
+        """调用 AI 理解整段世界观文本，再拆解到固定模板字段。"""
         source = text.strip()
         if not source:
             raise WorldbuildingGenerationError("请先粘贴完整的世界观文本", status=422)
@@ -457,34 +461,53 @@ class WorldbuildingAssistant:
             raise WorldbuildingGenerationError(str(exc), status=422) from None
         connection = profile.connection()
         prompt = (
-            "你是小说世界观编辑。请把用户提供的一段完整世界观文本拆解到固定字段，不要续写或编造文本中没有的事实。"
-            "只输出一个 JSON 对象，不要 Markdown 或解释。未知信息用空字符串。字段必须与 Schema 完全一致。\n"
+            "你是小说世界观编辑。请先理解用户提供的整段世界观文本，再按语义拆解到固定字段；"
+            "不要按行或标题机械截断，同一信息跨段出现时合并，保留原文专名和因果关系；"
+            "不要续写、扩写或编造文本中没有的事实。未知信息用空字符串。"
+            "只输出一个 JSON 对象，不要 Markdown 或解释。字段必须与 Schema 完全一致。\n"
             "字段要求：\n"
             "core_concept=这是一个______的世界中的填空；special_feature=最特殊之处；"
             "genre=类型；tone=基调；era=时代；main_regions=主要地域；civilization_level=文明/科技水平；"
             "allowed=世界允许；forbidden=世界禁止；power_core=超凡力量或核心技术；"
             "use_conditions=使用条件；costs=消耗或成本；failure_consequences=失败后果；countermeasures=反制方式。\n"
             f"JSON Schema：{json.dumps(WorldTemplate.model_json_schema(), ensure_ascii=False)}\n"
-            f"用户文本：\n{source}"
+            f"用户文本（{len(source)} 字符）：\n{source}"
         )
+
+        def request_template(request_prompt: str) -> str:
+            try:
+                return WorldbuildingAssistant._request_without_tools(**connection, prompt=request_prompt)
+            except (APITimeoutError, httpx.TimeoutException):
+                raise WorldbuildingGenerationError("AI 世界观拆解超时，请稍后重试", status=504) from None
+            except (APIConnectionError, httpx.RequestError):
+                raise WorldbuildingGenerationError("无法连接模型服务，请检查网络或模型配置") from None
+            except Exception as exc:
+                logger.warning("AI 世界观文本拆解失败：异常类型=%s", type(exc).__name__)
+                raise WorldbuildingGenerationError("AI 世界观拆解失败，请稍后重试") from None
+
+        def parse_raw(raw: str) -> WorldTemplate:
+            candidate = raw.strip()
+            if candidate.startswith("```"):
+                candidate = re.sub(r"^```(?:json)?\s*", "", candidate)
+                candidate = re.sub(r"\s*```$", "", candidate)
+            return WorldTemplate.model_validate(json.loads(candidate))
+
+        logger.info("AI 世界观拆解开始：字符数=%s", len(source))
+        raw = request_template(prompt)
         try:
-            raw = WorldbuildingAssistant._request_without_tools(**connection, prompt=prompt)
-        except (APITimeoutError, httpx.TimeoutException):
-            raise WorldbuildingGenerationError("世界观拆解超时，请稍后重试", status=504) from None
-        except (APIConnectionError, httpx.RequestError):
-            raise WorldbuildingGenerationError("无法连接模型服务，请检查网络或模型配置") from None
-        except Exception as exc:
-            logger.warning("世界观文本拆解失败：异常类型=%s", type(exc).__name__)
-            raise WorldbuildingGenerationError("世界观拆解失败，请稍后重试") from None
-        candidate = raw.strip()
-        if candidate.startswith("```"):
-            candidate = re.sub(r"^```(?:json)?\s*", "", candidate)
-            candidate = re.sub(r"\s*```$", "", candidate)
-        try:
-            parsed = json.loads(candidate)
-            template = WorldTemplate.model_validate(parsed)
-        except (json.JSONDecodeError, ValidationError):
-            raise WorldbuildingGenerationError("模型返回的拆解结果格式不正确，请重试") from None
+            template = parse_raw(raw)
+        except (json.JSONDecodeError, ValidationError) as first_error:
+            logger.warning("AI 世界观拆解格式异常，发起一次修复：%s", type(first_error).__name__)
+            repair_prompt = (
+                f"{prompt}\n上一次拆解结果未通过格式校验。请修复为完整、合法的 JSON，字段与 Schema 一致。"
+                f"\n校验问题：{first_error}\n上一次结果：\n{raw}"
+            )
+            raw = request_template(repair_prompt)
+            try:
+                template = parse_raw(raw)
+            except (json.JSONDecodeError, ValidationError):
+                raise WorldbuildingGenerationError("AI 拆解结果格式不正确，请重试") from None
+        logger.info("AI 世界观拆解完成：已生成结构化字段")
         return template.model_dump(mode="json")
 
     @staticmethod

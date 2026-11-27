@@ -94,9 +94,13 @@ def response_row(row, json_columns):
     values = dict(row)
     for key in json_columns.intersection(values):
         raw = values[key]
-        if raw is not None:
-            value = json.loads(raw)
-            values[key] = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        if raw is None:
+            continue
+        # MySQL JSON columns are already decoded to dict/list by the driver;
+        # SQLite and legacy text columns arrive as JSON strings. Handle both
+        # without calling json.loads() on an already-decoded value.
+        value = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
+        values[key] = value
     return values
 
 
