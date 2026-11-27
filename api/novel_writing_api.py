@@ -28,6 +28,7 @@ from api.database import transaction
 from sqlalchemy import func, select
 from db.connection import legacy_json_columns
 from db import novel_analysis as analysis_db
+from db import foreshadows as foreshadow_db
 from api.writing_schemas import (
     ChapterPlanReceipt, ChapterPlanRequest, DraftReceipt, DraftRequest, OutlineReceipt, OutlineRequest,
     ReviewReport, WritingInput,
@@ -570,7 +571,14 @@ async def write_outline(project_id: RowId, payload: OutlineRequest, user: Curren
     if len(artifact.volumes) != payload.volume_count:
         raise HTTPException(502, "模型返回的分卷数量与请求不符")
     emit_generation_event("status", message="大纲校验通过，正在保存大纲与分卷…")
-    return await run_in_threadpool(save_outline, engine, project_id, artifact)
+    receipt = await run_in_threadpool(save_outline, engine, project_id, artifact)
+    try:
+        await run_in_threadpool(foreshadow_db.apply_outline_selection, engine, project_id,
+                                payload.consume_foreshadow_ids, payload.plant_foreshadow_ids,
+                                receipt.outline_id, receipt.volume_ids[0] if receipt.volume_ids else None)
+    except Exception:
+        logger.warning("大纲伏笔消费/预埋保存失败；大纲已保存", exc_info=True)
+    return receipt
 
 
 @router.post("/volumes/{volume_id}/chapter-plan", response_model=ChapterPlanReceipt, status_code=201, summary="生成并保存分卷的章节规划")
@@ -673,7 +681,14 @@ async def rewrite_outline(outline_id: RowId, payload: OutlineRequest, user: Curr
     if len(artifact.volumes) != payload.volume_count:
         raise HTTPException(502, "模型返回的分卷数量与请求不符，重写结果未保存")
     emit_generation_event("status", message="重写大纲校验通过，正在保存新版本…")
-    return await run_in_threadpool(save_outline, engine, project_id, artifact, sources)
+    receipt = await run_in_threadpool(save_outline, engine, project_id, artifact, sources)
+    try:
+        await run_in_threadpool(foreshadow_db.apply_outline_selection, engine, project_id,
+                                payload.consume_foreshadow_ids, payload.plant_foreshadow_ids,
+                                receipt.outline_id, receipt.volume_ids[0] if receipt.volume_ids else None)
+    except Exception:
+        logger.warning("重写大纲伏笔消费/预埋保存失败；大纲已保存", exc_info=True)
+    return receipt
 
 
 @router.post("/chapters/{chapter_id}/rewrite", response_model=DraftReceipt, summary="重写章节正文并保存为草稿")

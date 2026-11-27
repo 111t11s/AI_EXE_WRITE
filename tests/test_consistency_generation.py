@@ -16,7 +16,7 @@ from agents.llm_streaming import emit_generation_event
 from agents.mcp.server import create_server
 from agents.mcp.worldbuilding import NovelToolError
 from api import novel_writing_api as writing
-from api.writing_schemas import ChapterContentDraft, ConsistencyReport
+from api.writing_schemas import ChapterContentDraft, ConsistencyReport, EntityDiscoveryReport
 from core.config import Settings
 from test_character_generation import novel
 from main import app
@@ -61,6 +61,8 @@ def test_review_reads_only_selected_bodies_and_all_reference_material(selection,
     before = snapshot(data)
 
     def generate(role, context, profile=None):
+        if role is agents.ENTITY_DISCOVERY:
+            return EntityDiscoveryReport()
         assert role == agents.CONSISTENCY and role.tools == ()
         assert [row["chapter_number"] for row in context["selected_chapters"]] == [1, 4]
         assert context["outline"]["id"] == data["outline"]
@@ -309,6 +311,8 @@ def test_background_review_is_explicit_streamed_deduplicated_and_account_scoped(
     calls = []
 
     def waiting(role, context, profile=None):
+        if role is agents.ENTITY_DISCOVERY:
+            return EntityDiscoveryReport()
         calls.append(1)
         emit_generation_event("thinking", text="核对能力与剧情方向")
         emit_generation_event("delta", text='{"summary":"发现能力偏移')
@@ -360,8 +364,11 @@ def test_consistency_agent_streams_via_sdk_without_browsing_other_chapters(selec
     settings = Settings(_env_file=None, API_KEY="test", PROXY_URL="https://model.test/v1", MODEL_NATIVE_TOOLS=True)
     monkeypatch.setattr(agents, "get_settings", lambda: settings)
     def respond(request):
-        requests.append(json.loads(request.content))
-        raw = report(data).model_dump_json()
+        payload = json.loads(request.content)
+        requests.append(payload)
+        raw = (EntityDiscoveryReport().model_dump_json()
+               if '正文实体审核员' in payload['messages'][-1]['content']
+               else report(data).model_dump_json())
         frames = ''.join('data: ' + json.dumps({"choices": [{"delta": {"content": raw[index:index+20]}}]}) + '\n\n'
                          for index in range(0, len(raw), 20)) + 'data: [DONE]\n\n'
         return httpx.Response(200, content=frames.encode(), headers={"content-type": "text/event-stream"})
@@ -372,7 +379,7 @@ def test_consistency_agent_streams_via_sdk_without_browsing_other_chapters(selec
     response = data["client"].post(data["path"], json=data["payload"], headers=data["headers"]["writer"])
     assert response.status_code == 200, response.text
     assert response.json()["verdict"] == "drifted" and requests[0]["stream"] is True
-    assert "tools" not in requests[0] and len(requests) == 1
+    assert "tools" not in requests[0] and len(requests) == 2
     prompt = requests[0]["messages"][-1]["content"]
     context = json.loads(prompt.split("资料和用户要求：", 1)[1])
     assert context["outline"]["id"] == data["outline"]

@@ -406,6 +406,76 @@ CREATE TABLE IF NOT EXISTS novel_chapter (
     CONSTRAINT fk_chapter_volume FOREIGN KEY (volume_id) REFERENCES novel_outline_volume(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='小说章节表';
 
+CREATE TABLE IF NOT EXISTS app_entity_review (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '审核记录主键',
+    account_id BIGINT UNSIGNED NOT NULL COMMENT '所属账号',
+    project_id BIGINT UNSIGNED NOT NULL COMMENT '所属小说',
+    chapter_id BIGINT UNSIGNED NOT NULL COMMENT '来源章节',
+    entity_type VARCHAR(16) NOT NULL COMMENT 'character/faction',
+    name VARCHAR(160) NOT NULL COMMENT '正文中的新名称',
+    details LONGTEXT NOT NULL COMMENT '候选详情 JSON',
+    evidence LONGTEXT NOT NULL COMMENT '正文证据 JSON',
+    status VARCHAR(10) NOT NULL DEFAULT 'pending' COMMENT 'pending/approved/replaced/rejected',
+    existing_id BIGINT UNSIGNED NULL COMMENT '替换时使用的现有角色/势力 ID',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reviewed_at DATETIME NULL,
+    PRIMARY KEY (id),
+    KEY idx_entity_review_project_status (project_id, status),
+    KEY idx_entity_review_chapter (chapter_id),
+    CONSTRAINT fk_entity_review_account FOREIGN KEY (account_id) REFERENCES app_account(id) ON DELETE CASCADE,
+    CONSTRAINT fk_entity_review_project FOREIGN KEY (project_id) REFERENCES novel_project(id) ON DELETE CASCADE,
+    CONSTRAINT fk_entity_review_chapter FOREIGN KEY (chapter_id) REFERENCES novel_chapter(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='正文新角色/新势力审核表';
+
+CREATE TABLE IF NOT EXISTS novel_foreshadow (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    project_id BIGINT UNSIGNED NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    category VARCHAR(32) NOT NULL DEFAULT 'other',
+    status VARCHAR(16) NOT NULL DEFAULT 'planned',
+    source VARCHAR(16) NOT NULL DEFAULT 'preset',
+    summary TEXT NOT NULL,
+    details LONGTEXT NOT NULL,
+    planted_outline_id BIGINT UNSIGNED NULL,
+    planted_volume_id BIGINT UNSIGNED NULL,
+    planted_chapter_id BIGINT UNSIGNED NULL,
+    consumed_outline_id BIGINT UNSIGNED NULL,
+    consumed_volume_id BIGINT UNSIGNED NULL,
+    consumed_chapter_id BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_foreshadow_project_status (project_id, status),
+    KEY idx_foreshadow_project_category (project_id, category),
+    CONSTRAINT fk_foreshadow_project FOREIGN KEY (project_id) REFERENCES novel_project(id) ON DELETE CASCADE,
+    CONSTRAINT fk_foreshadow_planted_outline FOREIGN KEY (planted_outline_id) REFERENCES novel_outline(id) ON DELETE SET NULL,
+    CONSTRAINT fk_foreshadow_planted_volume FOREIGN KEY (planted_volume_id) REFERENCES novel_outline_volume(id) ON DELETE SET NULL,
+    CONSTRAINT fk_foreshadow_planted_chapter FOREIGN KEY (planted_chapter_id) REFERENCES novel_chapter(id) ON DELETE SET NULL,
+    CONSTRAINT fk_foreshadow_consumed_outline FOREIGN KEY (consumed_outline_id) REFERENCES novel_outline(id) ON DELETE SET NULL,
+    CONSTRAINT fk_foreshadow_consumed_volume FOREIGN KEY (consumed_volume_id) REFERENCES novel_outline_volume(id) ON DELETE SET NULL,
+    CONSTRAINT fk_foreshadow_consumed_chapter FOREIGN KEY (consumed_chapter_id) REFERENCES novel_chapter(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='伏笔档案表';
+
+CREATE TABLE IF NOT EXISTS novel_misc_note (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    project_id BIGINT UNSIGNED NOT NULL,
+    note_type VARCHAR(32) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    summary TEXT NOT NULL,
+    details LONGTEXT NOT NULL,
+    source VARCHAR(16) NOT NULL DEFAULT 'analysis',
+    first_chapter_id BIGINT UNSIGNED NULL,
+    last_chapter_id BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_misc_note_project_type_title (project_id, note_type, title),
+    KEY idx_misc_note_project_type (project_id, note_type),
+    CONSTRAINT fk_misc_note_project FOREIGN KEY (project_id) REFERENCES novel_project(id) ON DELETE CASCADE,
+    CONSTRAINT fk_misc_note_first_chapter FOREIGN KEY (first_chapter_id) REFERENCES novel_chapter(id) ON DELETE SET NULL,
+    CONSTRAINT fk_misc_note_last_chapter FOREIGN KEY (last_chapter_id) REFERENCES novel_chapter(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='小说杂记表';
+
 CREATE TABLE IF NOT EXISTS novel_character_progress (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '正文人物进展主键',
     project_id BIGINT UNSIGNED NOT NULL COMMENT '所属小说项目 ID',

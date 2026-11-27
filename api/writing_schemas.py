@@ -50,6 +50,21 @@ class WritingInput(BaseModel):
 class OutlineRequest(WritingInput):
     volume_count: int = Field(default=3, ge=1, le=5)
     outline_theme: OutlineTheme = "development"
+    consume_foreshadow_ids: list[RowId] = Field(default_factory=list, max_length=30)
+    plant_foreshadow_ids: list[RowId] = Field(default_factory=list, max_length=30)
+
+    @field_validator("consume_foreshadow_ids", "plant_foreshadow_ids")
+    @classmethod
+    def unique_foreshadows(cls, values):
+        if len(values) != len(set(values)):
+            raise ValueError("伏笔不能重复选择")
+        return values
+
+    @model_validator(mode="after")
+    def disjoint_foreshadows(self):
+        if set(self.consume_foreshadow_ids) & set(self.plant_foreshadow_ids):
+            raise ValueError("同一伏笔不能同时设为消费和预埋")
+        return self
 
     @model_validator(mode="after")
     def require_custom_theme_description(self):
@@ -356,6 +371,97 @@ class ConsistencyReceipt(ConsistencyReport):
     limitations: list[Detail] = Field(max_length=20)
     job_id: str | None = None
     chapter_fingerprints: dict[str, str] = Field(default_factory=dict)
+
+
+class EntityEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    chapter_id: RowId
+    quote: str = Field(min_length=2, max_length=1000)
+
+
+class NewCharacterCandidate(Generated):
+    name: str = Field(min_length=1, max_length=160)
+    role: str = Field(default="新登场角色", max_length=80)
+    summary: str = Field(default="", max_length=2000)
+    personality: str = Field(default="", max_length=2000)
+    background: str = Field(default="", max_length=2000)
+    goal: str = Field(default="", max_length=2000)
+    motivation: str = Field(default="", max_length=2000)
+    weakness: str = Field(default="", max_length=2000)
+    character_arc: str = Field(default="", max_length=2000)
+    abilities: str = Field(default="", max_length=2000)
+    faction_name: str = Field(default="", max_length=160)
+    evidence: list[EntityEvidence] = Field(min_length=1, max_length=5)
+
+
+class NewFactionCandidate(Generated):
+    name: str = Field(min_length=1, max_length=160)
+    faction_type: str = Field(default="", max_length=120)
+    summary: str = Field(default="", max_length=2000)
+    goal: str = Field(default="", max_length=2000)
+    leader: str = Field(default="", max_length=160)
+    territory: str = Field(default="", max_length=300)
+    strengths: str = Field(default="", max_length=2000)
+    weaknesses: str = Field(default="", max_length=2000)
+    relationships: str = Field(default="", max_length=2000)
+    evidence: list[EntityEvidence] = Field(min_length=1, max_length=5)
+
+
+class EntityDiscoveryReport(Generated):
+    characters: list[NewCharacterCandidate] = Field(default_factory=list, max_length=20)
+    factions: list[NewFactionCandidate] = Field(default_factory=list, max_length=20)
+    foreshadows: list["ForeshadowCandidate"] = Field(default_factory=list, max_length=20)
+    misc_notes: list["MiscNoteCandidate"] = Field(default_factory=list, max_length=30)
+
+
+ForeshadowCategory = Literal["identity", "treasure", "event", "relationship", "ability",
+                             "world", "prophecy", "debt", "location", "other"]
+MiscNoteType = Literal["event", "item", "beast", "passerby", "technique", "location", "custom"]
+
+
+class ForeshadowCandidate(Generated):
+    title: str = Field(min_length=1, max_length=200)
+    category: ForeshadowCategory = "other"
+    summary: str = Field(default="", max_length=4000)
+    details: str = Field(default="", max_length=20000)
+    evidence: list[EntityEvidence] = Field(min_length=1, max_length=5)
+
+
+class MiscNoteCandidate(Generated):
+    note_type: MiscNoteType = "event"
+    title: str = Field(min_length=1, max_length=200)
+    summary: str = Field(default="", max_length=4000)
+    details: str = Field(default="", max_length=20000)
+    evidence: list[EntityEvidence] = Field(min_length=1, max_length=5)
+
+
+class ForeshadowCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=200)
+    category: ForeshadowCategory = "other"
+    summary: str = Field(default="", max_length=4000)
+    details: str = Field(default="", max_length=20000)
+
+
+class MiscNoteCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    note_type: MiscNoteType = "event"
+    title: str = Field(min_length=1, max_length=200)
+    summary: str = Field(default="", max_length=4000)
+    details: str = Field(default="", max_length=20000)
+
+
+EntityDiscoveryReport.model_rebuild()
+
+
+class ExistingEntityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    existing_id: RowId
+    model: str | None = Field(default=None, max_length=40)
 
 
 DEFAULT_TREND_INSTRUCTION = ("优先参考各小说网站最新热门榜单中的作品类型、题材设定和读者偏好，"

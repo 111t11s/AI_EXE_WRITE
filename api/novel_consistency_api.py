@@ -2,10 +2,11 @@
 
 import hashlib
 import json
+import re
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select, update
 from starlette.concurrency import run_in_threadpool
 
@@ -18,11 +19,17 @@ from api.novel_schemas import RowId
 from api.novel_crud_api import get_row, response_row, storage_values
 from api.character_progress import replace_progress
 from api.novel_tables import tables
-from api.novel_writing_api import all_context_rows, character_context, generate, load_context, read
+from api.novel_writing_api import (all_context_rows, chapter_context, character_context, generate,
+                                   load_context, read)
+from api.novel_writing_store import insert_row, save_rewritten_draft
 from api.ownership import require_resource
 from api.writing_schemas import (ConsistencyReceipt, ConsistencyRepairRequest, ConsistencyRequest,
-                                 ConsistencySuggestion, WritingInput)
+                                 ConsistencySuggestion, EntityDiscoveryReport, ExistingEntityRequest,
+                                 WritingInput)
 from db.connection import legacy_json_columns
+from db import entity_reviews as review_db
+from db import foreshadows as foreshadow_db
+from db import misc_notes as misc_db
 from core.app_logging import get_logger
 
 
@@ -190,6 +197,143 @@ def validate_report(report, context):
     return cleaned, list(used.values())
 
 
+def discovery_context(context, existing_foreshadows=None, existing_misc=None):
+    return {
+        "project": {key: context["project"].get(key) for key in
+                    ("title", "genre", "setting", "tone", "premise", "protagonist_goal")},
+        "world": {key: context["world"].get(key) for key in ("summary", "era", "rules", "cultures")},
+        "existing_characters": [{"id": row["id"], "name": row["name"], "role": row["role"]}
+                                for row in context["characters"]],
+        "existing_factions": [{"id": row["id"], "name": row["name"], "faction_type": row.get("faction_type", "")}
+                              for row in context.get("faction", [])],
+        "existing_foreshadows": existing_foreshadows or [],
+        "existing_misc_notes": existing_misc or [],
+        "chapters": [{"id": row["id"], "chapter_number": row["chapter_number"], "title": row["title"],
+                      "content": row["content"]} for row in context["selected_chapters"]],
+    }
+
+
+def _quote_in(content: str, quote: str) -> bool:
+    return quote.strip() in content or re.sub(r"\s+", "", quote) in re.sub(r"\s+", "", content)
+
+
+def validate_discovery(report: EntityDiscoveryReport, context,
+                       existing_foreshadows: list[dict] | None = None) -> tuple[list[dict], list[dict], list[dict]]:
+    chapters = {row["id"]: row for row in context["selected_chapters"]}
+    existing_characters = {row["name"].strip().casefold() for row in context["characters"]}
+    existing_factions = {row["name"].strip().casefold() for row in context.get("faction", [])}
+    existing_foreshadow_titles = {
+        row["title"].strip().casefold() for row in (existing_foreshadows or [])}
+    items, seen = [], set()
+    foreshadows, misc_notes = [], []
+
+    def evidence_for(candidate):
+        valid = []
+        for entry in candidate.evidence:
+            chapter = chapters.get(entry.chapter_id)
+            if chapter is None or not _quote_in(chapter["content"], entry.quote):
+                continue
+            valid.append({"chapter_id": chapter["id"], "chapter_number": chapter["chapter_number"],
+                          "quote": entry.quote.strip()})
+        return valid[:5]
+
+    for candidate in report.characters:
+        name = candidate.name.strip()[:160]
+        if not name or name.casefold() in existing_characters:
+            continue
+        evidence = evidence_for(candidate)
+        if not evidence or (("character", name.casefold()) in seen):
+            continue
+        seen.add(("character", name.casefold()))
+        details = candidate.model_dump(exclude={"evidence", "name"}, mode="json")
+        items.append({"entity_type": "character", "chapter_id": evidence[0]["chapter_id"],
+                      "name": name, "details": details, "evidence": evidence})
+
+    for candidate in report.factions:
+        name = candidate.name.strip()[:160]
+        if not name or name.casefold() in existing_factions:
+            continue
+        evidence = evidence_for(candidate)
+        if not evidence or (("faction", name.casefold()) in seen):
+            continue
+        seen.add(("faction", name.casefold()))
+        details = candidate.model_dump(exclude={"evidence", "name"}, mode="json")
+        items.append({"entity_type": "faction", "chapter_id": evidence[0]["chapter_id"],
+                      "name": name, "details": details, "evidence": evidence})
+
+    for candidate in report.foreshadows:
+        title = candidate.title.strip()[:200]
+        if not title or title.casefold() in existing_foreshadow_titles:
+            continue
+        evidence = evidence_for(candidate)
+        if not evidence:
+            continue
+        existing_foreshadow_titles.add(title.casefold())
+        foreshadows.append({
+            "title": title, "category": candidate.category, "summary": candidate.summary,
+            "details": candidate.details, "evidence": evidence,
+        })
+
+    for candidate in report.misc_notes:
+        title = candidate.title.strip()[:200]
+        evidence = evidence_for(candidate)
+        if not title or not evidence:
+            continue
+        misc_notes.append({
+            "title": title, "note_type": candidate.note_type, "summary": candidate.summary,
+            "details": candidate.details, "evidence": evidence,
+        })
+
+    items.sort(key=lambda item: 0 if item["entity_type"] == "faction" else 1)
+    return items, foreshadows, misc_notes
+
+
+async def discover_new_entities(engine, project_id, user, context, model=None) -> int:
+    emit_generation_event("status", message="正在从正文中整理新角色、势力和伏笔杂记…")
+    try:
+        existing_foreshadows = await run_in_threadpool(foreshadow_db.titles, engine, project_id)
+        existing_misc = await run_in_threadpool(misc_db.titles, engine, project_id)
+        report = await generate(agents.ENTITY_DISCOVERY,
+                                discovery_context(context, existing_foreshadows, existing_misc),
+                                WritingInput(model=model))
+        items, foreshadows, misc_notes = validate_discovery(report, context, existing_foreshadows)
+        saved = await run_in_threadpool(review_db.save_reviews, engine, user.id, project_id, items) if items else 0
+        chapters = {row["id"]: row for row in context["selected_chapters"]}
+        outline_id = context["outline"]["id"]
+
+        def grouped(candidates):
+            result = {}
+            for item in candidates:
+                chapter_id = item["evidence"][0]["chapter_id"]
+                result.setdefault(chapter_id, []).append(item)
+            return result
+
+        foreshadow_count = 0
+        for chapter_id, group in grouped(foreshadows).items():
+            chapter = chapters.get(chapter_id)
+            if chapter is None:
+                continue
+            foreshadow_count += await run_in_threadpool(
+                foreshadow_db.save_analysis_candidates, engine, project_id,
+                {"id": chapter["id"], "volume_id": chapter["volume_id"], "outline_id": outline_id}, group)
+        misc_count = 0
+        for chapter_id, group in grouped(misc_notes).items():
+            chapter = chapters.get(chapter_id)
+            if chapter is None:
+                continue
+            misc_count += await run_in_threadpool(
+                misc_db.save_analysis_candidates, engine, project_id,
+                {"id": chapter["id"], "volume_id": chapter["volume_id"], "outline_id": outline_id}, group)
+        if saved:
+            emit_generation_event("status", message=f"发现 {saved} 个新角色/势力，已加入待审核。")
+        if foreshadow_count or misc_count:
+            emit_generation_event("status", message=f"已整理 {foreshadow_count} 条伏笔、{misc_count} 条杂记。")
+        return saved + foreshadow_count + misc_count
+    except Exception:
+        logger.exception("新角色/势力/伏笔杂记识别失败；一致性报告不受影响")
+        return 0
+
+
 @router.post("/projects/{project_id}/consistency", response_model=ConsistencyReceipt, summary="核对所选章节的一致性")
 async def check_consistency(project_id: RowId, payload: ConsistencyRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_selection, engine, project_id, payload, user.id)
@@ -203,6 +347,7 @@ async def check_consistency(project_id: RowId, payload: ConsistencyRequest, user
     report = await generate(agents.CONSISTENCY, context, payload)
     emit_generation_event("status", message="核对完成，正在校验章节原文及对照依据…")
     report, references = validate_report(report, context)
+    await discover_new_entities(engine, project_id, user, context, payload.model)
     values = report.model_dump()
     values["limitations"] = list(dict.fromkeys([*context["scope_notes"], *report.limitations]))
     return ConsistencyReceipt(**values, project_id=project_id, outline_id=payload.outline_id,
@@ -224,6 +369,164 @@ async def start_consistency(project_id: RowId, payload: ConsistencyRequest, user
 
     job = generation_jobs.store.start(account_id=user.id, key=f"consistency:{project_id}:{signature}", kind="consistency",
         title=f"一致性核对 · {len(payload.chapter_ids)} 章", project_id=project_id, resource_id=payload.outline_id,
+        operation=operation)
+    return job.summary()
+
+
+def current_world_id(engine, project_id):
+    world = tables["novel_world"]
+    with transaction(engine) as connection:
+        return connection.scalar(select(world.c.id).where(
+            world.c.project_id == project_id, world.c.is_current.is_(True)).limit(1))
+
+
+def approve_entity(engine, project_id, review):
+    """把待审核角色/势力写入正式表；同名已存在时复用现有记录。"""
+    details = review.get("details") or {}
+    chapter = tables["novel_chapter"]
+    with transaction(engine) as connection:
+        source = response_row(get_row(connection, chapter, review["chapter_id"]),
+                              legacy_json_columns(connection, chapter.name))
+        world_id = connection.scalar(select(tables["novel_world"].c.id).where(
+            tables["novel_world"].c.project_id == project_id,
+            tables["novel_world"].c.is_current.is_(True)).limit(1))
+        if not world_id:
+            raise HTTPException(409, "当前小说没有可用的当前世界观")
+        if review["entity_type"] == "faction":
+            faction = tables["novel_faction"]
+            existing = connection.scalar(select(faction.c.id).where(
+                faction.c.world_id == world_id, faction.c.name == review["name"]).limit(1))
+            if existing:
+                return {"entity_id": int(existing), "entity_type": "faction", "reused": True}
+            entity_id = insert_row(connection, faction, world_id=world_id, name=review["name"],
+                faction_type=(details.get("faction_type") or "")[:120],
+                summary=(details.get("summary") or "正文新登场势力")[:4000],
+                goal=(details.get("goal") or "")[:4000],
+                leader=(details.get("leader") or "")[:160],
+                territory=(details.get("territory") or "")[:300],
+                strengths=(details.get("strengths") or "")[:4000],
+                weaknesses=(details.get("weaknesses") or "")[:4000],
+                relationships=(details.get("relationships") or "")[:4000])
+            return {"entity_id": int(entity_id), "entity_type": "faction", "reused": False}
+        if review["entity_type"] != "character":
+            raise HTTPException(422, "未知的实体类型")
+        character = tables["novel_character"]
+        existing = connection.scalar(select(character.c.id).where(
+            character.c.project_id == project_id, character.c.name == review["name"]).limit(1))
+        if existing:
+            return {"entity_id": int(existing), "entity_type": "character", "reused": True}
+        faction_name = (details.get("faction_name") or "").strip()
+        faction_id = None
+        if faction_name:
+            faction = tables["novel_faction"]
+            faction_id = connection.scalar(select(faction.c.id).where(
+                faction.c.world_id == world_id, faction.c.name == faction_name).limit(1))
+        entity_id = insert_row(connection, character,
+            project_id=project_id, faction_id=faction_id, name=review["name"],
+            role=(details.get("role") or "新登场角色")[:80],
+            summary=(details.get("summary") or "正文中新登场的角色")[:4000],
+            personality=(details.get("personality") or "")[:4000],
+            background=(details.get("background") or "")[:4000],
+            goal=(details.get("goal") or "")[:4000],
+            motivation=(details.get("motivation") or "")[:4000],
+            weakness=(details.get("weakness") or "")[:4000],
+            character_arc=(details.get("character_arc") or "")[:4000],
+            abilities=(details.get("abilities") or "")[:4000],
+            first_appearance_chapter=source["chapter_number"], status="active")
+        if source.get("volume_id"):
+            cast = tables["novel_volume_character"]
+            existing_cast = connection.scalar(select(cast.c.id).where(
+                cast.c.volume_id == source["volume_id"], cast.c.character_id == entity_id).limit(1))
+            if existing_cast is None:
+                insert_row(connection, cast, volume_id=source["volume_id"], character_id=entity_id,
+                           scenes=f"正文第 {source['chapter_number']} 章新登场：{review['name']}")
+        return {"entity_id": int(entity_id), "entity_type": "character", "reused": False}
+
+
+@router.get("/projects/{project_id}/entity-reviews", summary="查询正文新角色/势力待审核记录")
+async def list_entity_reviews(project_id: RowId, user: CurrentAccount, engine: Database,
+                              status: str = Query(default="pending")):
+    if status not in {"pending", "approved", "replaced", "rejected"}:
+        raise HTTPException(422, "审核状态不支持")
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    items = await run_in_threadpool(review_db.list_reviews, engine, user.id, project_id, status)
+    characters, factions = tables["novel_character"], tables["novel_faction"]
+    world_id = await run_in_threadpool(current_world_id, engine, project_id)
+    with transaction(engine) as connection:
+        character_rows = connection.execute(select(characters.c.id, characters.c.name, characters.c.role).where(
+            characters.c.project_id == project_id).order_by(characters.c.name)).mappings().all()
+        faction_rows = connection.execute(select(factions.c.id, factions.c.name, factions.c.faction_type).where(
+            factions.c.world_id == world_id).order_by(factions.c.name)).mappings().all() if world_id else []
+    return {"items": items,
+            "characters": [dict(row) for row in character_rows],
+            "factions": [dict(row) for row in faction_rows]}
+
+
+@router.post("/projects/{project_id}/entity-reviews/{review_id}/approve", summary="审核通过并写入角色/势力表")
+async def approve_entity_review(project_id: RowId, review_id: int, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    review = await run_in_threadpool(review_db.get_review, engine, user.id, project_id, review_id)
+    if review is None or review["status"] != "pending":
+        raise HTTPException(404, "待审核记录不存在或已处理")
+    result = await run_in_threadpool(approve_entity, engine, project_id, review)
+    await run_in_threadpool(review_db.mark_review, engine, user.id, project_id, review_id,
+                            "approved", result["entity_id"])
+    return {**result, "review_id": review_id, "name": review["name"]}
+
+
+@router.post("/projects/{project_id}/entity-reviews/{review_id}/reject", summary="拒绝新角色/势力")
+async def reject_entity_review(project_id: RowId, review_id: int, user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    ok = await run_in_threadpool(review_db.mark_review, engine, user.id, project_id, review_id, "rejected")
+    if not ok:
+        raise HTTPException(404, "待审核记录不存在或已处理")
+    return {"rejected": True, "review_id": review_id}
+
+
+@router.post("/projects/{project_id}/entity-reviews/{review_id}/replace/tasks", status_code=202,
+             summary="用现有角色/势力重写对应章节")
+async def replace_entity_review(project_id: RowId, review_id: int, payload: ExistingEntityRequest,
+                                user: CurrentAccount, engine: Database):
+    await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    review = await run_in_threadpool(review_db.get_review, engine, user.id, project_id, review_id)
+    if review is None or review["status"] != "pending":
+        raise HTTPException(404, "待审核记录不存在或已处理")
+    if review["entity_type"] == "character":
+        target = tables["novel_character"]
+        with transaction(engine) as connection:
+            existing = connection.execute(select(target.c.name).where(
+                target.c.id == payload.existing_id, target.c.project_id == project_id)).scalar()
+    else:
+        target = tables["novel_faction"]
+        world_id = await run_in_threadpool(current_world_id, engine, project_id)
+        with transaction(engine) as connection:
+            existing = connection.execute(select(target.c.name).where(
+                target.c.id == payload.existing_id, target.c.world_id == world_id)).scalar()
+    if not existing:
+        raise HTTPException(404, "所选现有角色/势力不存在或不属于当前小说")
+    chapter_id = review["chapter_id"]
+    label = "角色" if review["entity_type"] == "character" else "势力"
+    with transaction(engine) as connection:
+        chapter_number = connection.scalar(select(tables["novel_chapter"].c.chapter_number).where(
+            tables["novel_chapter"].c.id == chapter_id))
+    async def operation():
+        context = await load_context(chapter_context, chapter_id, False, True)
+        chapter = context["chapter"]
+        instruction = (
+            f"把第 {chapter['chapter_number']} 章正文中新出现的{label}“{review['name']}”统一替换为现有{label}“{existing}”。"
+            "同步修正称呼、所属关系、成员、动作和描述；保留原章节的情节、视角、人物目标和结果，不新增其他设定。"
+            "只输出完整正文，不要解释。")
+        emit_generation_event("status", message=f"正在用现有{label}“{existing}”重写第 {chapter['chapter_number']} 章…")
+        artifact = await generate(agents.DRAFT_REWRITE, context, WritingInput(
+            instruction=instruction, model=payload.model))
+        receipt = await run_in_threadpool(save_rewritten_draft, engine, chapter_id,
+                                          artifact.content, chapter, ())
+        await run_in_threadpool(review_db.mark_review, engine, user.id, project_id, review_id,
+                                "replaced", payload.existing_id)
+        return receipt
+    job = generation_jobs.store.start(
+        account_id=user.id, key=f"entity-replace:{review_id}:{payload.existing_id}", kind="draft",
+        title=f"{label}替换 · 第 {chapter_number} 章", project_id=project_id, resource_id=chapter_id,
         operation=operation)
     return job.summary()
 

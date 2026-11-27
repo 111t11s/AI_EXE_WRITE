@@ -13,7 +13,8 @@ from agents.prose_skills import opening_skill_prompt, prose_skill_prompt
 from agents.webnovel_skills import webnovel_skill_prompt
 from api.writing_schemas import (ChapterContentDraft, ChapterPlanDraft, OutlineDraft, ReviewReport,
                                  CharacterDraftList, ConsistencyReport, CharacterProfileList,
-                                 CharacterProgressAnalysis, NovelAnalysisReport, SettingExpansionReport, TrendReport, OUTLINE_THEME_LABELS)
+                                 CharacterProgressAnalysis, NovelAnalysisReport, SettingExpansionReport, TrendReport, OUTLINE_THEME_LABELS,
+                                 EntityDiscoveryReport)
 from agents.novel_analysis_skills import novel_analysis_skill_prompt
 from agents.setting_expansion_skills import setting_expansion_skill_prompt
 from core.config import get_settings
@@ -252,6 +253,19 @@ TREND_ANALYST = WritingRole(
     "每个方案必须完整填写所有字段；如果输出长度受限，宁可只给 2 个完整方案，也不要返回缺字段的半成品。"
     "若提供了类型偏好、目标读者或补充要求，要据此取舍。只输出符合 Schema 的 JSON，不写分析过程。",
     TrendReport, (),
+)
+
+ENTITY_DISCOVERY = WritingRole(
+    "正文实体审核员",
+    "读取用户选中的已保存章节，找出正文中首次出现、但不在已有角色和势力名单中的专名。"
+    "只报正文明确写出、能逐字引用的角色或势力；已存在角色/势力、泛称、头衔、地名、组织代称不要报。"
+    "每个候选必须给出 chapter_id 和原文 quote；角色尽量给出定位、简介、目标、所属势力，势力尽量给出类型、目标、领袖、领地、优劣和关系。"
+    "同时从正文中整理伏笔和杂记：伏笔按身份、秘宝、事件、关系、能力、世界、预言、人情债、地点、其他分类；"
+    "杂记按关键事件、独特物品、灵兽、路人、功法、地点、其他分类。只记录正文明确出现且能引用原文的内容，"
+    "已有伏笔/杂记不要按同义重复。"
+    "这是待审核候选，不是已确认设定；不要修改正文，不要补写没有出现的人物或势力。"
+    "输出 EntityDiscoveryReport JSON。",
+    EntityDiscoveryReport, (),
 )
 
 SETTING_EXPANDER = WritingRole(

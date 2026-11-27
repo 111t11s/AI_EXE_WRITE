@@ -19,6 +19,9 @@ const initialState = () => ({projects: [], project: null, libraryOwner: 'all', w
   characterError: null, characterLoading: false, characterOutlineId: null,
   consistencyPage: null, consistencyLoading: false, consistencyError: null, consistencySelection: new Map(),
   consistencyOutlineId: null, consistencyReport: null,
+  entityReviews: null, entityReviewsLoading: false, entityCharacters: [], entityFactions: [],
+  foreshadowPage: null, foreshadowStatus: 'all', foreshadowCategory: 'all', foreshadowLoading: false,
+  miscPage: null, miscType: 'all', miscLoading: false,
   consistencyIssuePage: 1, consistencySelectedIssues: new Set(), consistencyShowReport: false, consistencyReportKey: null,
   trash: null, trashLoading: false, trashError: null,
   trends: null, trendsLoading: false, trendsError: null, trendsSelection: new Map(), trendsSelectedSources: null,
@@ -414,7 +417,9 @@ function renderTaskResult(job, result) {
       state.tab = 'consistency';
       state.consistencyReport = result;
       state.consistencyOutlineId = result.outline_id;
+      state.entityReviews = null;
       await loadConsistencyChapters();
+      void loadEntityReviews(projectId);
     } else if (job.kind === 'characters') {
       if (result.volume_id) {
         state.tab = 'outline';
@@ -1343,6 +1348,211 @@ function analysisReviewView() {
       panel('暂无待审核', muted('当前没有新维度候选。固定五维技法会直接进入技法表。')));
 }
 
+const foreshadowCategoryFallback = {
+  identity: '身份秘密', treasure: '秘宝奇物', event: '事件真相', relationship: '关系伏笔',
+  ability: '能力来历', world: '世界规则', prophecy: '预言征兆', debt: '人情仇恨',
+  location: '地点秘密', other: '其他',
+};
+const foreshadowStatusFallback = {planned: '待预埋', planted: '已预埋', consumed: '已消费', abandoned: '已废弃'};
+const miscTypeFallback = {event: '关键事件', item: '独特物品', beast: '灵兽', passerby: '路人角色',
+  technique: '功法技能', location: '地点场所', custom: '其他'};
+
+async function loadForeshadows(page = 1) {
+  if (!state.project || state.foreshadowLoading) return;
+  state.foreshadowLoading = true;
+  render();
+  try {
+    state.foreshadowPage = await api(`/writing/projects/${state.project.id}/foreshadows`, {filters: {
+      page, page_size: 8, status: state.foreshadowStatus, category: state.foreshadowCategory}});
+  } catch (error) {
+    notify(`伏笔读取失败：${error.message}`, 'error');
+  } finally {
+    state.foreshadowLoading = false;
+    if (state.screen === 'project' && state.tab === 'foreshadows') render();
+  }
+}
+
+async function loadMisc(page = 1) {
+  if (!state.project || state.miscLoading) return;
+  state.miscLoading = true;
+  render();
+  try {
+    state.miscPage = await api(`/writing/projects/${state.project.id}/misc-notes`, {filters: {
+      page, page_size: 8, note_type: state.miscType}});
+  } catch (error) {
+    notify(`杂记读取失败：${error.message}`, 'error');
+  } finally {
+    state.miscLoading = false;
+    if (state.screen === 'project' && state.tab === 'misc') render();
+  }
+}
+
+function storyDetail(title, body) {
+  openAction({
+    title, description: '', submit: '关闭', fields: [],
+    extra: stack(body),
+    send: async () => ({}),
+    success: () => ' ',
+    after: () => {},
+  });
+}
+
+function storyPaging(page, reload) {
+  if (!page) return null;
+  const totalPages = Math.max(1, Math.ceil(page.total / page.page_size));
+  return element('div', {class: 'actions story-paging'},
+    button('上一页', () => reload(page.page - 1), 'secondary', page.page <= 1),
+    element('span', {class: 'muted'}, `第 ${page.page} / ${totalPages} 页 · 共 ${page.total} 条`),
+    button('下一页', () => reload(page.page + 1), 'secondary', !page.has_more));
+}
+
+function foreshadowView() {
+  const page = state.foreshadowPage;
+  const statuses = page?.statuses || foreshadowStatusFallback;
+  const categories = page?.categories || foreshadowCategoryFallback;
+  const status = element('select', {change: event => {
+    state.foreshadowStatus = event.target.value;
+    state.foreshadowPage = null;
+    void loadForeshadows(1);
+  }}, [element('option', {value: 'all'}, '全部状态'), ...Object.entries(statuses).map(([value, label]) =>
+    element('option', {value, selected: value === state.foreshadowStatus}, label))]);
+  const category = element('select', {change: event => {
+    state.foreshadowCategory = event.target.value;
+    state.foreshadowPage = null;
+    void loadForeshadows(1);
+  }}, [element('option', {value: 'all'}, '全部类别'), ...Object.entries(categories).map(([value, label]) =>
+    element('option', {value, selected: value === state.foreshadowCategory}, label))]);
+  const rows = page?.items?.length ? page.items.map(item => element('div', {class: 'story-row'},
+    element('div', {class: 'story-main'}, element('strong', {}, item.title),
+      element('div', {class: 'story-tags'}, pill(item.category_label), pill(item.status_label, item.status === 'consumed'),
+        item.planted_outline_label ? pill(item.planted_outline_label) : null,
+        item.planted_chapter_label ? pill(item.planted_chapter_label) : null)),
+    element('div', {class: 'story-where'}, muted(`消费：${item.consumed_outline_label || '未消费'}${item.consumed_chapter_label ? ` · ${item.consumed_chapter_label}` : ''}`),
+      muted(item.summary || '暂无摘要')),
+    button('查看', () => storyDetail(item.title, stack(
+      element('div', {class: 'story-tags'}, pill(item.category_label), pill(item.status_label),
+        item.planted_outline_label ? pill(item.planted_outline_label) : null,
+        item.planted_chapter_label ? pill(item.planted_chapter_label) : null),
+      prose(item.summary || '暂无摘要'), item.details ? prose(item.details) : null,
+      muted(`创建/预埋：${item.planted_outline_label || '未关联大纲'}${item.planted_chapter_label ? ` · ${item.planted_chapter_label}` : ''}`),
+      muted(`消费：${item.consumed_outline_label || '未消费'}${item.consumed_chapter_label ? ` · ${item.consumed_chapter_label}` : ''}`)))))) : [];
+  const list = rows.length ? element('div', {class: 'story-list'}, ...rows) :
+    empty('还没有伏笔', state.foreshadowLoading ? '正在读取…' : '可以手工新增，或在章节一致性核对后自动整理。');
+  return stack(
+    panel('伏笔档案', stack(
+      muted('记录预设和正文分析出的伏笔；新建大纲时可选择消费或预埋，已消费的伏笔不再出现在选择列表。'),
+      actions(element('label', {class: 'control'}, '状态', status),
+        element('label', {class: 'control'}, '类别', category),
+        button('新增伏笔', foreshadowCreateDialog, 'primary'),
+        button('刷新', () => loadForeshadows(page?.page || 1), 'secondary', state.foreshadowLoading)),
+      page ? storyPaging(page, loadForeshadows) : null)),
+    list,
+    page ? storyPaging(page, loadForeshadows) : null);
+}
+
+function miscView() {
+  const page = state.miscPage;
+  const types = page?.types || miscTypeFallback;
+  const type = element('select', {change: event => {
+    state.miscType = event.target.value;
+    state.miscPage = null;
+    void loadMisc(1);
+  }}, [element('option', {value: 'all'}, '全部分类'), ...Object.entries(types).map(([value, label]) =>
+    element('option', {value, selected: value === state.miscType}, label))]);
+  const rows = page?.items?.length ? page.items.map(item => element('div', {class: 'story-row'},
+    element('div', {class: 'story-main'}, element('strong', {}, item.title),
+      element('div', {class: 'story-tags'}, pill(item.type_label),
+        item.first_chapter_label ? pill(item.first_chapter_label) : null,
+        item.last_chapter_label ? pill(item.last_chapter_label) : null)),
+    element('div', {class: 'story-where'}, muted(item.summary || '暂无摘要')),
+    button('查看', () => storyDetail(item.title, stack(
+      element('div', {class: 'story-tags'}, pill(item.type_label),
+        item.first_chapter_label ? pill(item.first_chapter_label) : null,
+        item.last_chapter_label ? pill(item.last_chapter_label) : null),
+      prose(item.summary || '暂无摘要'), item.details ? prose(item.details) : null,
+      muted(`来源：${item.source === 'manual' ? '手工记录' : '正文分析'}`)))))) : [];
+  const list = rows.length ? element('div', {class: 'story-list'}, ...rows) :
+    empty('还没有杂记', state.miscLoading ? '正在读取…' : '正文一致性核对会自动整理关键事件、物品、灵兽、路人和功法。');
+  return stack(
+    panel('杂记', stack(
+      muted('记录关键事件、独特物品、灵兽、路人角色、功法技能和地点场所；正文分析会自动更新最近出现章节。'),
+      actions(element('label', {class: 'control'}, '分类', type),
+        button('新增杂记', miscCreateDialog, 'primary'),
+        button('刷新', () => loadMisc(page?.page || 1), 'secondary', state.miscLoading)),
+      page ? storyPaging(page, loadMisc) : null)),
+    list,
+    page ? storyPaging(page, loadMisc) : null);
+}
+
+function foreshadowCreateDialog() {
+  const projectId = state.project.id;
+  openAction({title: '新增伏笔', description: '手工记录预设或自由发挥的伏笔；之后可在新建大纲时选择消费或预埋。',
+    submit: '保存伏笔', fields: [
+      {name: 'title', label: '伏笔名称', type: 'text', required: true, maxlength: 200},
+      {name: 'category', label: '类别', type: 'select', value: 'identity', choices: Object.entries(foreshadowCategoryFallback).map(([value, label]) => ({value, label}))},
+      {name: 'summary', label: '摘要', type: 'textarea', rows: 3, maxlength: 4000},
+      {name: 'details', label: '详细内容', type: 'textarea', rows: 6, maxlength: 20000},
+    ],
+    send: data => post(`/writing/projects/${projectId}/foreshadows`, data),
+    success: () => '伏笔已保存。',
+    after: () => loadForeshadows(1),
+  });
+}
+
+function miscCreateDialog() {
+  const projectId = state.project.id;
+  openAction({title: '新增杂记', description: '手工记录关键事件、物品、灵兽、路人和功法等长期信息。',
+    submit: '保存杂记', fields: [
+      {name: 'title', label: '名称', type: 'text', required: true, maxlength: 200},
+      {name: 'note_type', label: '分类', type: 'select', value: 'event', choices: Object.entries(miscTypeFallback).map(([value, label]) => ({value, label}))},
+      {name: 'summary', label: '摘要', type: 'textarea', rows: 3, maxlength: 4000},
+      {name: 'details', label: '详细内容', type: 'textarea', rows: 6, maxlength: 20000},
+    ],
+    send: data => post(`/writing/projects/${projectId}/misc-notes`, data),
+    success: () => '杂记已保存。',
+    after: () => loadMisc(1),
+  });
+}
+
+function foreshadowPicker() {
+  const projectId = state.project.id;
+  const selectedConsume = new Set();
+  const selectedPlant = new Set();
+  const consumeList = element('div', {class: 'story-picker-list'});
+  const plantList = element('div', {class: 'story-picker-list'});
+  let items = [];
+  const render = () => {
+    consumeList.replaceChildren(...(items.length ? items.filter(item => item.status !== 'consumed').map(item => {
+      const check = element('input', {type: 'checkbox', checked: selectedConsume.has(item.id), change: event => {
+        if (event.target.checked) { selectedConsume.add(item.id); selectedPlant.delete(item.id); render(); }
+        else selectedConsume.delete(item.id);
+      }});
+      return element('label', {class: 'technique-choice'}, check,
+        element('span', {}, element('strong', {}, item.title), muted(` ${item.category_label || ''} · ${item.status_label || ''}`)));
+    }) : [muted('没有可消费的伏笔。')]));
+    plantList.replaceChildren(...(items.length ? items.map(item => {
+      const check = element('input', {type: 'checkbox', checked: selectedPlant.has(item.id), change: event => {
+        if (event.target.checked) { selectedPlant.add(item.id); selectedConsume.delete(item.id); render(); }
+        else selectedPlant.delete(item.id);
+      }});
+      return element('label', {class: 'technique-choice'}, check,
+        element('span', {}, element('strong', {}, item.title), muted(` ${item.category_label || ''} · ${item.status_label || ''}`)));
+    }) : [muted('没有可预埋的伏笔。')]));
+  };
+  render();
+  api(`/writing/projects/${projectId}/foreshadows/available`).then(data => {
+    items = data.items || [];
+    render();
+  }).catch(error => notify(`伏笔读取失败：${error.message}`, 'error'));
+  return {
+    extra: element('div', {class: 'story-picker'},
+      element('fieldset', {}, element('legend', {}, '消费伏笔（可选）'), muted('在新大纲中回收，保存后从可选列表移除。'), consumeList),
+      element('fieldset', {}, element('legend', {}, '预埋伏笔（可选）'), muted('在新大纲中埋下，后续仍可消费。'), plantList)),
+    consumeIds: () => [...selectedConsume],
+    plantIds: () => [...selectedPlant],
+  };
+}
+
 function rememberedProject() {
   try { return Number(localStorage.getItem(`mojian-project-${account.id}`)); } catch { return null; }
 }
@@ -1463,6 +1673,8 @@ const projectPages = [
   ['outline', '章节大纲', '分卷、剧情节点与规划'],
   ['chapters', '正文创作', '章节目录与正文编辑'],
   ['consistency', '一致性核对', '检查正文与设定衔接'],
+  ['foreshadows', '伏笔档案', '预埋、消费与来源章节'],
+  ['misc', '杂记', '事件、物品、灵兽、路人与功法'],
 ];
 
 function renderProjectNavigation() {
@@ -1486,7 +1698,7 @@ function renderProjectNavigation() {
       element('button', {type: 'button', class: 'project-page-link', 'aria-current': String(state.tab === page),
         title: description, disabled: state.busy || state.projectLoading, click: () => void activate(page)},
       element('span', {class: 'project-page-icon', 'aria-hidden': 'true'},
-        ({overview: '⌂', characters: '◉', outline: '▤', chapters: '✎', consistency: '✓'})[page]),
+        ({overview: '⌂', characters: '◉', outline: '▤', chapters: '✎', consistency: '✓', foreshadows: '⚑', misc: '✧'})[page]),
       element('span', {class: 'project-page-copy'}, element('strong', {}, title), element('small', {}, description)))));
 }
 
@@ -1537,7 +1749,7 @@ function render() {
   $('workspace').classList.toggle('task-workspace', taskScreen);
   const topline = $('workspace').querySelector('.topline');
   topline.hidden = taskScreen;
-  const pageTitles = {overview: '作品概览', characters: '角色档案', outline: '章节大纲', chapters: '正文创作', consistency: '一致性核对'};
+  const pageTitles = {overview: '作品概览', characters: '角色档案', outline: '章节大纲', chapters: '正文创作', consistency: '一致性核对', foreshadows: '伏笔档案', misc: '杂记'};
   topline.querySelector('span:first-child').textContent = state.screen === 'project' ?
     (pageTitles[state.tab] || '创作空间') : state.screen === 'trends' ? '文件选题' : state.screen === 'document-report' ? '历史选题' : state.screen === 'setting-report' ? '设定补全' : state.screen === 'analysis' ? '小说拆解' : state.screen === 'analysis-report' ? '拆解报告' : state.screen === 'analysis-library' ? '写作技法库' : state.screen === 'analysis-review' ? '技法审核' : state.screen === 'trash' ? '回收站' : '任务进度';
   topline.querySelector('.topline-note').textContent = state.screen === 'project' ?
@@ -1600,6 +1812,8 @@ function render() {
   else if (state.tab === 'chapters') content = chapterView();
   else if (state.tab === 'characters') content = characterView();
   else if (state.tab === 'consistency') content = consistencyView();
+  else if (state.tab === 'foreshadows') content = foreshadowView();
+  else if (state.tab === 'misc') content = miscView();
   else content = overview();
   view.replaceChildren(hero(state.project, state.tab !== 'overview'), content);
 }
@@ -1612,8 +1826,68 @@ async function activate(tab) {
   if (tab === 'chapters' && !state.page && !state.chapterLoading) await loadChapters();
   if (tab === 'characters' && !state.characterLoading) await loadCharacters();
   if (tab === 'consistency' && !state.consistencyPage && !state.consistencyLoading) await loadConsistencyChapters();
+  if (tab === 'foreshadows' && !state.foreshadowLoading) await loadForeshadows(state.foreshadowPage?.page || 1);
+  if (tab === 'misc' && !state.miscLoading) await loadMisc(state.miscPage?.page || 1);
 }
 
+async function loadEntityReviews(projectId) {
+  if (!projectId || state.entityReviewsLoading) return;
+  state.entityReviewsLoading = true;
+  try {
+    const data = await api(`/writing/projects/${projectId}/entity-reviews`, {filters: {status: 'pending'}});
+    state.entityReviews = data.items || [];
+    state.entityCharacters = data.characters || [];
+    state.entityFactions = data.factions || [];
+  } catch (error) {
+    state.entityReviews = [];
+    notify(`新角色/势力审核记录读取失败：${error.message}`, 'error');
+  } finally {
+    state.entityReviewsLoading = false;
+    if (state.screen === 'project' && state.tab === 'consistency') render();
+    if (state.screen === 'progress' && consistencyProgress) {
+      renderTaskResult(consistencyProgress.job, consistencyProgress.result);
+    }
+  }
+}
+
+async function approveEntityReview(review) {
+  try {
+    const result = await post(`/writing/projects/${review.project_id}/entity-reviews/${review.id}/approve`, {});
+    notify(result.reused ? `已关联现有${result.entity_type === 'character' ? '角色' : '势力'}。` : '已审核通过并写入档案。');
+    state.entityReviews = null;
+    await loadEntityReviews(review.project_id);
+  } catch (error) {
+    notify(`审核失败：${error.message}`, 'error');
+  }
+}
+
+async function rejectEntityReview(review) {
+  try {
+    await post(`/writing/projects/${review.project_id}/entity-reviews/${review.id}/reject`, {});
+    notify('已忽略该新角色/势力。');
+    state.entityReviews = null;
+    await loadEntityReviews(review.project_id);
+  } catch (error) {
+    notify(`忽略失败：${error.message}`, 'error');
+  }
+}
+
+async function replaceEntityReview(review, select) {
+  const existingId = Number(select.value);
+  if (!existingId) {
+    notify('请先选择一个现有角色/势力。', 'error');
+    return;
+  }
+  try {
+    const job = await post(`/writing/projects/${review.project_id}/entity-reviews/${review.id}/replace/tasks`,
+      {existing_id: existingId, ...(state.modelChoice ? {model: state.modelChoice} : {})});
+    state.entityReviews = null;
+    recordJob(job);
+    void openProgress(job.id);
+  } catch (error) {
+    notify(`提交重写失败：${error.message}`, 'error');
+  }
+}
 async function loadConsistencyChapters(offset = 0) {
   const token = key('consistency');
   state.consistencyLoading = true;
@@ -1644,8 +1918,7 @@ function consistencyView() {
   const version = element('select', {'aria-label': '一致性核对大纲版本', disabled: !state.outlines.length,
     change: (event) => { state.consistencyOutlineId = Number(event.target.value); }},
     state.outlines.map(row => element('option', {value: row.id, selected: row.id === outlineId}, `大纲 v${row.version_no}`)));
-  const controls = panel('一致性核对智能体', stack(
-    muted('多选章节，先读取指定大纲、人物档案、人物关系及相关设定，再逐项对照正文。每个问题必须有档案与正文原文依据，资料不足时说明限制。'),
+  const controls = panel('一致性核对智能体', stack(    muted('多选章节，先读取指定大纲、人物档案、人物关系及相关设定，再逐项对照正文。每个问题必须有档案与正文原文依据，资料不足时说明限制。'),
     actions(element('label', {class: 'control'}, '对照大纲', version),
       button(`核对所选章节（${selected.length}）`, consistencyDialog, 'primary', state.busy || !selected.length || !outlineId || state.worlds.length !== 1),
       button('清空选择', () => { state.consistencySelection.clear(); render(); }, 'secondary', !selected.length),
@@ -1675,6 +1948,9 @@ function consistencyView() {
       button('上一页', () => loadConsistencyChapters(page.offset - pageSize), 'secondary', !page.offset || state.consistencyLoading),
       `第 ${Math.floor(page.offset / pageSize) + 1} 页`,
       button('下一页', () => loadConsistencyChapters(page.offset + pageSize), 'secondary', !page.has_more || state.consistencyLoading)) : null));
+  if (state.consistencyReport && state.entityReviews === null && !state.entityReviewsLoading) {
+    void loadEntityReviews(state.project.id);
+  }
   return stack(controls, directory, state.consistencyReport ? consistencyReportView(state.consistencyReport) : null);
 }
 
@@ -1709,6 +1985,41 @@ async function adoptConsistencyIssues(report, indexes) {
   }
 }
 
+function entityReviewPanel(report) {
+  if (state.entityReviews === null) return panel('新角色/势力待审核', muted('正在读取待审核记录…'));
+  if (!state.entityReviews.length) return null;
+  const types = {character: '新角色', faction: '新势力'};
+  return panel(`新角色/势力待审核（${state.entityReviews.length}）`, stack(
+    muted('一致性核对发现正文里出现了不在角色表/势力表中的专名。通过后会写入正式档案并关联势力、分卷；也可以选择现有角色/势力，重写本章修正称呼与关系。'),
+    ...state.entityReviews.map(review => {
+      const options = review.entity_type === 'character' ? state.entityCharacters : state.entityFactions;
+      const select = element('select', {}, [
+        element('option', {value: ''}, `选择现有${review.entity_type === 'character' ? '角色' : '势力'}`),
+        ...options.map(item => element('option', {value: item.id},
+          `${item.name}${item.role ? ` · ${item.role}` : item.faction_type ? ` · ${item.faction_type}` : ''}`)),
+      ]);
+      const chapter = report.chapters?.find(row => row.chapter_id === review.chapter_id);
+      const details = review.details || {};
+      return element('section', {class: 'report-issue'},
+        element('div', {class: 'hero-meta'}, pill(types[review.entity_type] || '新实体'), pill('待审核', true),
+          chapter ? pill(`第 ${chapter.chapter_number} 章`) : null),
+        element('h3', {}, review.name),
+        details.summary ? prose(details.summary) : null,
+        review.entity_type === 'character'
+          ? muted([details.role, details.faction_name].filter(Boolean).join(' · '))
+          : muted([details.faction_type, details.goal].filter(Boolean).join(' · ')),
+        ...(review.evidence || []).map(item => element('blockquote',
+          {class: 'prose consistency-quote'}, item.quote)),
+        element('label', {class: 'control'},
+          `或改用现有${review.entity_type === 'character' ? '角色' : '势力'}`, select),
+        actions(
+          button('审核通过并新增', () => approveEntityReview(review), 'primary'),
+          button(`用所选现有${review.entity_type === 'character' ? '角色' : '势力'}重写本章`,
+            () => replaceEntityReview(review, select), 'secondary', !options.length),
+          button('忽略', () => rejectEntityReview(review), 'secondary')));
+    })));
+}
+
 function consistencyReportView(report) {
   const verdicts = {consistent: '所选范围未发现明确偏移', drifted: '发现偏移，建议修正', insufficient: '资料不足，暂无法完整判断'};
   const categories = {plot: '剧情偏移', character: '人物偏移', world: '设定冲突', continuity: '章节衔接'};
@@ -1727,6 +2038,11 @@ function consistencyReportView(report) {
     state.consistencyIssuePage = 1;
     state.consistencySelectedIssues = new Set();
     state.consistencyShowReport = false;
+    state.entityReviews = null;
+  }
+  if (state.entityReviews === null && !state.entityReviewsLoading) {
+    const projectId = state.screen === 'progress' ? report.project_id : (state.project?.id || report.project_id);
+    void loadEntityReviews(projectId);
   }
   const issues = report.issues || [];
   const selected = state.consistencySelectedIssues;
@@ -1811,6 +2127,8 @@ function consistencyReportView(report) {
     pill(verdicts[report.verdict] || '核对完成', report.verdict !== 'consistent')));
   };
   paint();
+  const entityPanel = entityReviewPanel(report);
+  if (entityPanel) root.append(entityPanel);
   return root;
 }
 
@@ -2424,11 +2742,13 @@ async function outlineDialog() {
   catch (error) { if (account === requestingAccount) notify(`大纲技能加载失败：${error.message}`, 'error'); return; }
   if (account !== requestingAccount || state.project?.id !== id) return;
   const picker = await techniquePicker(['worldbuilding', 'outline']);
+  const foreshadow = foreshadowPicker();
   openAction({title: '生成新大纲', description: `根据当前世界观创建一个新版本，已有大纲会保留。${selection.notice}。`,
     submit: '生成并保存', fields: [numberField('volume_count', '分卷数', 3, 1, 5), outlineThemeField, noteField],
     useModel: true,
-    extra: picker.extra,
-    payload: data => ({...data, technique_ids: picker.ids()}),
+    extra: element('div', {}, picker.extra, foreshadow.extra),
+    payload: data => ({...data, technique_ids: picker.ids(),
+      consume_foreshadow_ids: foreshadow.consumeIds(), plant_foreshadow_ids: foreshadow.plantIds()}),
     taskPath: `/writing/projects/${id}/outline/tasks`,
   });
 }
@@ -2553,12 +2873,14 @@ function exportDialog() {
 
 async function outlineRewriteDialog(outline) {
   const picker = await techniquePicker(['worldbuilding', 'outline']);
+  const foreshadow = foreshadowPicker();
   openAction({title: '重写大纲', description: `基于大纲 v${outline.version_no}、现有角色和世界观重写全书结构，结果保存为新版本。原大纲、已有章节和原卷戏份保留在原版本中。`,
     submit: '重写并保存新版本', fields: [numberField('volume_count', '重写后的分卷数', Math.min(5, state.volumes.length), 1, 5), outlineThemeField,
       {...noteField, label: '重写要求（可选）', placeholder: '例如：保留主线，加强第二卷冲突，调整结尾伏笔'}],
     useModel: true,
-    extra: picker.extra,
-    payload: data => ({...data, technique_ids: picker.ids()}),
+    extra: element('div', {}, picker.extra, foreshadow.extra),
+    payload: data => ({...data, technique_ids: picker.ids(),
+      consume_foreshadow_ids: foreshadow.consumeIds(), plant_foreshadow_ids: foreshadow.plantIds()}),
     taskPath: `/writing/outlines/${outline.id}/rewrite/tasks`});
 }
 
