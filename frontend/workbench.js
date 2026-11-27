@@ -1439,15 +1439,16 @@ function foreshadowView() {
   const list = rows.length ? element('div', {class: 'story-list'}, ...rows) :
     empty('还没有伏笔', state.foreshadowLoading ? '正在读取…' : '可以手工新增，或在章节一致性核对后自动整理。');
   return stack(
-    panel('伏笔档案', stack(
-      muted('记录预设和正文分析出的伏笔；新建大纲时可选择消费或预埋，已消费的伏笔不再出现在选择列表。'),
-      actions(element('label', {class: 'control'}, '状态', status),
+    element('section', {class: 'story-toolbar'},
+      element('div', {class: 'story-toolbar-copy'}, element('strong', {}, '伏笔档案'),
+        muted('预埋、消费与来源章节；长内容点开查看')),
+      element('div', {class: 'story-toolbar-actions'},
+        element('label', {class: 'control'}, '状态', status),
         element('label', {class: 'control'}, '类别', category),
         button('新增伏笔', foreshadowCreateDialog, 'primary'),
         button('刷新', () => loadForeshadows(page?.page || 1), 'secondary', state.foreshadowLoading)),
-      page ? storyPaging(page, loadForeshadows) : null)),
-    list,
-    page ? storyPaging(page, loadForeshadows) : null);
+      page ? storyPaging(page, loadForeshadows) : null),
+    list);
 }
 
 function miscView() {
@@ -1474,14 +1475,15 @@ function miscView() {
   const list = rows.length ? element('div', {class: 'story-list'}, ...rows) :
     empty('还没有杂记', state.miscLoading ? '正在读取…' : '正文一致性核对会自动整理关键事件、物品、灵兽、路人和功法。');
   return stack(
-    panel('杂记', stack(
-      muted('记录关键事件、独特物品、灵兽、路人角色、功法技能和地点场所；正文分析会自动更新最近出现章节。'),
-      actions(element('label', {class: 'control'}, '分类', type),
+    element('section', {class: 'story-toolbar'},
+      element('div', {class: 'story-toolbar-copy'}, element('strong', {}, '杂记'),
+        muted('关键事件、物品、灵兽、路人与功法；长内容点开查看')),
+      element('div', {class: 'story-toolbar-actions'},
+        element('label', {class: 'control'}, '分类', type),
         button('新增杂记', miscCreateDialog, 'primary'),
         button('刷新', () => loadMisc(page?.page || 1), 'secondary', state.miscLoading)),
-      page ? storyPaging(page, loadMisc) : null)),
-    list,
-    page ? storyPaging(page, loadMisc) : null);
+      page ? storyPaging(page, loadMisc) : null),
+    list);
 }
 
 function foreshadowCreateDialog() {
@@ -1844,7 +1846,7 @@ function render() {
   else if (state.tab === 'foreshadows') content = foreshadowView();
   else if (state.tab === 'misc') content = miscView();
   else content = overview();
-  view.replaceChildren(hero(state.project, state.tab !== 'overview'), content);
+  view.replaceChildren(...[state.tab === 'overview' ? hero(state.project, false) : null, content].filter(Boolean));
 }
 
 async function activate(tab) {

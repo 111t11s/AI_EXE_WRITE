@@ -254,3 +254,32 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 #world-template-text{min-height:120px;resize:vertical}
 @media(max-width:760px){.world-template-fields{grid-template-columns:minmax(0,1fr)}}
 
+/* 信息密度：顶部控制区不超过约 20%，主体列表占主要视线。 */
+.workspace>.topline{height:48px;margin-bottom:12px}
+.project-hero.compact{padding:10px 16px;gap:2px 14px;min-height:0}
+.project-hero.compact .eyebrow{display:none}
+.project-hero.compact h1{font-size:clamp(1.2rem,2vw,1.55rem)}
+.project-hero.compact .hero-meta{gap:4px;margin-top:1px}
+.project-hero.compact>.actions{gap:6px}
+.project-hero.compact>.actions .button{padding:7px 10px;font-size:.76rem}
+.project-hero.compact::after{width:150px;height:150px;right:-36px;bottom:-120px}
+.story-toolbar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 14px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface)}
+.story-toolbar-copy{display:flex;align-items:baseline;gap:9px;min-width:0}
+.story-toolbar-copy strong{font-size:.9rem;white-space:nowrap}
+.story-toolbar-copy .muted{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.72rem}
+.story-toolbar-actions{display:flex;flex-wrap:wrap;align-items:end;justify-content:flex-end;gap:6px}
+.story-toolbar-actions .control{display:flex;align-items:center;gap:4px;font-size:.72rem}
+.story-toolbar-actions select{min-height:32px;padding:4px 24px 4px 8px;font-size:.75rem}
+.story-toolbar-actions .button{min-height:32px;padding:5px 9px;font-size:.75rem}
+.story-toolbar .story-paging{grid-column:1/-1;border-top:1px solid var(--line);padding-top:5px;margin:0;font-size:.72rem}
+.story-toolbar .story-paging .button{min-height:28px;padding:3px 8px}
+.story-row{padding:7px 10px;gap:8px;border-radius:8px}
+.story-main strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.86rem}
+.story-tags{gap:4px;margin-top:3px}
+.story-tags .pill{padding:1px 6px;font-size:.64rem}
+.story-where{font-size:.73rem;line-height:1.35}
+.story-where .muted{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.story-row .button{min-height:30px;padding:4px 9px;font-size:.74rem}
+.story-list{gap:5px}
+@media(max-width:760px){.workspace>.topline{height:42px}.story-toolbar{grid-template-columns:minmax(0,1fr)}.story-toolbar-actions{justify-content:flex-start}.story-toolbar-copy .muted{white-space:normal}}
+
