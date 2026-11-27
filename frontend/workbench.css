@@ -225,7 +225,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 
 /* 伏笔与杂记 */
 .story-list{display:grid;gap:8px}
-.story-row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 14px;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+.story-row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 14px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
 .story-main{min-width:0}.story-main strong{display:block;overflow-wrap:anywhere}
 .story-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
 .story-where{min-width:0;font-size:.78rem;line-height:1.5}.story-where .muted{margin:0}
@@ -235,4 +235,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 .story-picker legend{padding:0 5px;font-size:.8rem;font-weight:680}
 .story-picker-list{display:grid;gap:5px;margin-top:6px}
 @media(max-width:720px){.story-row{grid-template-columns:minmax(0,1fr);gap:7px}.story-row .button{justify-self:start}}
+
+/* 结构化世界观模板 */
+.world-template{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.world-template-section{border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--surface)}
+.world-template-section h3{margin:0 0 6px;font-size:.82rem}
+.world-line{margin:3px 0;font-size:.8rem;line-height:1.55;overflow-wrap:anywhere}
+.world-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px;color:var(--muted);font-size:.75rem}
+@media(max-width:720px){.world-template{grid-template-columns:minmax(0,1fr)}}
 

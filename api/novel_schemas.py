@@ -51,6 +51,7 @@ class WorldCreate(RowInput):
     history: str | None = None
     rules: str = ""
     cultures: str = ""
+    template: dict[str, str] | None = None
     is_current: bool = True
 
 

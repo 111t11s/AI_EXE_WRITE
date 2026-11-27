@@ -84,7 +84,8 @@ def test_body_rewrite_reads_original_and_saves_complete_draft(novel, monkeypatch
         assert context["chapter"]["title"] == "渡河"
         assert context["characters"][0]["name"] == "舟客"
         assert context["plot_beats"][0]["title"] == "渡河"
-        assert context["request"] == {"target_characters": 1500, "instruction": "加强对话"}
+        assert context["request"] == {"target_characters": 1500, "instruction": "加强对话",
+                                      "technique_ids": []}
         return ChapterDraft(character_updates=[], content=REWRITTEN)
 
     monkeypatch.setattr(agents, "generate", generate)
@@ -206,10 +207,13 @@ def test_model_failure_preserves_original(novel, monkeypatch, resource):
 @pytest.mark.parametrize("problem", ["count", "changed_outline", "changed_beat"])
 def test_invalid_or_stale_outline_rewrite_has_no_partial_version(novel, monkeypatch, problem):
     def generate(role, context, profile=None):
-        if problem != "count":
-            table = tables["novel_outline" if problem == "changed_outline" else "novel_plot_beat"]
-            with novel["engine"].begin() as connection:
-                connection.execute(update(table).where(table.c.id == 1).values(summary="手工更新"))
+        if problem == "count":
+            artifact = outline_artifact()
+            artifact.volumes.append(artifact.volumes[0].model_copy())
+            return artifact
+        table = tables["novel_outline" if problem == "changed_outline" else "novel_plot_beat"]
+        with novel["engine"].begin() as connection:
+            connection.execute(update(table).where(table.c.id == 1).values(summary="手工更新"))
         return outline_artifact()
 
     monkeypatch.setattr(agents, "generate", generate)

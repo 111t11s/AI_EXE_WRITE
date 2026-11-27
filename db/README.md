@@ -19,6 +19,7 @@ This is the new canonical structure for the novel-design workflow. The legacy XM
 - setting_expansion.py / migrate_setting_expansion.py: existing-setting expansion reports stored in app_setting_expansion. Run deployment/setting-expansion.sql as a database administrator when upgrading.
 - entity_reviews.py / migrate_entity_reviews.py: pending new character/faction reviews from consistency checks stored in app_entity_review; approving writes novel_character/novel_faction, replacing rewrites the chapter with an existing entity.
 - foreshadows.py / misc_notes.py / migrate_story_notes.py: foreshadow planting/consumption and misc notes stored in novel_foreshadow/novel_misc_note; deployment/story-notes.sql is the schema-admin migration.
+- migrate_world_template.py: adds novel_world.template JSON for the structured world template; deployment/world-template.sql is the schema-admin migration.
 - analysis_technique / analysis_candidate / analysis_dimension: approved technique table, pending new-dimension candidates, and approved extension dimensions; approved dimensions and techniques are categorized as worldbuilding, outline, or prose for the writing knowledge base. Approving a candidate writes the technique and makes its dimension available to later analyses.
 - `reset_password.py`: interactive administrator password reset that revokes all sessions.
 

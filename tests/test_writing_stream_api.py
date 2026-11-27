@@ -52,6 +52,8 @@ def test_all_writing_endpoints_stream_then_validate_and_save(monkeypatch, path, 
                         lambda: Account(id=1, username="writer", display_name="作者"))
     monkeypatch.setattr(api, "require_resource", Mock())
     monkeypatch.setattr(api, "task_project", Mock(return_value=2))
+    monkeypatch.setattr(api, "next_volume_number", Mock(return_value=1))
+    monkeypatch.setattr(api, "outline_volume_number", Mock(return_value=1))
     context = {
         "project": {"id": 2}, "world": {"rules": "施法消耗灵气"}, "chapter": {"id": 5}, "characters": [{"name": "少年"}],
     }

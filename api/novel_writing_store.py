@@ -130,7 +130,7 @@ def insert_row(connection, relation, **values):
     return connection.execute(insert(relation).values(**values)).lastrowid
 
 
-def save_outline(engine, project_id: int, artifact: OutlineDraft, sources=()) -> OutlineReceipt:
+def save_outline(engine, project_id: int, artifact: OutlineDraft, sources=(), volume_number=None) -> OutlineReceipt:
     project, outline = tables["novel_project"], tables["novel_outline"]
     volume, beat = tables["novel_outline_volume"], tables["novel_plot_beat"]
     with transaction(engine) as connection:
@@ -146,7 +146,8 @@ def save_outline(engine, project_id: int, artifact: OutlineDraft, sources=()) ->
         volume_ids = []
         beat_count = 0
         for number, planned in enumerate(artifact.volumes, 1):
-            volume_id = insert_row(connection, volume, outline_id=outline_id, volume_number=number,
+            assigned_number = int(volume_number) + number - 1 if volume_number is not None else number
+            volume_id = insert_row(connection, volume, outline_id=outline_id, volume_number=assigned_number,
                                    **planned.model_dump(exclude={"beats"}))
             volume_ids.append(volume_id)
             for order, item in enumerate(planned.beats, 1):
@@ -154,6 +155,22 @@ def save_outline(engine, project_id: int, artifact: OutlineDraft, sources=()) ->
                 beat_count += 1
         return OutlineReceipt(project_id=project_id, outline_id=outline_id, version_no=version,
                               volume_ids=volume_ids, plot_beat_count=beat_count)
+
+
+def next_volume_number(engine, project_id: int) -> int:
+    outline, volume = tables["novel_outline"], tables["novel_outline_volume"]
+    with transaction(engine) as connection:
+        current = connection.scalar(select(func.max(volume.c.volume_number)).join(
+            outline, volume.c.outline_id == outline.c.id).where(outline.c.project_id == project_id))
+    return int(current or 0) + 1
+
+
+def outline_volume_number(engine, outline_id: int) -> int:
+    volume = tables["novel_outline_volume"]
+    with transaction(engine) as connection:
+        current = connection.scalar(select(func.min(volume.c.volume_number)).where(
+            volume.c.outline_id == outline_id))
+    return int(current or 1)
 
 
 def save_chapter_plan(engine, project_id: int, volume_id: int, start: int,

@@ -20,7 +20,8 @@ from api.ownership import require_resource
 from agents.mcp.worldbuilding import NovelToolError, call_novel_tool, novel_session
 from api.novel_crud_api import Database, get_row, response_row
 from api.novel_schemas import RowId
-from api.novel_writing_store import character_name_key, require_empty_plan, save_chapter_plan, save_draft, save_outline
+from api.novel_writing_store import (character_name_key, next_volume_number, outline_volume_number,
+                                     require_empty_plan, save_chapter_plan, save_draft, save_outline)
 from api.novel_writing_store import (save_characters, save_rewritten_draft, save_character_progress,
                                      save_continued_draft)
 from api.novel_tables import tables
@@ -533,7 +534,6 @@ async def generate(role, context, payload):
         raise HTTPException(502, "模型生成失败或未返回有效的小说内容") from None
 
 
-@router.post("/projects/{project_id}/outline", response_model=OutlineReceipt, status_code=201, summary="生成并保存小说大纲")
 async def apply_techniques(context: dict, payload: WritingInput, user: CurrentAccount, engine,
                            categories: set[str]) -> dict:
     """把用户选中的知识库技法注入生成上下文；只借鉴写法，不改既定事实。"""
@@ -563,15 +563,19 @@ async def apply_techniques(context: dict, payload: WritingInput, user: CurrentAc
     return context
 
 
+@router.post("/projects/{project_id}/outline", response_model=OutlineReceipt, status_code=201, summary="生成并保存单卷小说大纲")
 async def write_outline(project_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
+    volume_number = payload.volume_number or await run_in_threadpool(next_volume_number, engine, project_id)
     context = await load_context(project_context, project_id)
+    context["volume_plan"] = {"volume_number": volume_number,
+                              "theme": payload.volume_theme.strip() or payload.instruction.strip()}
     context = await apply_techniques(context, payload, user, engine, OUTLINE_TECHNIQUE_CATEGORIES)
     artifact = await generate(agents.OUTLINE, context, payload)
-    if len(artifact.volumes) != payload.volume_count:
-        raise HTTPException(502, "模型返回的分卷数量与请求不符")
-    emit_generation_event("status", message="大纲校验通过，正在保存大纲与分卷…")
-    receipt = await run_in_threadpool(save_outline, engine, project_id, artifact)
+    if len(artifact.volumes) != 1:
+        raise HTTPException(502, "每次只生成一卷大纲，模型返回了多个分卷，结果未保存")
+    emit_generation_event("status", message="单卷大纲校验通过，正在保存大纲与分卷…")
+    receipt = await run_in_threadpool(save_outline, engine, project_id, artifact, (), volume_number)
     try:
         await run_in_threadpool(foreshadow_db.apply_outline_selection, engine, project_id,
                                 payload.consume_foreshadow_ids, payload.plant_foreshadow_ids,
@@ -675,13 +679,16 @@ async def write_batch_draft(project_id: RowId, payload: BatchDraftRequest,
 @router.post("/outlines/{outline_id}/rewrite", response_model=OutlineReceipt, status_code=201, summary="重写大纲并保存为新版本")
 async def rewrite_outline(outline_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
     project_id = await run_in_threadpool(task_project, engine, "novel_outline", outline_id, user.id)
+    volume_number = payload.volume_number or await run_in_threadpool(outline_volume_number, engine, outline_id)
     context, sources = await load_context(character_context, project_id, outline_id)
+    context["volume_plan"] = {"volume_number": volume_number,
+                              "theme": payload.volume_theme.strip() or payload.instruction.strip()}
     context = await apply_techniques(context, payload, user, engine, OUTLINE_TECHNIQUE_CATEGORIES)
     artifact = await generate(agents.OUTLINE_REWRITE, context, payload)
-    if len(artifact.volumes) != payload.volume_count:
-        raise HTTPException(502, "模型返回的分卷数量与请求不符，重写结果未保存")
-    emit_generation_event("status", message="重写大纲校验通过，正在保存新版本…")
-    receipt = await run_in_threadpool(save_outline, engine, project_id, artifact, sources)
+    if len(artifact.volumes) != 1:
+        raise HTTPException(502, "每次只重写一卷大纲，模型返回了多个分卷，重写结果未保存")
+    emit_generation_event("status", message="单卷大纲校验通过，正在保存新版本…")
+    receipt = await run_in_threadpool(save_outline, engine, project_id, artifact, sources, volume_number)
     try:
         await run_in_threadpool(foreshadow_db.apply_outline_selection, engine, project_id,
                                 payload.consume_foreshadow_ids, payload.plant_foreshadow_ids,
@@ -828,7 +835,7 @@ def task_project(engine, table_name, record_id, account_id):
 async def start_outline(project_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
     return generation_jobs.store.start(account_id=user.id, key=f"outline:{project_id}", kind="outline",
-        title="生成小说大纲", project_id=project_id, resource_id=project_id,
+        title="生成单卷大纲", project_id=project_id, resource_id=project_id,
         operation=lambda: write_outline(project_id, payload, user, engine)).summary()
 
 

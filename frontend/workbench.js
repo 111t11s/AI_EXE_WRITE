@@ -1725,6 +1725,31 @@ async function togglePublication() {
   }
 }
 
+function worldTemplateData(world) {
+  const raw = world?.template;
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function worldTemplateView(world) {
+  const tpl = worldTemplateData(world);
+  if (!tpl) return null;
+  const line = (label, value) => value ? element('p', {class: 'world-line'}, element('strong', {}, `${label}：`), value) : null;
+  const section = (title, ...children) => element('section', {class: 'world-template-section'},
+    element('h3', {}, title), ...children.filter(Boolean));
+  return element('div', {class: 'world-template'},
+    section('【核心设定】', element('p', {},
+      `这是一个${tpl.core_concept || '未知'}的世界，最特殊之处在于${tpl.special_feature || '尚未说明'}。`)),
+    section('【类型与基调】', line('类型', tpl.genre), line('基调', tpl.tone)),
+    section('【时空与舞台】', line('时代', tpl.era), line('主要地域', tpl.main_regions),
+      line('文明/科技水平', tpl.civilization_level)),
+    section('【底层规则】', line('世界允许', tpl.allowed), line('世界禁止', tpl.forbidden),
+      line('超凡力量或核心技术', tpl.power_core)),
+    section('【限制与代价】', line('使用条件', tpl.use_conditions), line('消耗或成本', tpl.costs),
+      line('失败后果', tpl.failure_consequences), line('反制方式', tpl.countermeasures)));
+}
+
 function overview() {
   const world = state.worlds[0];
   const project = state.project;
@@ -1732,10 +1757,14 @@ function overview() {
     ['角色', '世界观生成后自动创建男女主，之后按大纲补充配角'],
     ['大纲与分卷', state.outlines.length ? `已有 ${state.outlines.length} 个大纲版本` : '生成全书结构与剧情节点'],
     ['章节与正文', '先规划章节，再生成初稿或手动编辑'], ['审读', '检查人物、设定与情节衔接']];
-  const worldPanel = world ? panel(world.title, stack(prose(world.summary), element('div', {class: 'details'},
+  const templateView = world ? worldTemplateView(world) : null;
+  const fallbackWorld = world ? stack(prose(world.summary), element('div', {class: 'details'},
     [['世界规则', world.rules], ['历史沿革', world.history], ['文化与社会', world.cultures]].filter(([, value]) => value)
-      .map(([name, value]) => element('details', {}, element('summary', {}, name), prose(value))))),
-  world.era, pill(`世界观 v${world.version_no}`)) : empty('尚无当前世界观', '生成大纲前需要一个当前世界观。也可以新建小说，通过问答建立世界观。');
+      .map(([name, value]) => element('details', {}, element('summary', {}, name), prose(value))))) : null;
+  const worldBody = world ? stack(templateView || fallbackWorld,
+    element('div', {class: 'world-meta'}, world.era, pill(`世界观 v${world.version_no}`))) : null;
+  const worldPanel = world ? panel(world.title, worldBody) :
+    empty('尚无当前世界观', '生成大纲前需要一个当前世界观。也可以新建小说，通过问答建立世界观。');
   return element('div', {class: 'layout'}, stack(worldPanel, panel('项目设定', details(['时代与背景', project.setting],
     ['主角目标', project.protagonist_goal], ['篇幅规划', project.target_length]))),
   panel('创作路线', stack(element('ol', {class: 'steps'}, steps.map(([name, hint], index) => element('li', {},
@@ -2476,15 +2505,15 @@ async function loadVolume(id) {
 }
 
 function outlineView() {
-  const create = mutationButton('生成新大纲', outlineDialog, 'primary', state.busy || state.worlds.length !== 1);
+  const create = mutationButton('生成新一卷大纲', outlineDialog, 'primary', state.busy || state.worlds.length !== 1);
   if (!state.outlines.length) return empty('还没有大纲', state.worlds.length === 1 ?
-    '以当前世界观生成第一版大纲，分卷和剧情节点会一并保存。' : '需要先为项目设置唯一的当前世界观。', create);
+    '先规划第一卷主题，再生成单卷大纲；剧情节点会一并保存。' : '需要先为项目设置唯一的当前世界观。', create);
   const versionSelect = element('select', {'aria-label': '大纲版本', change: (event) => loadOutline(Number(event.target.value))},
     state.outlines.map((row) => element('option', {value: row.id, selected: state.outline?.id === row.id},
       `版本 ${row.version_no} · ${statusNames[row.status] ?? '未知状态'}`)));
-  const header = panel('大纲版本', state.outline ? details(['全书摘要', state.outline.summary],
+  const header = panel('大纲版本', state.outline ? details(['本卷摘要', state.outline.summary],
     ['核心冲突', state.outline.central_conflict], ['主题', state.outline.themes]) : muted('正在读取大纲…'), null,
-  actions(versionSelect, state.outline ? mutationButton('重写大纲', () => outlineRewriteDialog(state.outline), 'secondary',
+  actions(versionSelect, state.outline ? mutationButton('重写本卷大纲', () => outlineRewriteDialog(state.outline), 'secondary',
     state.busy || state.worlds.length !== 1 || !state.volumes?.length) : null, create));
   if (state.outlineError) return stack(header, empty('分卷读取失败', state.outlineError, button('重试', () => loadOutline(state.outline.id))));
   if (!state.volumes) return stack(header, empty('正在读取分卷', '请稍候。'));
@@ -2621,6 +2650,8 @@ const outlineThemeField = {name: 'outline_theme', label: '本版大纲主题', t
   {value: 'relationship', label: '关系推进'},
   {value: 'custom', label: '自定义主题（请在补充要求中说明）'},
 ]};
+const volumeThemeField = {name: 'volume_theme', label: '本卷大纲主题', type: 'textarea', required: true,
+  maxlength: 500, rows: 3, placeholder: '例如：主角第一次进入旧港地下拍卖会，夺回线索却暴露身份'};
 const numberField = (name, label, value, min, max) => ({name, label, value, min, max, type: 'number', required: true});
 const modelChoices = () => state.modelOptions.map(item => ({value: item.id, label: `${item.label} · ${item.model}`}));
 
@@ -2743,8 +2774,9 @@ async function outlineDialog() {
   if (account !== requestingAccount || state.project?.id !== id) return;
   const picker = await techniquePicker(['worldbuilding', 'outline']);
   const foreshadow = foreshadowPicker();
-  openAction({title: '生成新大纲', description: `根据当前世界观创建一个新版本，已有大纲会保留。${selection.notice}。`,
-    submit: '生成并保存', fields: [numberField('volume_count', '分卷数', 3, 1, 5), outlineThemeField, noteField],
+  const nextVolumeNumber = Math.max(0, ...(state.volumes || []).map(row => Number(row.volume_number) || 0)) + 1;
+  openAction({title: '生成本卷大纲', description: `每次只生成一卷，已有大纲会保留。请先规划本卷主题；本卷将作为大纲 v${state.outlines.length + 1} 保存。${selection.notice}。`,
+    submit: '生成并保存本卷', fields: [numberField('volume_number', '卷号', nextVolumeNumber, 1, 1000), volumeThemeField, noteField],
     useModel: true,
     extra: element('div', {}, picker.extra, foreshadow.extra),
     payload: data => ({...data, technique_ids: picker.ids(),
@@ -2874,9 +2906,11 @@ function exportDialog() {
 async function outlineRewriteDialog(outline) {
   const picker = await techniquePicker(['worldbuilding', 'outline']);
   const foreshadow = foreshadowPicker();
-  openAction({title: '重写大纲', description: `基于大纲 v${outline.version_no}、现有角色和世界观重写全书结构，结果保存为新版本。原大纲、已有章节和原卷戏份保留在原版本中。`,
-    submit: '重写并保存新版本', fields: [numberField('volume_count', '重写后的分卷数', Math.min(5, state.volumes.length), 1, 5), outlineThemeField,
-      {...noteField, label: '重写要求（可选）', placeholder: '例如：保留主线，加强第二卷冲突，调整结尾伏笔'}],
+  const currentVolume = state.volume || state.volumes?.[0];
+  const volumeNumber = currentVolume?.volume_number || 1;
+  openAction({title: '重写本卷大纲', description: `基于大纲 v${outline.version_no}、当前分卷和现有角色重写这一卷，结果保存为新版本。原大纲、已有章节和原卷戏份保留在原版本中。`,
+    submit: '重写并保存本卷', fields: [numberField('volume_number', '卷号', volumeNumber, 1, 1000), volumeThemeField,
+      {...noteField, label: '重写要求（可选）', placeholder: '例如：保留主线，加强本卷冲突，调整结尾伏笔'}],
     useModel: true,
     extra: element('div', {}, picker.extra, foreshadow.extra),
     payload: data => ({...data, technique_ids: picker.ids(),

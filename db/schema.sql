@@ -214,6 +214,7 @@ CREATE TABLE IF NOT EXISTS novel_world (
     history LONGTEXT NULL COMMENT '历史沿革',
     rules LONGTEXT NOT NULL COMMENT '世界运行规则与约束说明',
     cultures LONGTEXT NOT NULL COMMENT '文化与社会结构说明',
+    template JSON NULL COMMENT '结构化世界观模板',
     is_current BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否为当前版本',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (id),

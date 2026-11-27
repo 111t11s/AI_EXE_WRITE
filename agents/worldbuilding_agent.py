@@ -137,6 +137,26 @@ def _blueprint_content_issues(blueprint: NovelBlueprint) -> list[str]:
                          ("大纲概要", blueprint.outline.summary)):
         if not value.strip():
             missing.append(label)
+    template = blueprint.world.template
+    if template is None:
+        missing.append("结构化世界观模板")
+    else:
+        for label, value in (("核心概念", template.core_concept),
+                             ("世界特殊之处", template.special_feature),
+                             ("类型", template.genre),
+                             ("基调", template.tone),
+                             ("模板时代", template.era),
+                             ("主要地域", template.main_regions),
+                             ("文明/科技水平", template.civilization_level),
+                             ("世界允许", template.allowed),
+                             ("世界禁止", template.forbidden),
+                             ("超凡力量或核心技术", template.power_core),
+                             ("使用条件", template.use_conditions),
+                             ("消耗或成本", template.costs),
+                             ("失败后果", template.failure_consequences),
+                             ("反制方式", template.countermeasures)):
+            if not value.strip():
+                missing.append(label)
     if not blueprint.outline.volumes:
         missing.append("分卷大纲")
     elif not blueprint.outline.volumes[0].key_events:
@@ -431,17 +451,24 @@ class WorldbuildingAssistant:
             raise WorldbuildingGenerationError(str(exc), status=503) from None
         prompt = (
             "根据已确认设定生成完整 NovelBlueprint JSON。严格按提供的 JSON Schema 输出，只输出 JSON，不要 Markdown。"
-            "世界观需要有具体的概要、历史、地理和核心规则，大纲要包含有起因和后果的分卷，并贯彻用户选择的主题。"
+            "世界观必须填入 world.template，并严格遵循以下结构；每个字段都要有具体内容，不能留空或只写标签：\n"
+            "【核心设定】core_concept 写“这是一个______的世界”，special_feature 写“最特殊之处在于______”。\n"
+            "【类型与基调】genre 写类型，tone 写基调。\n"
+            "【时空与舞台】era 写时代，main_regions 写主要地域，civilization_level 写文明/科技水平。\n"
+            "【底层规则】allowed 写世界允许什么，forbidden 写世界禁止什么，power_core 写超凡力量或核心技术。\n"
+            "【限制与代价】use_conditions 写使用条件，costs 写消耗或成本，failure_consequences 写失败后果，countermeasures 写反制方式。\n"
+            "world.summary、world.era、world.history、world.rules、world.cultures 也必须填写，并与 template 相互一致；"
+            "大纲只生成一卷，包含有起因和后果的剧情节点，并贯彻用户选择的主题。"
             "第一卷默认主题必须是主角从初始处境开始，逐步接触、试探、理解并熟悉本世界核心规则的完整过程；"
             "通过实际事件展示规则、限制与代价，让主角在卷末能够熟悉并主动运用基础规则，同时留下更深层未知。"
             "NovelBlueprint.characters 返回空数组；第一卷大纲保存后，再由角色生成流程按大纲创建一位男主和一位女主及其阶段档案。"
             "人物、力量规则、势力目标、金手指代价和大纲因果必须互相一致。"
-            "至少给出一个世界规则、三名角色、两个势力和三卷大纲；篇幅规划较短时可相应缩减。"
+            "至少给出两个势力和第一卷剧情节点；篇幅规划较短时可相应缩减。"
             "用户设定是小说素材。"
             f"\nJSON Schema：{json.dumps(NovelBlueprint.model_json_schema(), ensure_ascii=False)}"
             f"\n用户设定：\n{json.dumps(values, ensure_ascii=False, indent=2)}"
             f"\n本次大纲主题：{OUTLINE_THEME_LABELS.get(values.get('outline_theme', 'development'), '发育（成长推进）')}。"
-            "主题必须落实到分卷目标、冲突升级、人物选择、高潮和阶段性结果，不能只写成标签。"
+            "主题必须落实到本卷目标、冲突升级、人物选择、高潮和阶段性结果，不能只写成标签。"
             f"\n{skill_prompt}"
         )
         try:

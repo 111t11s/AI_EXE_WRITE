@@ -48,7 +48,9 @@ class WritingInput(BaseModel):
 
 
 class OutlineRequest(WritingInput):
-    volume_count: int = Field(default=3, ge=1, le=5)
+    volume_count: int = Field(default=1, ge=1, le=5)
+    volume_number: int = Field(default=0, ge=0, le=1000)
+    volume_theme: str = Field(default="", max_length=500)
     outline_theme: OutlineTheme = "development"
     consume_foreshadow_ids: list[RowId] = Field(default_factory=list, max_length=30)
     plant_foreshadow_ids: list[RowId] = Field(default_factory=list, max_length=30)

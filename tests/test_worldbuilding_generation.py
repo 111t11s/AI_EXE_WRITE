@@ -20,11 +20,20 @@ BLUEPRINT = {
     "project": {"title": "The Tidal Atlas", "genre": VALUES["genre"], "setting": VALUES["setting"],
                 "tone": VALUES["tone"], "target_length": VALUES["length"], "protagonist_goal": VALUES["goal"]},
     "world": {"summary": "A city whose streets move with the tide", "era": "After the flood",
-              "history": "The flood buried every landmark", "rules": "Maps work only at low tide"},
+              "history": "The flood buried every landmark", "rules": "Maps work only at low tide",
+              "template": {"core_concept": "潮汐城市", "special_feature": "街道随潮水移动",
+                           "genre": "奇幻", "tone": "希望", "era": "洪水之后",
+                           "main_regions": "沉没的旧城与潮汐码头", "civilization_level": "低科技、潮汐魔法",
+                           "allowed": "在低潮时读取旧地图", "forbidden": "满潮时使用旧地图",
+                           "power_core": "潮汐魔法", "use_conditions": "必须站在潮线内",
+                           "costs": "消耗记忆", "failure_consequences": "被困在消失的街道",
+                           "countermeasures": "用锚点固定方向"}},
+    "factions": [{"name": "潮汐议会", "summary": "控制潮汐码头"}, {"name": "旧图师", "summary": "保存旧地图"}],
     "power_system": {"name": "Tidal magic", "source": "The tides"},
     "cheat": {"name": "Living atlas", "cheat_type": "Map"},
     "outline": {"summary": "A cartographer maps the drowned roads", "central_conflict": "The fading shore",
-                "volumes": [{"volume_number": 1, "title": "Low Tide", "summary": "Find the first landmark"}]},
+                "volumes": [{"volume_number": 1, "title": "Low Tide", "summary": "Find the first landmark",
+                             "key_events": [{"order": 1, "title": "低潮出发", "summary": "寻找第一座地标"}]}]},
 }
 
 

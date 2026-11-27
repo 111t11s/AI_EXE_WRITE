@@ -5,7 +5,7 @@ from sqlalchemy import JSON, Boolean, DateTime, column, table
 from api.novel_contracts import CRUD_RESOURCES
 
 
-_sql_types = {"collected_data": JSON(), "is_current": Boolean(), "is_public": Boolean()}
+_sql_types = {"collected_data": JSON(), "template": JSON(), "is_current": Boolean(), "is_public": Boolean()}
 tables = {
     resource.table_name: table(
         resource.table_name, column("id"),

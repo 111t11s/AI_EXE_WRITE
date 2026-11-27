@@ -15,6 +15,7 @@ sudo mysql --default-character-set=utf8mb4 AI_TEXT < deployment/novel-analysis.s
 sudo mysql --default-character-set=utf8mb4 AI_TEXT < deployment/setting-expansion.sql
 sudo mysql --default-character-set=utf8mb4 AI_TEXT < deployment/entity-reviews.sql
 sudo mysql --default-character-set=utf8mb4 AI_TEXT < deployment/story-notes.sql
+sudo mysql --default-character-set=utf8mb4 AI_TEXT < deployment/world-template.sql
 sudo nginx -t && sudo systemctl reload nginx
 sudo systemctl start aitxt
 ```

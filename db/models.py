@@ -30,6 +30,23 @@ class Region(NovelModel):
     locations: str = ""
 
 
+class WorldTemplate(NovelModel):
+    core_concept: str = ""
+    special_feature: str = ""
+    genre: str = ""
+    tone: str = ""
+    era: str = ""
+    main_regions: str = ""
+    civilization_level: str = ""
+    allowed: str = ""
+    forbidden: str = ""
+    power_core: str = ""
+    use_conditions: str = ""
+    costs: str = ""
+    failure_consequences: str = ""
+    countermeasures: str = ""
+
+
 class WorldSetting(NovelModel):
     title: str = Field(default="世界观设定", min_length=1, max_length=200)
     summary: str
@@ -38,6 +55,7 @@ class WorldSetting(NovelModel):
     rules: str = ""
     regions: list[Region] = Field(default_factory=list)
     cultures: str = ""
+    template: WorldTemplate | None = None
 
 
 class PowerRank(NovelModel):
