@@ -27,6 +27,12 @@ OUTLINE_THEME_LABELS = {
     "custom": "自定义主题",
 }
 
+FORESHADOW_CATEGORY_LABELS = {
+    "identity": "身份秘密", "treasure": "秘宝奇物", "event": "事件真相",
+    "relationship": "关系伏笔", "ability": "能力来历", "world": "世界规则",
+    "prophecy": "预言征兆", "debt": "人情仇恨", "location": "地点秘密", "other": "其他",
+}
+
 
 class WritingInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -52,8 +58,28 @@ class OutlineRequest(WritingInput):
     volume_number: int = Field(default=0, ge=0, le=1000)
     volume_theme: str = Field(default="", max_length=500)
     outline_theme: OutlineTheme = "development"
+    min_foreshadows: int = Field(default=0, ge=0, le=30)
+    foreshadow_categories: list[str] = Field(default_factory=list, max_length=10)
+    target_word_min: int = Field(default=0, ge=0, le=10_000_000)
+    target_word_max: int = Field(default=0, ge=0, le=10_000_000)
+    plot_progression: str = Field(default="", max_length=4000)
     consume_foreshadow_ids: list[RowId] = Field(default_factory=list, max_length=30)
     plant_foreshadow_ids: list[RowId] = Field(default_factory=list, max_length=30)
+
+    @field_validator("foreshadow_categories")
+    @classmethod
+    def unique_foreshadow_categories(cls, values):
+        if len(values) != len(set(values)):
+            raise ValueError("伏笔类型不能重复选择")
+        if any(value not in FORESHADOW_CATEGORY_LABELS for value in values):
+            raise ValueError("存在不支持的伏笔类型")
+        return values
+
+    @model_validator(mode="after")
+    def validate_outline_plan(self):
+        if self.target_word_min and self.target_word_max and self.target_word_max < self.target_word_min:
+            raise ValueError("大纲总体字数上限不能小于下限")
+        return self
 
     @field_validator("consume_foreshadow_ids", "plant_foreshadow_ids")
     @classmethod
@@ -175,6 +201,13 @@ class BeatDraft(Generated):
     foreshadowing: str = Field(default="", max_length=4000)
 
 
+class OutlineForeshadow(Generated):
+    title: Title
+    category: str = Field(default="other", max_length=32)
+    summary: Detail
+    details: str = Field(default="", max_length=4000)
+
+
 class VolumeDraft(Generated):
     title: Title
     summary: Detail
@@ -183,6 +216,7 @@ class VolumeDraft(Generated):
     climax: Detail
     ending_hook: Detail
     beats: list[BeatDraft] = Field(min_length=1, max_length=10)
+    foreshadows: list[OutlineForeshadow] = Field(default_factory=list, max_length=30)
 
 
 class OutlineDraft(Generated):
@@ -195,6 +229,8 @@ class OutlineDraft(Generated):
 class ChapterPlan(Generated):
     title: Title
     summary: Detail
+    foreshadow_ids: list[RowId] = Field(default_factory=list, max_length=20)
+    new_foreshadows: list[OutlineForeshadow] = Field(default_factory=list, max_length=10)
 
 
 class ChapterPlanDraft(Generated):
@@ -333,7 +369,8 @@ class ChapterEvidence(Generated):
 
 class ConsistencyBasis(Generated):
     kind: Literal["project", "outline", "volume", "plot_beat", "character", "character_relationship",
-                  "volume_character", "world", "region", "power_system", "power_rank", "cheat_system", "faction", "chapter"]
+                  "volume_character", "world", "region", "power_system", "power_rank",
+                  "cheat_system", "faction", "chapter", "foreshadow"]
     record_id: RowId
     field: str = Field(min_length=1, max_length=80)
     quote: str = Field(min_length=1, max_length=1000)
@@ -413,7 +450,6 @@ class NewFactionCandidate(Generated):
 class EntityDiscoveryReport(Generated):
     characters: list[NewCharacterCandidate] = Field(default_factory=list, max_length=20)
     factions: list[NewFactionCandidate] = Field(default_factory=list, max_length=20)
-    foreshadows: list["ForeshadowCandidate"] = Field(default_factory=list, max_length=20)
     misc_notes: list["MiscNoteCandidate"] = Field(default_factory=list, max_length=30)
 
 
@@ -659,6 +695,7 @@ class OutlineReceipt(BaseModel):
     version_no: Sequence
     volume_ids: list[RowId]
     plot_beat_count: int
+    foreshadow_count: int = 0
 
 
 class ChapterPlanEntry(BaseModel):
@@ -671,6 +708,7 @@ class ChapterPlanReceipt(BaseModel):
     project_id: RowId
     volume_id: RowId
     chapters: list[ChapterPlanEntry]
+    foreshadow_count: int = 0
 
 
 class DraftReceipt(BaseModel):

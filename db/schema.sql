@@ -359,6 +359,11 @@ CREATE TABLE IF NOT EXISTS novel_outline_volume (
     main_conflict TEXT NOT NULL COMMENT '本卷主要冲突',
     climax TEXT NOT NULL COMMENT '本卷高潮事件',
     ending_hook TEXT NOT NULL COMMENT '本卷结尾悬念',
+    min_foreshadows INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '本卷最低伏笔数量',
+    foreshadow_categories JSON NULL COMMENT '本卷要求伏笔类型',
+    target_word_min INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '本卷目标字数下限',
+    target_word_max INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '本卷目标字数上限',
+    plot_progression LONGTEXT NULL COMMENT '本卷剧情进展规划',
     PRIMARY KEY (id),
     UNIQUE KEY uk_outline_volume_number (outline_id, volume_number),
     CONSTRAINT fk_volume_outline FOREIGN KEY (outline_id) REFERENCES novel_outline(id) ON DELETE CASCADE

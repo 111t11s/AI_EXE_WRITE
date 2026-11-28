@@ -25,8 +25,17 @@ from api.account_api import Account, get_current_account
     ("仙侠融合玄幻", ["outline-xianxia", "outline-xuanhuan"]),
     ("历史", ["outline-history"]), ("架空历史", ["outline-history"]),
     ("历史仙侠", ["outline-history", "outline-xianxia"]),
-    ("仙侠历史", ["outline-xianxia", "outline-history"]), ("架空奇幻", []),
-    ("科幻", []), ("奇幻", []), ("蒸汽朋克探险", []), ("../../README.md", []),
+    ("仙侠历史", ["outline-xianxia", "outline-history"]), ("架空奇幻", ["outline-fantasy"]),
+    ("科幻", ["outline-scifi"]), ("星际科幻", ["outline-scifi"]), ("蒸汽朋克探险", ["outline-scifi"]),
+    ("悬疑", ["outline-mystery"]), ("刑侦推理", ["outline-mystery"]),
+    ("奇幻", ["outline-fantasy"]), ("西幻", ["outline-fantasy"]),
+    ("言情", ["outline-romance"]), ("古代言情", ["outline-romance"]),
+    ("游戏", ["outline-game"]), ("无限流", ["outline-game"]),
+    ("末世", ["outline-apocalypse"]), ("废土", ["outline-apocalypse"]),
+    ("灵异", ["outline-supernatural"]), ("怪谈", ["outline-supernatural"]),
+    ("科幻悬疑", ["outline-scifi", "outline-mystery"]),
+    ("末世游戏", ["outline-apocalypse", "outline-game"]),
+    ("../../README.md", []), ("未知类型", []),
 ])
 def test_genre_selection_loads_only_relevant_skills(genre, expected):
     selected = skills.outline_skill_selection(genre)
@@ -136,10 +145,20 @@ def test_existing_novel_outline_sends_skill_body_to_streaming_model(monkeypatch,
 def test_new_blueprint_sends_current_genre_skill_to_streaming_model(monkeypatch, genre, skill_id):
     output = {"project": {"title": "新书", "genre": genre, "setting": "大陆", "tone": "温暖",
                          "target_length": "一卷短篇", "protagonist_goal": "归乡"},
-        "world": {"summary": "世界", "era": "架空", "history": "历史", "rules": "规则"},
+        "world": {"summary": "世界", "era": "架空", "history": "历史", "rules": "规则",
+                  "template": {"core_concept": "大陆", "special_feature": "归乡之门",
+                               "genre": genre, "tone": "温暖", "era": "架空",
+                               "main_regions": "大陆", "civilization_level": "低科技",
+                               "allowed": "使用力量", "forbidden": "改变归途",
+                               "power_core": "归乡之力", "use_conditions": "在月下",
+                               "costs": "消耗记忆", "failure_consequences": "迷失",
+                               "countermeasures": "锚点"}},
+        "factions": [{"name": "归乡盟", "summary": "护送归乡者"},
+                     {"name": "旧港商会", "summary": "控制渡口"}],
         "power_system": {"name": "力量", "source": "来源"}, "cheat": {"name": "天赋", "cheat_type": "天赋"},
         "outline": {"summary": "故事", "central_conflict": "归途受阻",
-                    "volumes": [{"volume_number": 1, "title": "一卷", "summary": "转折"}]}}
+                    "volumes": [{"volume_number": 1, "title": "一卷", "summary": "转折",
+                                 "key_events": [{"order": 1, "title": "启程", "summary": "离开旧港"}]}]}}
     requests = mock_model(monkeypatch, world, output)
     result = world.WorldbuildingAssistant._generate_with_crewai({"genre": genre, "length": "一卷短篇"})
     assert result.outline.volumes[0].title == "一卷"

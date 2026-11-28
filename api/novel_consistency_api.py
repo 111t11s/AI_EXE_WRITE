@@ -60,6 +60,7 @@ BASIS_FIELDS = {
     "power_rank": {"name", "description", "breakthrough_condition", "capabilities"},
     "cheat_system": {"name", "cheat_type", "origin", "functions", "limitations", "costs", "growth_path", "story_secret"},
     "faction": {"name", "faction_type", "summary", "goal", "leader", "territory", "strengths", "weaknesses", "relationships"},
+    "foreshadow": {"title", "category", "summary", "details", "status"},
     "chapter": {"summary", "content"},
 }
 
@@ -127,7 +128,8 @@ def reference_records(context):
                        ("plot_beat", [beat for volume in context["volumes"] for beat in volume["beats"]]),
                        *((kind, context.get(key, [])) for kind, key in (
                            ("region", "region"), ("power_system", "power_system"), ("power_rank", "power_ranks"),
-                           ("cheat_system", "cheat_system"), ("faction", "faction"))),
+                           ("cheat_system", "cheat_system"), ("faction", "faction"),
+                           ("foreshadow", "foreshadows"))),
                        ("chapter", context["selected_chapters"])):
         references.update({(kind, row["id"]): row for row in rows})
     return references
@@ -135,6 +137,8 @@ def reference_records(context):
 
 def reference_label(kind, row, context):
     characters = {person["id"]: person["name"] for person in context["characters"]}
+    if kind == "foreshadow":
+        return f"伏笔 · {row.get('title', '')}"
     if kind == "character_relationship":
         return f"{characters[row['source_character_id']]} → {characters[row['target_character_id']]}"
     if kind == "volume_character":
@@ -197,7 +201,7 @@ def validate_report(report, context):
     return cleaned, list(used.values())
 
 
-def discovery_context(context, existing_foreshadows=None, existing_misc=None):
+def discovery_context(context, existing_misc=None):
     return {
         "project": {key: context["project"].get(key) for key in
                     ("title", "genre", "setting", "tone", "premise", "protagonist_goal")},
@@ -206,7 +210,6 @@ def discovery_context(context, existing_foreshadows=None, existing_misc=None):
                                 for row in context["characters"]],
         "existing_factions": [{"id": row["id"], "name": row["name"], "faction_type": row.get("faction_type", "")}
                               for row in context.get("faction", [])],
-        "existing_foreshadows": existing_foreshadows or [],
         "existing_misc_notes": existing_misc or [],
         "chapters": [{"id": row["id"], "chapter_number": row["chapter_number"], "title": row["title"],
                       "content": row["content"]} for row in context["selected_chapters"]],
@@ -217,15 +220,12 @@ def _quote_in(content: str, quote: str) -> bool:
     return quote.strip() in content or re.sub(r"\s+", "", quote) in re.sub(r"\s+", "", content)
 
 
-def validate_discovery(report: EntityDiscoveryReport, context,
-                       existing_foreshadows: list[dict] | None = None) -> tuple[list[dict], list[dict], list[dict]]:
+def validate_discovery(report: EntityDiscoveryReport, context) -> tuple[list[dict], list[dict]]:
     chapters = {row["id"]: row for row in context["selected_chapters"]}
     existing_characters = {row["name"].strip().casefold() for row in context["characters"]}
     existing_factions = {row["name"].strip().casefold() for row in context.get("faction", [])}
-    existing_foreshadow_titles = {
-        row["title"].strip().casefold() for row in (existing_foreshadows or [])}
     items, seen = [], set()
-    foreshadows, misc_notes = [], []
+    misc_notes = []
 
     def evidence_for(candidate):
         valid = []
@@ -261,19 +261,6 @@ def validate_discovery(report: EntityDiscoveryReport, context,
         items.append({"entity_type": "faction", "chapter_id": evidence[0]["chapter_id"],
                       "name": name, "details": details, "evidence": evidence})
 
-    for candidate in report.foreshadows:
-        title = candidate.title.strip()[:200]
-        if not title or title.casefold() in existing_foreshadow_titles:
-            continue
-        evidence = evidence_for(candidate)
-        if not evidence:
-            continue
-        existing_foreshadow_titles.add(title.casefold())
-        foreshadows.append({
-            "title": title, "category": candidate.category, "summary": candidate.summary,
-            "details": candidate.details, "evidence": evidence,
-        })
-
     for candidate in report.misc_notes:
         title = candidate.title.strip()[:200]
         evidence = evidence_for(candidate)
@@ -285,18 +272,17 @@ def validate_discovery(report: EntityDiscoveryReport, context,
         })
 
     items.sort(key=lambda item: 0 if item["entity_type"] == "faction" else 1)
-    return items, foreshadows, misc_notes
+    return items, misc_notes
 
 
 async def discover_new_entities(engine, project_id, user, context, model=None) -> int:
-    emit_generation_event("status", message="正在从正文中整理新角色、势力和伏笔杂记…")
+    emit_generation_event("status", message="正在从正文中整理新角色、势力和杂记…")
     try:
-        existing_foreshadows = await run_in_threadpool(foreshadow_db.titles, engine, project_id)
         existing_misc = await run_in_threadpool(misc_db.titles, engine, project_id)
         report = await generate(agents.ENTITY_DISCOVERY,
-                                discovery_context(context, existing_foreshadows, existing_misc),
+                                discovery_context(context, existing_misc),
                                 WritingInput(model=model))
-        items, foreshadows, misc_notes = validate_discovery(report, context, existing_foreshadows)
+        items, misc_notes = validate_discovery(report, context)
         saved = await run_in_threadpool(review_db.save_reviews, engine, user.id, project_id, items) if items else 0
         chapters = {row["id"]: row for row in context["selected_chapters"]}
         outline_id = context["outline"]["id"]
@@ -308,14 +294,6 @@ async def discover_new_entities(engine, project_id, user, context, model=None) -
                 result.setdefault(chapter_id, []).append(item)
             return result
 
-        foreshadow_count = 0
-        for chapter_id, group in grouped(foreshadows).items():
-            chapter = chapters.get(chapter_id)
-            if chapter is None:
-                continue
-            foreshadow_count += await run_in_threadpool(
-                foreshadow_db.save_analysis_candidates, engine, project_id,
-                {"id": chapter["id"], "volume_id": chapter["volume_id"], "outline_id": outline_id}, group)
         misc_count = 0
         for chapter_id, group in grouped(misc_notes).items():
             chapter = chapters.get(chapter_id)
@@ -326,11 +304,11 @@ async def discover_new_entities(engine, project_id, user, context, model=None) -
                 {"id": chapter["id"], "volume_id": chapter["volume_id"], "outline_id": outline_id}, group)
         if saved:
             emit_generation_event("status", message=f"发现 {saved} 个新角色/势力，已加入待审核。")
-        if foreshadow_count or misc_count:
-            emit_generation_event("status", message=f"已整理 {foreshadow_count} 条伏笔、{misc_count} 条杂记。")
-        return saved + foreshadow_count + misc_count
+        if misc_count:
+            emit_generation_event("status", message=f"已整理 {misc_count} 条杂记。")
+        return saved + misc_count
     except Exception:
-        logger.exception("新角色/势力/伏笔杂记识别失败；一致性报告不受影响")
+        logger.exception("新角色/势力/杂记识别失败；一致性报告不受影响")
         return 0
 
 
@@ -339,6 +317,9 @@ async def check_consistency(project_id: RowId, payload: ConsistencyRequest, user
     await run_in_threadpool(require_selection, engine, project_id, payload, user.id)
     emit_generation_event("status", message="正在通过 MCP 读取所选章节、大纲与人物档案…")
     context = await load_context(consistency_context, project_id, payload)
+    volume_ids = sorted({row["volume_id"] for row in context["selected_chapters"] if row["volume_id"] is not None})
+    context["foreshadows"] = await run_in_threadpool(
+        foreshadow_db.list_for_chapters, engine, project_id, payload.chapter_ids, volume_ids)
     materials = [dict(kind=kind, record_id=record_id, label=reference_label(kind, row, context))
                  for (kind, record_id), row in reference_records(context).items() if kind != "chapter"]
     emit_generation_event("status", message=f"已读取大纲 v{context['outline']['version_no']}、{len(context['volumes'])} 卷、"

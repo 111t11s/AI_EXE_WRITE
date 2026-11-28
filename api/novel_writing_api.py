@@ -31,7 +31,8 @@ from db.connection import legacy_json_columns
 from db import novel_analysis as analysis_db
 from db import foreshadows as foreshadow_db
 from api.writing_schemas import (
-    ChapterPlanReceipt, ChapterPlanRequest, DraftReceipt, DraftRequest, OutlineReceipt, OutlineRequest,
+    ChapterPlanReceipt, ChapterPlanRequest, DraftReceipt, DraftRequest, OutlineDraft, OutlineReceipt, OutlineRequest,
+    FORESHADOW_CATEGORY_LABELS,
     ReviewReport, WritingInput,
     CoreCharacterRequest, SupportingCharacterRequest, CharacterReceipt,
     CharacterProgressReceipt,
@@ -351,7 +352,9 @@ async def volume_context(session, volume_id):
     outline = await read(session, "outline", volume["outline_id"])
     context = await project_context(session, outline["project_id"])
     context["outline"] = excerpt(outline, "id", "summary", "central_conflict", "themes")
-    context["volume"] = excerpt(volume, "id", "volume_number", "title", "summary", "protagonist_goal", "main_conflict", "climax", "ending_hook")
+    context["volume"] = excerpt(volume, "id", "volume_number", "title", "summary", "protagonist_goal", "main_conflict",
+                                "climax", "ending_hook", "min_foreshadows", "foreshadow_categories",
+                                "target_word_min", "target_word_max", "plot_progression")
     context["volume_characters"] = await all_context_rows(session, "volume_character", volume_id=volume_id)
     beats = await listing(session, "plot_beat", volume_id=volume_id, limit=12)
     context["plot_beats"] = [excerpt(item, "sort_order", "title", "summary", "foreshadowing", limit=500) for item in beats]
@@ -563,6 +566,16 @@ async def apply_techniques(context: dict, payload: WritingInput, user: CurrentAc
     return context
 
 
+def validate_outline_foreshadows(artifact: OutlineDraft, payload: OutlineRequest) -> None:
+    planned = artifact.volumes[0].foreshadows
+    if len(planned) < payload.min_foreshadows:
+        raise HTTPException(502, f"本卷至少需要 {payload.min_foreshadows} 条伏笔，模型只返回 {len(planned)} 条，结果未保存")
+    present = {foreshadow_db.normalize_category(item.category) for item in planned}
+    missing = [FORESHADOW_CATEGORY_LABELS[key] for key in payload.foreshadow_categories if key not in present]
+    if missing:
+        raise HTTPException(502, "模型没有生成本卷要求的伏笔类型：" + "、".join(missing) + "，结果未保存")
+
+
 @router.post("/projects/{project_id}/outline", response_model=OutlineReceipt, status_code=201, summary="生成并保存单卷小说大纲")
 async def write_outline(project_id: RowId, payload: OutlineRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_project", project_id, user.id)
@@ -570,12 +583,23 @@ async def write_outline(project_id: RowId, payload: OutlineRequest, user: Curren
     context = await load_context(project_context, project_id)
     context["volume_plan"] = {"volume_number": volume_number,
                               "theme": payload.volume_theme.strip() or payload.instruction.strip()}
+    context["outline_plan"] = {
+        "target_word_min": payload.target_word_min,
+        "target_word_max": payload.target_word_max,
+        "plot_progression": payload.plot_progression,
+        "min_foreshadows": payload.min_foreshadows,
+        "foreshadow_categories": {key: FORESHADOW_CATEGORY_LABELS[key] for key in payload.foreshadow_categories},
+    }
     context = await apply_techniques(context, payload, user, engine, OUTLINE_TECHNIQUE_CATEGORIES)
     artifact = await generate(agents.OUTLINE, context, payload)
     if len(artifact.volumes) != 1:
         raise HTTPException(502, "每次只生成一卷大纲，模型返回了多个分卷，结果未保存")
-    emit_generation_event("status", message="单卷大纲校验通过，正在保存大纲与分卷…")
-    receipt = await run_in_threadpool(save_outline, engine, project_id, artifact, (), volume_number)
+    validate_outline_foreshadows(artifact, payload)
+    emit_generation_event("status", message="单卷大纲校验通过，正在保存大纲、伏笔与分卷…")
+    receipt = await run_in_threadpool(save_outline, engine, project_id, artifact, (),
+                                      volume_number, payload.model_dump(include={
+                                          "min_foreshadows", "foreshadow_categories", "target_word_min",
+                                          "target_word_max", "plot_progression"}))
     try:
         await run_in_threadpool(foreshadow_db.apply_outline_selection, engine, project_id,
                                 payload.consume_foreshadow_ids, payload.plant_foreshadow_ids,
@@ -596,6 +620,7 @@ async def write_chapter_plan(volume_id: RowId, payload: ChapterPlanRequest, user
     except Exception:
         next_number = None
     context = await load_context(plan_context, volume_id, payload.start_chapter, payload.chapter_count, next_number)
+    context["foreshadows"] = await run_in_threadpool(foreshadow_db.list_for_volume, engine, volume_id)
     artifact = await generate(agents.PLAN, context, payload)
     if len(artifact.chapters) != payload.chapter_count:
         raise HTTPException(502, "模型返回的章节数量与请求不符")
@@ -683,12 +708,23 @@ async def rewrite_outline(outline_id: RowId, payload: OutlineRequest, user: Curr
     context, sources = await load_context(character_context, project_id, outline_id)
     context["volume_plan"] = {"volume_number": volume_number,
                               "theme": payload.volume_theme.strip() or payload.instruction.strip()}
+    context["outline_plan"] = {
+        "target_word_min": payload.target_word_min,
+        "target_word_max": payload.target_word_max,
+        "plot_progression": payload.plot_progression,
+        "min_foreshadows": payload.min_foreshadows,
+        "foreshadow_categories": {key: FORESHADOW_CATEGORY_LABELS[key] for key in payload.foreshadow_categories},
+    }
     context = await apply_techniques(context, payload, user, engine, OUTLINE_TECHNIQUE_CATEGORIES)
     artifact = await generate(agents.OUTLINE_REWRITE, context, payload)
     if len(artifact.volumes) != 1:
         raise HTTPException(502, "每次只重写一卷大纲，模型返回了多个分卷，重写结果未保存")
-    emit_generation_event("status", message="单卷大纲校验通过，正在保存新版本…")
-    receipt = await run_in_threadpool(save_outline, engine, project_id, artifact, sources, volume_number)
+    validate_outline_foreshadows(artifact, payload)
+    emit_generation_event("status", message="单卷大纲校验通过，正在保存新版本与伏笔…")
+    receipt = await run_in_threadpool(save_outline, engine, project_id, artifact, sources, volume_number,
+                                      payload.model_dump(include={
+                                          "min_foreshadows", "foreshadow_categories", "target_word_min",
+                                          "target_word_max", "plot_progression"}))
     try:
         await run_in_threadpool(foreshadow_db.apply_outline_selection, engine, project_id,
                                 payload.consume_foreshadow_ids, payload.plant_foreshadow_ids,

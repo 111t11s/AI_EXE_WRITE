@@ -150,6 +150,11 @@ class OutlineVolumeCreate(RowInput):
     main_conflict: str = ""
     climax: str = ""
     ending_hook: str = ""
+    min_foreshadows: Count = 0
+    foreshadow_categories: list[str] | None = None
+    target_word_min: Count = 0
+    target_word_max: Count = 0
+    plot_progression: str | None = ""
 
 
 class PlotBeatCreate(RowInput):

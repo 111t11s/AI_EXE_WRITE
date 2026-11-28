@@ -1448,7 +1448,7 @@ function foreshadowView() {
       muted(`创建/预埋：${item.planted_outline_label || '未关联大纲'}${item.planted_chapter_label ? ` · ${item.planted_chapter_label}` : ''}`),
       muted(`消费：${item.consumed_outline_label || '未消费'}${item.consumed_chapter_label ? ` · ${item.consumed_chapter_label}` : ''}`)))))) : [];
   const list = rows.length ? element('div', {class: 'story-list'}, ...rows) :
-    empty('还没有伏笔', state.foreshadowLoading ? '正在读取…' : '可以手工新增，或在章节一致性核对后自动整理。');
+    empty('还没有伏笔', state.foreshadowLoading ? '正在读取…' : '可在大纲或章节规划时生成，也可以手工新增。');
   return stack(
     element('section', {class: 'story-toolbar'},
       element('div', {class: 'story-toolbar-copy'}, element('strong', {}, '伏笔档案'),
@@ -2067,9 +2067,9 @@ function consistencyReportView(report) {
   const categories = {plot: '剧情偏移', character: '人物偏移', world: '设定冲突', continuity: '章节衔接'};
   const kinds = {project: '小说设定', outline: '大纲', volume: '分卷', plot_beat: '剧情节点', character: '人物档案',
     character_relationship: '人物关系', volume_character: '本卷戏份', world: '世界观', region: '地域档案',
-    power_system: '力量体系', power_rank: '力量等级', cheat_system: '金手指设定', faction: '势力档案', chapter: '章节'};
+    power_system: '力量体系', power_rank: '力量等级', cheat_system: '金手指设定', faction: '势力档案', foreshadow: '伏笔', chapter: '章节'};
   const fieldLabels = {content: '正文', summary: '概要', personality: '性格', background: '背景', goal: '目标', motivation: '动机',
-    weakness: '弱点', character_arc: '成长弧线', abilities: '能力', rules: '规则', history: '历史', cultures: '文化',
+    weakness: '弱点', character_arc: '成长弧线', abilities: '能力', rules: '规则', history: '历史', cultures: '文化', category: '类型', status: '状态', details: '详细内容',
     central_conflict: '核心冲突', themes: '主题', protagonist_goal: '主角目标', main_conflict: '主要冲突', climax: '高潮', ending_hook: '结尾悬念', foreshadowing: '伏笔',
     scenes: '戏份安排', relationship_type: '关系类型', description: '描述', limitations: '限制', capabilities: '能力范围',
     growth_rules: '成长规则', breakthrough_condition: '突破条件', source: '力量来源', functions: '功能', costs: '代价',
@@ -2548,9 +2548,20 @@ function outlineDetail(volume, beats) {
   const planButton = chapters && !chapters.some(row => (row.content || '').trim())
     ? mutationButton('规划章节 →', () => planDialog(volume), 'primary', state.busy || state.worlds.length !== 1)
     : null;
+  const wordRange = volume.target_word_min || volume.target_word_max
+    ? `${volume.target_word_min || '未设'} — ${volume.target_word_max || '未设'} 字` : '';
+  const volumeForeshadowCategories = Array.isArray(volume.foreshadow_categories) ? volume.foreshadow_categories : [];
+  const foreshadowTypeLabels = volumeForeshadowCategories
+    .map(key => foreshadowCategoryFallback[key] || key).join('、');
+  const planningDetails = [
+    ...(wordRange ? [['目标字数', wordRange]] : []),
+    ...(volume.min_foreshadows ? [['最低伏笔数量', `${volume.min_foreshadows} 条`]] : []),
+    ...(foreshadowTypeLabels ? [['伏笔类型', foreshadowTypeLabels]] : []),
+    ...(volume.plot_progression ? [['剧情进展规划', volume.plot_progression]] : []),
+  ];
   const section = panel(volume.title, element('div', {class: 'outline-detail-body', tabindex: 0},
     stack(details(['分卷摘要', volume.summary], ['主角目标', volume.protagonist_goal], ['主要冲突', volume.main_conflict],
-      ['高潮', volume.climax], ['结尾悬念', volume.ending_hook]), rule(), element('h3', {}, '剧情节点'), beats, cast)),
+      ['高潮', volume.climax], ['结尾悬念', volume.ending_hook], ...planningDetails), rule(), element('h3', {}, '剧情节点'), beats, cast)),
   `第 ${volume.volume_number} 卷`,
   actions(mutationButton('生成本卷配角', () => supportingCharacterDialog(volume), 'secondary', state.busy || state.worlds.length !== 1),
     mutationButton('生成已有角色阶段档案', () => characterProfileDialog(volume), 'secondary', state.busy || state.worlds.length !== 1),
@@ -2645,6 +2656,8 @@ const outlineThemeField = {name: 'outline_theme', label: '本版大纲主题', t
 ]};
 const volumeThemeField = {name: 'volume_theme', label: '本卷大纲主题', type: 'textarea', required: true,
   maxlength: 500, rows: 3, placeholder: '例如：主角第一次进入旧港地下拍卖会，夺回线索却暴露身份'};
+const plotProgressionField = {name: 'plot_progression', label: '剧情进展规划', type: 'textarea', required: true,
+  maxlength: 4000, rows: 4, placeholder: '例如：前半卷追查旧票，中段进入拍卖会，卷末夺回线索但暴露身份；每阶段写明目标、阻碍和结果'};
 const numberField = (name, label, value, min, max) => ({name, label, value, min, max, type: 'number', required: true});
 const modelChoices = () => state.modelOptions.map(item => ({value: item.id, label: `${item.label} · ${item.model}`}));
 
@@ -2758,6 +2771,23 @@ $('action-form').addEventListener('submit', async (event) => {
   }
 });
 
+function outlineForeshadowSettingsPicker() {
+  const selected = new Set();
+  const list = element('div', {class: 'technique-picker-list'});
+  for (const [key, label] of Object.entries(foreshadowCategoryFallback)) {
+    const check = element('input', {type: 'checkbox', value: key});
+    check.addEventListener('change', () => {
+      if (check.checked) selected.add(key); else selected.delete(key);
+    });
+    list.append(element('label', {class: 'technique-choice'}, check, element('span', {}, label)));
+  }
+  return {
+    extra: element('fieldset', {class: 'technique-picker'}, element('legend', {}, '本卷伏笔类型（可多选）'),
+      muted('生成大纲时至少覆盖所选类型；后续章节规划会继续安排这些伏笔。'), list),
+    ids: () => [...selected],
+  };
+}
+
 async function outlineDialog() {
   const id = state.project.id;
   const requestingAccount = account;
@@ -2767,12 +2797,19 @@ async function outlineDialog() {
   if (account !== requestingAccount || state.project?.id !== id) return;
   const picker = await techniquePicker(['worldbuilding', 'outline']);
   const foreshadow = foreshadowPicker();
+  const categoryPicker = outlineForeshadowSettingsPicker();
   const nextVolumeNumber = Math.max(0, ...(state.volumes || []).map(row => Number(row.volume_number) || 0)) + 1;
-  openAction({title: '生成本卷大纲', description: `每次只生成一卷，已有大纲会保留。请先规划本卷主题；本卷将作为大纲 v${state.outlines.length + 1} 保存。${selection.notice}。`,
-    submit: '生成并保存本卷', fields: [numberField('volume_number', '卷号', nextVolumeNumber, 1, 1000), volumeThemeField, noteField],
+  openAction({title: '生成本卷大纲', description: `每次只生成一卷，已有大纲会保留。请先规划本卷主题、字数区间和剧情进展；本卷将作为大纲 v${state.outlines.length + 1} 保存。${selection.notice}。`,
+    submit: '生成并保存本卷',
+    fields: [numberField('volume_number', '卷号', nextVolumeNumber, 1, 1000),
+      numberField('target_word_min', '总体字数下限', 20000, 1000, 10000000),
+      numberField('target_word_max', '总体字数上限', 30000, 1000, 10000000),
+      numberField('min_foreshadows', '最低伏笔数量', 3, 1, 30),
+      volumeThemeField, plotProgressionField, noteField],
     useModel: true,
-    extra: element('div', {}, picker.extra, foreshadow.extra),
+    extra: element('div', {}, picker.extra, categoryPicker.extra, foreshadow.extra),
     payload: data => ({...data, technique_ids: picker.ids(),
+      foreshadow_categories: categoryPicker.ids(),
       consume_foreshadow_ids: foreshadow.consumeIds(), plant_foreshadow_ids: foreshadow.plantIds()}),
     taskPath: `/writing/projects/${id}/outline/tasks`,
   });
@@ -2899,14 +2936,20 @@ function exportDialog() {
 async function outlineRewriteDialog(outline) {
   const picker = await techniquePicker(['worldbuilding', 'outline']);
   const foreshadow = foreshadowPicker();
+  const categoryPicker = outlineForeshadowSettingsPicker();
   const currentVolume = state.volume || state.volumes?.[0];
   const volumeNumber = currentVolume?.volume_number || 1;
   openAction({title: '重写本卷大纲', description: `基于大纲 v${outline.version_no}、当前分卷和现有角色重写这一卷，结果保存为新版本。原大纲、已有章节和原卷戏份保留在原版本中。`,
-    submit: '重写并保存本卷', fields: [numberField('volume_number', '卷号', volumeNumber, 1, 1000), volumeThemeField,
+    submit: '重写并保存本卷', fields: [numberField('volume_number', '卷号', volumeNumber, 1, 1000),
+      numberField('target_word_min', '总体字数下限', currentVolume?.target_word_min || 20000, 1000, 10000000),
+      numberField('target_word_max', '总体字数上限', currentVolume?.target_word_max || 30000, 1000, 10000000),
+      numberField('min_foreshadows', '最低伏笔数量', currentVolume?.min_foreshadows || 3, 1, 30),
+      volumeThemeField, plotProgressionField,
       {...noteField, label: '重写要求（可选）', placeholder: '例如：保留主线，加强本卷冲突，调整结尾伏笔'}],
     useModel: true,
-    extra: element('div', {}, picker.extra, foreshadow.extra),
+    extra: element('div', {}, picker.extra, categoryPicker.extra, foreshadow.extra),
     payload: data => ({...data, technique_ids: picker.ids(),
+      foreshadow_categories: categoryPicker.ids(),
       consume_foreshadow_ids: foreshadow.consumeIds(), plant_foreshadow_ids: foreshadow.plantIds()}),
     taskPath: `/writing/outlines/${outline.id}/rewrite/tasks`});
 }
@@ -3028,7 +3071,10 @@ async function planDialog(volume) {
       // 读取失败时保留本地估算；提交后后端仍会校验并给出可用章号。
     }
   }
-  openAction({title: '规划章节', description: `把《${volume.title}》的剧情节点拆成章节。章号在全书内唯一，已有章节不会被覆盖；本项目当前建议从第 ${start} 章开始。`,
+  const foreshadowRequirement = volume.min_foreshadows
+    ? `本卷至少安排 ${volume.min_foreshadows} 条伏笔${(volume.foreshadow_categories || []).length ? `（类型：${volume.foreshadow_categories.map(key => foreshadowCategoryFallback[key] || key).join('、')}）` : ''}；可新增，但必须落表。`
+    : '本卷未设置最低伏笔数量。';
+  openAction({title: '规划章节', description: `把《${volume.title}》的剧情节点拆成章节。章号在全书内唯一，已有章节不会被覆盖；本项目当前建议从第 ${start} 章开始。${foreshadowRequirement}`,
     submit: '规划并保存', fields: [numberField('start_chapter', '起始章号', start, 1, 4294967295),
       numberField('chapter_count', '生成章节数', 5, 1, 12), noteField],
     useModel: true,

@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from agents import writing_agents as agents
 from api.writing_schemas import (ChapterContentDraft, ConsistencyReport, EntityDiscoveryReport,
-                                 EntityEvidence, ForeshadowCandidate, MiscNoteCandidate,
+                                 EntityEvidence, MiscNoteCandidate,
                                  NewCharacterCandidate, NewFactionCandidate)
 from db import entity_reviews as review_db
 from db.accounts import account
@@ -37,10 +37,6 @@ def test_consistency_detects_new_entities_as_pending_reviews(novel, monkeypatch)
                     name="顾临舟", role="商会账房", summary="灰潮商会的账房",
                     faction_name="灰潮商会", goal="打通渡口",
                     evidence=[EntityEvidence(chapter_id=chapter, quote="顾临舟自称商会账房")])],
-                foreshadows=[ForeshadowCandidate(
-                    title="旧船票的日期", category="event", summary="旧船票背面写着一个日期",
-                    details="日期与事故同一天。",
-                    evidence=[EntityEvidence(chapter_id=chapter, quote="向林川递上一张旧船票")])],
                 misc_notes=[MiscNoteCandidate(
                     note_type="item", title="旧船票", summary="灰潮商会递来的旧船票",
                     evidence=[EntityEvidence(chapter_id=chapter, quote="向林川递上一张旧船票")])])
@@ -56,7 +52,7 @@ def test_consistency_detects_new_entities_as_pending_reviews(novel, monkeypatch)
     assert {item["name"] for item in reviews["items"]} == {"灰潮商会", "顾临舟"}
     assert all(item["status"] == "pending" for item in reviews["items"])
     foreshadows = client.get(f"/api/v1/writing/projects/{project}/foreshadows", headers=headers).json()
-    assert foreshadows["items"][0]["title"] == "旧船票的日期"
+    assert foreshadows["total"] == 0
     misc = client.get(f"/api/v1/writing/projects/{project}/misc-notes", headers=headers).json()
     assert misc["items"][0]["title"] == "旧船票" and misc["items"][0]["type_label"] == "独特物品"
 

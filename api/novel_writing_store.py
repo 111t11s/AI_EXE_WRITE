@@ -9,6 +9,9 @@ from api.novel_crud_api import get_row, response_row, storage_values, tables, tr
 from api.writing_schemas import (ChapterPlanDraft, DraftReceipt, OutlineDraft, OutlineReceipt, ChapterPlanReceipt,
                                  CharacterProgressReceipt)
 from db.connection import legacy_json_columns
+from db.accounts import utcnow
+from db.foreshadows import foreshadow as foreshadow_table
+from db.foreshadows import normalize_category
 from api.writing_schemas import CharacterReceipt
 from api.character_profiles import format_profile
 from api.character_progress import replace_progress
@@ -130,9 +133,11 @@ def insert_row(connection, relation, **values):
     return connection.execute(insert(relation).values(**values)).lastrowid
 
 
-def save_outline(engine, project_id: int, artifact: OutlineDraft, sources=(), volume_number=None) -> OutlineReceipt:
+def save_outline(engine, project_id: int, artifact: OutlineDraft, sources=(), volume_number=None,
+                 settings: dict | None = None) -> OutlineReceipt:
     project, outline = tables["novel_project"], tables["novel_outline"]
     volume, beat = tables["novel_outline_volume"], tables["novel_plot_beat"]
+    settings = settings or {}
     with transaction(engine) as connection:
         get_row(connection, project, project_id, lock=True)
         for table_name, source in sources:
@@ -145,16 +150,31 @@ def save_outline(engine, project_id: int, artifact: OutlineDraft, sources=(), vo
                                 **artifact.model_dump(exclude={"volumes"}))
         volume_ids = []
         beat_count = 0
+        foreshadow_count = 0
         for number, planned in enumerate(artifact.volumes, 1):
             assigned_number = int(volume_number) + number - 1 if volume_number is not None else number
-            volume_id = insert_row(connection, volume, outline_id=outline_id, volume_number=assigned_number,
-                                   **planned.model_dump(exclude={"beats"}))
+            volume_id = insert_row(
+                connection, volume, outline_id=outline_id, volume_number=assigned_number,
+                **planned.model_dump(exclude={"beats", "foreshadows"}),
+                min_foreshadows=int(settings.get("min_foreshadows") or 0),
+                foreshadow_categories=settings.get("foreshadow_categories") or [],
+                target_word_min=int(settings.get("target_word_min") or 0),
+                target_word_max=int(settings.get("target_word_max") or 0),
+                plot_progression=settings.get("plot_progression") or "")
             volume_ids.append(volume_id)
             for order, item in enumerate(planned.beats, 1):
                 insert_row(connection, beat, volume_id=volume_id, sort_order=order, **item.model_dump())
                 beat_count += 1
+            for item in planned.foreshadows:
+                insert_row(connection, foreshadow_table, project_id=project_id,
+                           title=item.title.strip()[:200], category=normalize_category(item.category)[:32],
+                           status="planned", source="outline", summary=item.summary[:4000],
+                           details=item.details[:20000], planted_outline_id=outline_id,
+                           planted_volume_id=volume_id)
+                foreshadow_count += 1
         return OutlineReceipt(project_id=project_id, outline_id=outline_id, version_no=version,
-                              volume_ids=volume_ids, plot_beat_count=beat_count)
+                              volume_ids=volume_ids, plot_beat_count=beat_count,
+                              foreshadow_count=foreshadow_count)
 
 
 def next_volume_number(engine, project_id: int) -> int:
@@ -178,7 +198,21 @@ def save_chapter_plan(engine, project_id: int, volume_id: int, start: int,
     project, chapter = tables["novel_project"], tables["novel_chapter"]
     with transaction(engine) as connection:
         get_row(connection, project, project_id, lock=True)
-        get_row(connection, tables["novel_outline_volume"], volume_id)
+        volume = get_row(connection, tables["novel_outline_volume"], volume_id)
+        foreshadows = {row["id"]: row for row in connection.execute(select(foreshadow_table).where(
+            foreshadow_table.c.project_id == project_id,
+            foreshadow_table.c.planted_volume_id == volume_id)).mappings()}
+        assigned_ids = set()
+        new_count = 0
+        for item in artifact.chapters:
+            for foreshadow_id in item.foreshadow_ids:
+                if int(foreshadow_id) not in foreshadows:
+                    raise HTTPException(502, f"章节规划引用了不属于本卷的伏笔 {foreshadow_id}")
+                assigned_ids.add(int(foreshadow_id))
+            new_count += len(item.new_foreshadows)
+        minimum = int(volume.get("min_foreshadows") or 0)
+        if minimum and len(assigned_ids) + new_count < minimum:
+            raise HTTPException(502, f"本卷至少需要安排 {minimum} 条伏笔，规划只安排 {len(assigned_ids) + new_count} 条，结果未保存")
         taken = connection.scalar(select(chapter.c.id).where(
             chapter.c.project_id == project_id, chapter.c.chapter_number.between(start, start + len(artifact.chapters) - 1),
         ).limit(1))
@@ -187,12 +221,31 @@ def save_chapter_plan(engine, project_id: int, volume_id: int, start: int,
                 chapter.c.project_id == project_id))
             raise HTTPException(409, f"规划范围内已有章节，请选择未使用的章号；本项目下一个可用章号是 {int(highest or 0) + 1}")
         entries = []
+        saved_foreshadows = 0
         for number, item in enumerate(artifact.chapters, start):
-            chapter_id = insert_row(connection, chapter, project_id=project_id, volume_id=volume_id,
-                                    chapter_number=number, status="planned", content="", word_count=0,
-                                    **item.model_dump())
+            chapter_id = insert_row(
+                connection, chapter, project_id=project_id, volume_id=volume_id,
+                chapter_number=number, status="planned", content="", word_count=0,
+                **item.model_dump(exclude={"foreshadow_ids", "new_foreshadows"}))
             entries.append({"chapter_id": chapter_id, "chapter_number": number, "title": item.title})
-        return ChapterPlanReceipt(project_id=project_id, volume_id=volume_id, chapters=entries)
+            for foreshadow_id in item.foreshadow_ids:
+                connection.execute(update(foreshadow_table).where(
+                    foreshadow_table.c.id == int(foreshadow_id),
+                    foreshadow_table.c.project_id == project_id,
+                    foreshadow_table.c.planted_volume_id == volume_id,
+                ).values(planted_chapter_id=chapter_id, status="planted", updated_at=utcnow()))
+                saved_foreshadows += 1
+            for item_foreshadow in item.new_foreshadows:
+                insert_row(connection, foreshadow_table, project_id=project_id,
+                           title=item_foreshadow.title.strip()[:200],
+                           category=normalize_category(item_foreshadow.category)[:32],
+                           status="planted", source="chapter_plan",
+                           summary=item_foreshadow.summary[:4000], details=item_foreshadow.details[:20000],
+                           planted_outline_id=volume["outline_id"], planted_volume_id=volume_id,
+                           planted_chapter_id=chapter_id)
+                saved_foreshadows += 1
+        return ChapterPlanReceipt(project_id=project_id, volume_id=volume_id, chapters=entries,
+                                  foreshadow_count=saved_foreshadows)
 
 
 def require_empty_plan(chapter):

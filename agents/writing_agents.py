@@ -110,6 +110,9 @@ OUTLINE = WritingRole(
     "只构思一卷大纲，不再一次生成多卷。必须围绕 request.volume_plan 中用户指定的卷号和本卷主题，"
     "把主题落实到本卷目标、冲突升级、人物选择、高潮和卷末状态，不能只把主题写成标签；"
     "本卷仍需设计明确目标、冲突、高潮、结尾悬念和至少一个可写的剧情节点。"
+    "必须遵守 request.outline_plan 的字数区间、剧情进展规划和最低伏笔数量/类型要求；"
+    "volumes[0].foreshadows 返回本卷实际安排的伏笔，字段只有 title、category、summary、details；"
+    "category 使用用户选择的伏笔类型键；伏笔要能进入后续章节，不要只在卷末罗列。"
     "volumes 数组只返回一个分卷，用 beats 的数组顺序安排剧情，不填写数据库 ID 或序号。",
     OutlineDraft, SETTING_TOOLS,
 )
@@ -118,6 +121,8 @@ OUTLINE_REWRITE = WritingRole(
     "以 outline、volumes 及其 beats 中的原大纲为基础，只重写 request.volume_plan 指定的一卷。"
     "按照用户指定的卷号、本卷主题和 instruction 重写，主题要落实到目标、冲突、高潮和卷末状态，不能只写成标签。"
     "保留未要求改动的核心设定、已有角色身份与因果关系，遵守当前世界观；不要脱离原稿另起故事。"
+    "必须满足 request.outline_plan 的字数区间、剧情进展规划、最低伏笔数量和类型要求，"
+    "在 volumes[0].foreshadows 中返回本卷伏笔（title、category、summary、details），不能只在卷末罗列。"
     "volumes 数组只返回一个分卷，包含目标、冲突、高潮、结尾悬念和剧情节点；"
     "只返回重写后的内容，不返回数据库 ID 或序号，也不修改已存在的章节。",
     OutlineDraft, STORY_TOOLS,
@@ -125,7 +130,11 @@ OUTLINE_REWRITE = WritingRole(
 PLAN = WritingRole(
     "章节规划师",
     "将该卷的剧情节点拆成指定数量的章节，按章序返回。每章摘要写清行动、障碍、转折和收束；"
-    "结合 volume_characters 中角色在本卷的戏份，按 character_id 对照人物档案。注意与前一章衔接，暂不写正文。",
+    "结合 volume_characters 中角色在本卷的戏份，按 character_id 对照人物档案。注意与前一章衔接，暂不写正文。"
+    "必须根据 volume.min_foreshadows 和 volume.foreshadows 安排伏笔：每章用 foreshadow_ids 引用本卷已落表伏笔，"
+    "章节合计至少安排 volume.min_foreshadows 条；可以自由新增 new_foreshadows，但必须填写 title、category、summary、details，"
+    "并分配到具体章节，不能只写在章末说明。"
+    "按 volume.target_word_min/target_word_max、plot_progression 和剧情节点分配章节篇幅与进展。",
     ChapterPlanDraft, CHAPTER_TOOLS,
 )
 DRAFT = WritingRole(
@@ -205,6 +214,9 @@ CONSISTENCY = WritingRole(
     "characters 是人物原始档案；character_relationships 通过 source_character_id/target_character_id 对应人物，"
     "cast 通过 character_id 对应人物在该卷安排的戏份。以这些档案为核对标准，不以个人偏好、常识或类型套路替代档案约束。"
     "检查剧情方向、目标与冲突、人物性格/动机/能力/成长、跨所选章节的时间地点与因果连续性。"
+    "foreshadows 是在大纲或章节规划阶段已经落表的伏笔，按 id、title、category、summary、planted_chapter_id 对照；"
+    "核验每一条在本章是否按计划建立、推进或回收，未出现时先判断是否尚未到兑现章节，不把正常延迟判为缺失。"
+    "发现伏笔与正文冲突时，用 basis.kind=foreshadow 引用对应伏笔字段。"
     "把未完成但尚可发展的伏笔、合理成长、叙述者误解与确有依据的偏移区分开，不能把未来大纲尚未发生判为偏移。"
     "未选章节没有提供正文，不推断缺失事件，不评价整本小说。参考 scope_notes 说明限制，资料不足则 verdict=insufficient。"
     "档案没有规定的行为、能力或关系不能仅因意外或不合惯例判为偏移。当前人物状态与关系未必适用于较早章节，"
@@ -261,9 +273,9 @@ ENTITY_DISCOVERY = WritingRole(
     "读取用户选中的已保存章节，找出正文中首次出现、但不在已有角色和势力名单中的专名。"
     "只报正文明确写出、能逐字引用的角色或势力；已存在角色/势力、泛称、头衔、地名、组织代称不要报。"
     "每个候选必须给出 chapter_id 和原文 quote；角色尽量给出定位、简介、目标、所属势力，势力尽量给出类型、目标、领袖、领地、优劣和关系。"
-    "同时从正文中整理伏笔和杂记：伏笔按身份、秘宝、事件、关系、能力、世界、预言、人情债、地点、其他分类；"
-    "杂记按关键事件、独特物品、灵兽、路人、功法、地点、其他分类。只记录正文明确出现且能引用原文的内容，"
-    "已有伏笔/杂记不要按同义重复。"
+    "同时从正文中整理杂记：按关键事件、独特物品、灵兽、路人、功法、地点、其他分类。"
+    "只记录正文明确出现且能引用原文的内容；已有杂记不要按同义重复。"
+    "不要新增或改写伏笔：伏笔已在大纲或章节规划阶段落表，本任务不负责伏笔发现。"
     "这是待审核候选，不是已确认设定；不要修改正文，不要补写没有出现的人物或势力。"
     "输出 EntityDiscoveryReport JSON。",
     EntityDiscoveryReport, (),

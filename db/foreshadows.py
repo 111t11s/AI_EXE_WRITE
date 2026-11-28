@@ -3,7 +3,7 @@
 from datetime import timezone
 
 from sqlalchemy import (BigInteger, Column, DateTime, ForeignKey, Integer, String, Table, Text,
-                        func, insert, select, update)
+                        func, insert, or_, select, update)
 from sqlalchemy.dialects.mysql import BIGINT, LONGTEXT
 
 from db.accounts import account_id_type, metadata, utcnow
@@ -11,6 +11,23 @@ from db.accounts import account_id_type, metadata, utcnow
 
 id_type = BigInteger().with_variant(BIGINT(unsigned=True), "mysql").with_variant(Integer, "sqlite")
 LONG_TYPE = Text().with_variant(LONGTEXT(), "mysql")
+CATEGORY_LABELS = {
+    "identity": "身份秘密", "treasure": "秘宝奇物", "event": "事件真相",
+    "relationship": "关系伏笔", "ability": "能力来历", "world": "世界规则",
+    "prophecy": "预言征兆", "debt": "人情仇恨", "location": "地点秘密", "other": "其他",
+}
+
+
+def normalize_category(value: str | None) -> str:
+    text = (value or "").strip()
+    if text in CATEGORY_LABELS:
+        return text
+    for key, label in CATEGORY_LABELS.items():
+        if text == label:
+            return key
+    return "other"
+
+
 foreshadow = Table(
     "novel_foreshadow", metadata,
     Column("id", id_type, primary_key=True, autoincrement=True),
@@ -106,6 +123,31 @@ def titles(engine, project_id: int) -> list[dict]:
                                          foreshadow.c.status).where(
             foreshadow.c.project_id == project_id)).mappings().all()
     return [dict(row) for row in rows]
+
+
+def list_for_volume(engine, volume_id: int) -> list[dict]:
+    with engine.begin() as connection:
+        rows = connection.execute(select(foreshadow).where(
+            foreshadow.c.planted_volume_id == volume_id,
+            foreshadow.c.status.notin_(("consumed", "abandoned")),
+        ).order_by(foreshadow.c.id)).mappings().all()
+    return [_row(row) for row in rows]
+
+
+def list_for_chapters(engine, project_id: int, chapter_ids: list[int], volume_ids: list[int]) -> list[dict]:
+    clauses = [foreshadow.c.project_id == project_id, foreshadow.c.status.notin_(("abandoned",))]
+    targets = []
+    if chapter_ids:
+        targets.append(foreshadow.c.planted_chapter_id.in_(chapter_ids))
+        targets.append(foreshadow.c.consumed_chapter_id.in_(chapter_ids))
+    if volume_ids:
+        targets.append(foreshadow.c.planted_volume_id.in_(volume_ids))
+    if targets:
+        clauses.append(or_(*targets))
+    with engine.begin() as connection:
+        rows = connection.execute(select(foreshadow).where(*clauses).order_by(
+            foreshadow.c.id)).mappings().all()
+    return [_row(row) for row in rows]
 
 
 def apply_outline_selection(engine, project_id: int, consume_ids: list[int], plant_ids: list[int],
