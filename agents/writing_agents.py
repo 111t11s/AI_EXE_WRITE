@@ -59,6 +59,8 @@ PROFILE_RULES = (
     "推动或阻碍哪个剧情节点、与主线目标和当前写作进度的关系，以及为后续留下什么。"
     "这些是大纲计划，不能把计划结局写成已发生的事实。writing_progress 只有章节计划与正文数量，"
     "没有提供正文，不能从章号、草稿状态或摘要推断角色行动已经发生，更不能虚构正文引文。"
+    "自然语言中引用剧情节点时必须使用 node_label 或 sort_order，例如“第1卷第3节点”；"
+    "plot_beat_ids 是数据库关联 ID，不得把 ID 当作节点序号写进正文或档案。"
     "衔接已有的分卷档案，不无故复活死亡或退场人物，不改变原始身份与能力；不得编造不存在的卷或节点。"
 )
 
@@ -130,7 +132,8 @@ OUTLINE_REWRITE = WritingRole(
 )
 PLAN = WritingRole(
     "章节规划师",
-    "将该卷的剧情节点拆成指定数量的章节，按章序返回。每章摘要写清行动、障碍、转折和收束；"
+    "将该卷的剧情节点拆成整卷全部预定章节，不要只规划固定几章。根据 context.chapter_plan_range 和 volume.target_word_min/target_word_max 自主决定章节数，"
+    "按每章约 2500—3500 字安排，章节数必须落在 chapter_plan_range.min—max 内；每章摘要写清行动、障碍、转折和收束；"
     "结合 volume_characters 中角色在本卷的戏份，按 character_id 对照人物档案。注意与前一章衔接，暂不写正文。"
     "必须根据 volume.min_foreshadows 和 volume.foreshadows 安排伏笔：每章用 foreshadow_ids 引用本卷已落表伏笔，"
     "章节合计至少安排 volume.min_foreshadows 条；可以自由新增 new_foreshadows，但必须填写 title、category、summary、details，"
@@ -141,9 +144,10 @@ PLAN = WritingRole(
     ChapterPlanDraft, CHAPTER_TOOLS,
 )
 TECHNIQUE_SELECTOR = WritingRole(
-    "正文技法选配师",
-    "根据本次章节规划、分卷剧情节点和人物场景，从 available_techniques 中选择最适合本章的 0—5 条参考技法。"
-    "只选择能直接帮助本章场景、对话、心理、节奏或信息释放的写法，不按热度或数量凑满；"
+    "写作技法选配师",
+    "根据当前任务资料（大纲规划、分卷剧情节点、章节规划、人物场景或正文目标），"
+    "从 available_techniques 中选择最适合本次写作任务的 0—5 条参考技法。"
+    "只选择能直接帮助本次场景、结构、对话、心理、节奏或信息释放的写法，不按热度或数量凑满；"
     "技术编号必须来自 available_techniques，不能编造；没有明显适用项时返回空数组。"
     "输出 TechniqueSelection JSON。",
     TechniqueSelection, (),

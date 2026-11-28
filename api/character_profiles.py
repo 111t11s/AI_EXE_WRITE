@@ -24,7 +24,9 @@ def format_profile(profile, sources):
     volume = next(row for name, row in sources if name == "novel_outline_volume" and row["id"] == profile.volume_id)
     outline = next(row for name, row in sources if name == "novel_outline" and row["id"] == volume["outline_id"])
     beats = {row["id"]: row for name, row in sources if name == "novel_plot_beat" and row["volume_id"] == profile.volume_id}
-    basis = "、".join(beats[beat_id]["title"] for beat_id in profile.plot_beat_ids) or "分卷摘要与冲突"
+    basis = "、".join(
+        f"第{volume['volume_number']}卷第{beats[beat_id].get('sort_order', 0)}节点《{beats[beat_id]['title']}》"
+        for beat_id in profile.plot_beat_ids) or "分卷摘要与冲突"
     if len(basis) > 500:
         basis = basis[:500] + "…"
     # All generated outcomes are plans. A written chapter count cannot establish

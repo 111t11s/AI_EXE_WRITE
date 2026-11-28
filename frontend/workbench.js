@@ -2795,11 +2795,10 @@ async function outlineDialog() {
   try { selection = await api('/novel-assistant/outline-skills', {filters: {genre: state.project.genre || ''}}); }
   catch (error) { if (account === requestingAccount) notify(`大纲技能加载失败：${error.message}`, 'error'); return; }
   if (account !== requestingAccount || state.project?.id !== id) return;
-  const picker = await techniquePicker(['worldbuilding', 'outline']);
   const foreshadow = foreshadowPicker();
   const categoryPicker = outlineForeshadowSettingsPicker();
   const nextVolumeNumber = Math.max(0, ...(state.volumes || []).map(row => Number(row.volume_number) || 0)) + 1;
-  openAction({title: '生成本卷大纲', description: `每次只生成一卷，已有大纲会保留。请先规划本卷主题、字数区间和剧情进展；本卷将作为大纲 v${state.outlines.length + 1} 保存。${selection.notice}。`,
+  openAction({title: '生成本卷大纲', description: `每次只生成一卷，已有大纲会保留。请先规划本卷主题、字数区间和剧情进展；AI 会根据这些规划自动选择参考技法。本卷将作为大纲 v${state.outlines.length + 1} 保存。${selection.notice}。`,
     submit: '生成并保存本卷',
     fields: [numberField('volume_number', '卷号', nextVolumeNumber, 1, 1000),
       numberField('target_word_min', '总体字数下限', 20000, 1000, 10000000),
@@ -2807,8 +2806,9 @@ async function outlineDialog() {
       numberField('min_foreshadows', '最低伏笔数量', 3, 1, 30),
       volumeThemeField, plotProgressionField, noteField],
     useModel: true,
-    extra: element('div', {}, picker.extra, categoryPicker.extra, foreshadow.extra),
-    payload: data => ({...data, technique_ids: picker.ids(),
+    extra: element('div', {}, element('p', {class: 'notice'}, '参考技法由 AI 根据本卷主题、剧情进展和伏笔要求自动选择，不需要手动勾选。'),
+      categoryPicker.extra, foreshadow.extra),
+    payload: data => ({...data,
       foreshadow_categories: categoryPicker.ids(),
       consume_foreshadow_ids: foreshadow.consumeIds(), plant_foreshadow_ids: foreshadow.plantIds()}),
     taskPath: `/writing/projects/${id}/outline/tasks`,
@@ -3069,12 +3069,20 @@ async function planDialog(volume) {
       // 读取失败时保留本地估算；提交后后端仍会校验并给出可用章号。
     }
   }
+  const volumeForeshadowTypes = Array.isArray(volume.foreshadow_categories) ? volume.foreshadow_categories : [];
   const foreshadowRequirement = volume.min_foreshadows
-    ? `本卷至少安排 ${volume.min_foreshadows} 条伏笔${(volume.foreshadow_categories || []).length ? `（类型：${volume.foreshadow_categories.map(key => foreshadowCategoryFallback[key] || key).join('、')}）` : ''}；可新增，但必须落表。`
+    ? `本卷至少安排 ${volume.min_foreshadows} 条伏笔${volumeForeshadowTypes.length ?
+      `（类型：${volumeForeshadowTypes.map(key => foreshadowCategoryFallback[key] || key).join('、')}）` : ''}；可新增，但必须落表。`
     : '本卷未设置最低伏笔数量。';
-  openAction({title: '规划章节', description: `把《${volume.title}》的剧情节点拆成章节。章号在全书内唯一，已有章节不会被覆盖；本项目当前建议从第 ${start} 章开始。${foreshadowRequirement}`,
-    submit: '规划并保存', fields: [numberField('start_chapter', '起始章号', start, 1, 4294967295),
-      numberField('chapter_count', '生成章节数', 5, 1, 12), noteField],
+  const minWords = Number(volume.target_word_min) || 0;
+  const maxWords = Number(volume.target_word_max) || 0;
+  const minChapters = Math.max(1, Math.ceil(minWords / 3500) || 1);
+  const maxChapters = Math.max(minChapters, Math.ceil(maxWords / 2500) || 80);
+  const targetChapters = minWords || maxWords
+    ? Math.max(minChapters, Math.min(maxChapters, Math.round(((minWords || maxWords) + (maxWords || minWords)) / 6000)))
+    : 8;
+  openAction({title: '规划整卷章节', description: `把《${volume.title}》的整卷剧情节点一次性拆成预定章节。根据本卷目标字数，预计 ${minChapters}—${maxChapters} 章（优先约 ${targetChapters} 章），每章约 2500—3500 字；章号在全书内唯一，已有章节不会被覆盖；本项目当前建议从第 ${start} 章开始。${foreshadowRequirement}`,
+    submit: '规划整卷并保存', fields: [numberField('start_chapter', '起始章号', start, 1, 4294967295), noteField],
     useModel: true,
     taskPath: `/writing/volumes/${volume.id}/chapter-plan/tasks`,
   });

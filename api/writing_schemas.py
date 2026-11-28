@@ -103,7 +103,9 @@ class OutlineRequest(WritingInput):
 
 class ChapterPlanRequest(WritingInput):
     start_chapter: Sequence = 1
-    chapter_count: int = Field(default=5, ge=1, le=12)
+    # Retained for old clients; planning now derives the whole-volume length
+    # from the volume word budget and the 2500–3500 character target.
+    chapter_count: int | None = Field(default=None, ge=1, le=80)
 
 
 class DraftRequest(WritingInput):
@@ -235,7 +237,7 @@ class ChapterPlan(Generated):
 
 
 class ChapterPlanDraft(Generated):
-    chapters: list[ChapterPlan] = Field(min_length=1, max_length=12)
+    chapters: list[ChapterPlan] = Field(min_length=1, max_length=80)
 
 
 class TechniqueSelection(Generated):

@@ -4,6 +4,7 @@ import json
 from collections import Counter
 
 import httpx
+from math import ceil
 from fastapi import APIRouter, HTTPException
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 from pydantic import ValidationError
@@ -118,11 +119,15 @@ async def character_context(session, project_id, outline_id=None):
         volumes = await all_context_rows(session, "outline_volume", outline_id=outline_id)
         context["volumes"] = []
         for volume in volumes:
-            beats = await all_context_rows(session, "plot_beat", volume_id=volume["id"])
+            raw_beats = await all_context_rows(session, "plot_beat", volume_id=volume["id"])
+            ordered = sorted(raw_beats, key=lambda row: (row.get("sort_order") or 0, row["id"]))
+            beats = [{**row, "node_number": index,
+                      "node_label": f"第{volume['volume_number']}卷第{index}节点"}
+                     for index, row in enumerate(ordered, 1)]
             cast = await all_context_rows(session, "volume_character", volume_id=volume["id"])
             context["volumes"].append({**volume, "beats": beats, "cast": cast})
             sources.append(("novel_outline_volume", volume))
-            sources.extend(("novel_plot_beat", row) for row in beats)
+            sources.extend(("novel_plot_beat", row) for row in raw_beats)
             sources.extend(("novel_volume_character", row) for row in cast)
     # Keep a useful bound rather than silently omitting later characters or plot nodes.
     if len(json.dumps(context, ensure_ascii=False, default=str)) > 150000:
@@ -363,7 +368,10 @@ async def volume_context(session, volume_id):
                                 "target_word_min", "target_word_max", "plot_progression")
     context["volume_characters"] = await all_context_rows(session, "volume_character", volume_id=volume_id)
     beats = await listing(session, "plot_beat", volume_id=volume_id, limit=12)
-    context["plot_beats"] = [excerpt(item, "sort_order", "title", "summary", "foreshadowing", limit=500) for item in beats]
+    context["plot_beats"] = [excerpt(item, "sort_order", "title", "summary", "foreshadowing", limit=500)
+                             | {"node_label": f"第{volume['volume_number']}卷第{index}节点"}
+                             for index, item in enumerate(sorted(beats, key=lambda row: (row.get("sort_order") or 0,
+                                                                                       row["id"])), 1)]
     return context
 
 
@@ -376,13 +384,26 @@ async def previous_chapter(session, project_id, number):
     return {**excerpt(rows[0], "chapter_number", "title", "summary"), "ending": rows[0]["content"][-1200:]}
 
 
-async def plan_context(session, volume_id, start, count=1, next_number=None):
+def chapter_plan_range(volume: dict) -> dict:
+    """Derive a whole-volume chapter range from its word budget and 2500–3500 chars/chapter."""
+    word_min = int(volume.get("target_word_min") or 0)
+    word_max = int(volume.get("target_word_max") or 0)
+    if not word_min and not word_max:
+        return {"min": 1, "max": 80, "target": None}
+    low = max(1, ceil(word_min / 3500)) if word_min else 1
+    high = max(low, ceil(word_max / 2500)) if word_max else max(low, low)
+    midpoint = ((word_min or word_max) + (word_max or word_min)) / 2
+    target = max(low, min(high, round(midpoint / 3000)))
+    return {"min": low, "max": high, "target": target}
+
+
+async def plan_context(session, volume_id, start, next_number=None):
     context = await volume_context(session, volume_id)
     project_id = context["project"]["id"]
-    for number in range(start, start + count):
-        if await listing(session, "chapter", project_id=project_id, chapter_number=number, limit=1):
-            hint = f"本项目下一个可用章号是 {next_number}。" if next_number else ""
-            raise HTTPException(409, f"章号 {number} 已被使用，请选择未使用的章号。{hint}")
+    if await listing(session, "chapter", project_id=project_id, chapter_number=start, limit=1):
+        hint = f"本项目下一个可用章号是 {next_number}。" if next_number else ""
+        raise HTTPException(409, f"章号 {start} 已被使用，请选择未使用的章号。{hint}")
+    context["chapter_plan_range"] = chapter_plan_range(context["volume"])
     context["previous_chapter"] = await previous_chapter(session, project_id, start)
     return context
 
@@ -596,7 +617,11 @@ async def write_outline(project_id: RowId, payload: OutlineRequest, user: Curren
         "min_foreshadows": payload.min_foreshadows,
         "foreshadow_categories": {key: FORESHADOW_CATEGORY_LABELS[key] for key in payload.foreshadow_categories},
     }
-    context = await apply_techniques(context, payload, user, engine, OUTLINE_TECHNIQUE_CATEGORIES)
+    selected_techniques = await auto_select_techniques(
+        engine, user, context, payload, OUTLINE_TECHNIQUE_CATEGORIES)
+    technique_payload = payload.model_copy(update={
+        "technique_ids": [row["id"] for row in selected_techniques]})
+    context = await apply_techniques(context, technique_payload, user, engine, OUTLINE_TECHNIQUE_CATEGORIES)
     artifact = await generate(agents.OUTLINE, context, payload)
     if len(artifact.volumes) != 1:
         raise HTTPException(502, "每次只生成一卷大纲，模型返回了多个分卷，结果未保存")
@@ -618,29 +643,31 @@ async def write_outline(project_id: RowId, payload: OutlineRequest, user: Curren
 @router.post("/volumes/{volume_id}/chapter-plan", response_model=ChapterPlanReceipt, status_code=201, summary="生成并保存分卷的章节规划")
 async def write_chapter_plan(volume_id: RowId, payload: ChapterPlanRequest, user: CurrentAccount, engine: Database):
     await run_in_threadpool(require_resource, engine, "novel_outline_volume", volume_id, user.id)
-    if payload.start_chapter + payload.chapter_count - 1 > 2**32 - 1:
-        raise HTTPException(422, "章节规划范围超出允许的章号")
+    if payload.start_chapter > 2**32 - 80:
+        raise HTTPException(422, "章节规划起始章号超出允许范围")
     project_id = await run_in_threadpool(task_project, engine, "novel_outline_volume", volume_id, user.id)
     try:
         next_number = await run_in_threadpool(next_free_chapter_number, engine, project_id)
     except Exception:
         next_number = None
-    context = await load_context(plan_context, volume_id, payload.start_chapter, payload.chapter_count, next_number)
+    context = await load_context(plan_context, volume_id, payload.start_chapter, next_number)
     context["foreshadows"] = await run_in_threadpool(foreshadow_db.list_for_volume, engine, volume_id)
     artifact = await generate(agents.PLAN, context, payload)
-    if len(artifact.chapters) != payload.chapter_count:
-        raise HTTPException(502, "模型返回的章节数量与请求不符")
-    emit_generation_event("status", message="章节规划校验通过，正在保存…")
+    allowed = context.get("chapter_plan_range") or {"min": 1, "max": 80}
+    if not (allowed["min"] <= len(artifact.chapters) <= allowed["max"]):
+        raise HTTPException(
+            502, f"本卷目标字数对应 {allowed['min']}—{allowed['max']} 章，模型返回 {len(artifact.chapters)} 章，结果未保存")
+    emit_generation_event("status", message="整卷章节规划校验通过，正在保存…")
     return await run_in_threadpool(save_chapter_plan, engine, context["project"]["id"], volume_id, payload.start_chapter, artifact)
 
 
-async def auto_select_prose_techniques(engine, user, context, payload):
+async def auto_select_techniques(engine, user, context, payload, categories):
     try:
         rows = await run_in_threadpool(analysis_db.list_techniques, engine, user.id)
     except Exception:
-        logger.warning("正文技法库读取失败；本次不注入参考技法", exc_info=True)
+        logger.warning("写作技法库读取失败；本次不注入参考技法", exc_info=True)
         return []
-    candidates = [row for row in rows if row.get("category") == "prose"][:80]
+    candidates = [row for row in rows if row.get("category") in categories][:80]
     if not candidates:
         return []
     selection_context = {
@@ -648,6 +675,10 @@ async def auto_select_prose_techniques(engine, user, context, payload):
         "volume": context.get("volume"),
         "plot_beats": context.get("plot_beats"),
         "characters": context.get("characters"),
+        "project": context.get("project"),
+        "world": context.get("world"),
+        "volume_plan": context.get("volume_plan"),
+        "outline_plan": context.get("outline_plan"),
         "available_techniques": [{
             "id": row["id"], "name": row.get("name", ""),
             "dimension_label": row.get("dimension_label", ""),
@@ -662,13 +693,17 @@ async def auto_select_prose_techniques(engine, user, context, payload):
         ids = list(dict.fromkeys(int(value) for value in selected.technique_ids
                                  if int(value) in valid))[:5]
     except Exception:
-        logger.warning("AI 正文技法选配失败；本次不注入参考技法", exc_info=True)
+        logger.warning("AI 写作技法选配失败；本次不注入参考技法", exc_info=True)
         return []
     if not ids:
         return []
     chosen = await run_in_threadpool(analysis_db.get_techniques, engine, user.id, ids)
-    emit_generation_event("status", message=f"AI 已按章节规划选择 {len(chosen)} 条参考技法。")
+    emit_generation_event("status", message=f"AI 已选择 {len(chosen)} 条参考技法。")
     return chosen
+
+
+async def auto_select_prose_techniques(engine, user, context, payload):
+    return await auto_select_techniques(engine, user, context, payload, PROSE_TECHNIQUE_CATEGORIES)
 
 
 async def attach_chapter_characters(engine, chapter_id, context):

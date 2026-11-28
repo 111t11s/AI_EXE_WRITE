@@ -8,6 +8,13 @@ from api.novel_crud_api import get_database
 from main import app
 
 
+def test_whole_volume_chapter_range_uses_word_budget():
+    assert api.chapter_plan_range({"target_word_min": 20000, "target_word_max": 30000}) == {
+        "min": 6, "max": 12, "target": 8}
+    assert api.chapter_plan_range({"target_word_min": 0, "target_word_max": 0}) == {
+        "min": 1, "max": 80, "target": None}
+
+
 def test_next_chapter_number_endpoint(monkeypatch):
     monkeypatch.setitem(app.dependency_overrides, get_database, lambda: object())
     monkeypatch.setitem(app.dependency_overrides, get_current_account,
@@ -32,7 +39,7 @@ def test_plan_context_rejects_used_range_with_next_hint(monkeypatch):
 
     with pytest.raises(api.HTTPException) as error:
         import asyncio
-        asyncio.run(api.plan_context(object(), 4, 3, 2, 9))
+        asyncio.run(api.plan_context(object(), 4, 3, 9))
 
     assert error.value.status_code == 409
     assert "章号 3 已被使用" in error.value.detail and "下一个可用章号是 9" in error.value.detail
