@@ -12,6 +12,7 @@ from db.connection import legacy_json_columns
 from db.accounts import utcnow
 from db.foreshadows import foreshadow as foreshadow_table
 from db.foreshadows import normalize_category
+from db.chapter_characters import chapter_character
 from api.writing_schemas import CharacterReceipt
 from api.character_profiles import format_profile
 from api.character_progress import replace_progress
@@ -199,12 +200,17 @@ def save_chapter_plan(engine, project_id: int, volume_id: int, start: int,
     with transaction(engine) as connection:
         get_row(connection, project, project_id, lock=True)
         volume = get_row(connection, tables["novel_outline_volume"], volume_id)
+        cast_ids = {int(value) for value in connection.scalars(select(
+            tables["novel_volume_character"].c.character_id).where(
+            tables["novel_volume_character"].c.volume_id == volume_id))}
         foreshadows = {row["id"]: row for row in connection.execute(select(foreshadow_table).where(
             foreshadow_table.c.project_id == project_id,
             foreshadow_table.c.planted_volume_id == volume_id)).mappings()}
         assigned_ids = set()
         new_count = 0
         for item in artifact.chapters:
+            if any(int(character_id) not in cast_ids for character_id in item.character_ids):
+                raise HTTPException(502, "章节规划引用了不属于本卷角色戏份的角色")
             for foreshadow_id in item.foreshadow_ids:
                 if int(foreshadow_id) not in foreshadows:
                     raise HTTPException(502, f"章节规划引用了不属于本卷的伏笔 {foreshadow_id}")
@@ -226,8 +232,11 @@ def save_chapter_plan(engine, project_id: int, volume_id: int, start: int,
             chapter_id = insert_row(
                 connection, chapter, project_id=project_id, volume_id=volume_id,
                 chapter_number=number, status="planned", content="", word_count=0,
-                **item.model_dump(exclude={"foreshadow_ids", "new_foreshadows"}))
+                **item.model_dump(exclude={"foreshadow_ids", "new_foreshadows", "character_ids"}))
             entries.append({"chapter_id": chapter_id, "chapter_number": number, "title": item.title})
+            for character_id in dict.fromkeys(item.character_ids):
+                connection.execute(insert(chapter_character).values(
+                    chapter_id=chapter_id, character_id=int(character_id)))
             for foreshadow_id in item.foreshadow_ids:
                 connection.execute(update(foreshadow_table).where(
                     foreshadow_table.c.id == int(foreshadow_id),

@@ -57,8 +57,8 @@ def test_batch_saves_plain_bodies_before_analyzing_and_writing_next(novel, monke
     else:
         receipt = response.json()
     assert receipt["completed_count"] == 2
-    assert calls == [(role, chapter) for chapter in chapters
-                     for role in (agents.DRAFT, agents.CHARACTER_PROGRESS)]
+    assert calls == [(agents.DRAFT, chapter) for chapter in chapters] + [
+        (agents.CHARACTER_PROGRESS, chapter) for chapter in chapters]
     for chapter in chapters:
         assert saved(chapter)["content"] == bodies[chapter]
         assert saved(chapter)["status"] == "draft"

@@ -5,6 +5,7 @@ from api.novel_tables import tables
 from api.writing_schemas import (BeatDraft, ChapterPlan, ChapterPlanDraft, OutlineDraft,
                                  OutlineForeshadow, VolumeDraft)
 from db.foreshadows import foreshadow
+from db.chapter_characters import chapter_character
 from db.accounts import utcnow
 from test_character_generation import novel  # noqa: F401 - pytest fixture
 
@@ -157,3 +158,21 @@ def test_chapter_plan_rejects_missing_volume_foreshadows(novel, monkeypatch):
         f"/api/v1/writing/volumes/{volume_id}/chapter-plan",
         json={"start_chapter": 1, "chapter_count": 1}, headers=novel["headers"]["writer"])
     assert response.status_code == 502, response.text
+
+
+def test_chapter_plan_allocates_supporting_cast(novel, monkeypatch):
+    volume_id = novel["volume"]
+    character_id = novel["create"]("characters", project_id=novel["project"], name="舟客",
+                                   role="配角", summary="渡口向导")
+    novel["create"]("volume-characters", volume_id=volume_id, character_id=character_id, scenes="带路过河")
+    monkeypatch.setattr(agents, "generate", lambda role, context, profile=None: ChapterPlanDraft(
+        chapters=[ChapterPlan(title="渡河", summary="舟客带主角过河", character_ids=[character_id])]))
+    response = novel["client"].post(
+        f"/api/v1/writing/volumes/{volume_id}/chapter-plan",
+        json={"start_chapter": 1, "chapter_count": 1}, headers=novel["headers"]["writer"])
+    assert response.status_code == 201, response.text
+    chapter_id = response.json()["chapters"][0]["chapter_id"]
+    with novel["engine"].begin() as connection:
+        rows = connection.execute(select(chapter_character).where(
+            chapter_character.c.chapter_id == chapter_id)).mappings().all()
+    assert [row["character_id"] for row in rows] == [character_id]

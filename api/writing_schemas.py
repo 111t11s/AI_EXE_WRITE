@@ -135,7 +135,7 @@ class CoreCharacterRequest(WritingInput):
 
 
 class SupportingCharacterRequest(WritingInput):
-    supporting_count: int = Field(default=6, ge=0, le=12)
+    supporting_count: int | None = Field(default=None, ge=0)
     volume_id: RowId | None = None
     reuse_character_ids: list[RowId] = Field(default_factory=list, max_length=20)
 
@@ -145,8 +145,8 @@ class SupportingCharacterRequest(WritingInput):
             raise ValueError("复用角色不能重复")
         if self.reuse_character_ids and self.volume_id is None:
             raise ValueError("复用角色必须选择目标分卷")
-        if not self.supporting_count and not self.reuse_character_ids:
-            raise ValueError("请新增至少一位配角或勾选要复用的配角")
+        if self.supporting_count == 0 and not self.reuse_character_ids:
+            raise ValueError("请选择要复用的配角，或让 AI 自动决定新增人数")
         return self
 
 
@@ -229,12 +229,17 @@ class OutlineDraft(Generated):
 class ChapterPlan(Generated):
     title: Title
     summary: Detail
+    character_ids: list[RowId] = Field(default_factory=list, max_length=30)
     foreshadow_ids: list[RowId] = Field(default_factory=list, max_length=20)
     new_foreshadows: list[OutlineForeshadow] = Field(default_factory=list, max_length=10)
 
 
 class ChapterPlanDraft(Generated):
     chapters: list[ChapterPlan] = Field(min_length=1, max_length=12)
+
+
+class TechniqueSelection(Generated):
+    technique_ids: list[RowId] = Field(default_factory=list, max_length=5)
 
 
 class CharacterChapterUpdate(Generated):
@@ -351,7 +356,7 @@ class CharacterProfileList(Generated):
 
 
 class CharacterDraftList(Generated):
-    characters: list[CharacterDraft] = Field(max_length=22)
+    characters: list[CharacterDraft] = Field(default_factory=list)
     new_factions: list[CharacterFactionDraft] = Field(default_factory=list, max_length=12)
     reused_characters: list[ReusedCharacterDraft] = Field(default_factory=list, max_length=20)
 

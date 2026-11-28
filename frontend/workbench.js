@@ -2659,7 +2659,7 @@ const volumeThemeField = {name: 'volume_theme', label: '本卷大纲主题', typ
 const plotProgressionField = {name: 'plot_progression', label: '剧情进展规划', type: 'textarea', required: true,
   maxlength: 4000, rows: 4, placeholder: '例如：前半卷追查旧票，中段进入拍卖会，卷末夺回线索但暴露身份；每阶段写明目标、阻碍和结果'};
 const numberField = (name, label, value, min, max) => ({name, label, value, min, max, type: 'number', required: true});
-const modelChoices = () => state.modelOptions.map(item => ({value: item.id, label: `${item.label} · ${item.model}`}));
+const modelChoices = () => state.modelOptions.map(item => ({value: item.id, label: item.model}));
 
 const knowledgeCategoryLabels = {worldbuilding: '世界观构造', outline: '大纲', prose: '正文'};
 
@@ -2986,18 +2986,16 @@ async function supportingCharacterDialog(preferredVolume) {
   const reuse = element('fieldset', {class: 'reuse-characters', hidden: true});
   let requestSequence = 0;
   let selectionReady = false;
-  const options = {title: '根据分卷大纲生成配角', description: `使用大纲 v${outline.version_no} 生成角色和阶段档案，写清本部分行动、阶段结果及进度关系。第二卷起可复用前卷配角；新增数可设为 0。`,
+  const options = {title: '根据分卷大纲生成配角', description: `使用大纲 v${outline.version_no} 生成角色和阶段档案。AI 会根据本卷剧情节点自动决定需要新增多少配角；第二卷起可复用前卷配角，章节规划阶段会再做一次出场分配。`,
     submit: '后台生成并保存', fields: [
       {name: 'volume_id', label: '目标分卷', type: 'select', value: selectedVolume.id,
         choices: volumes.map(row => ({value: row.id, label: `第 ${row.volume_number} 卷 · ${row.title}`})),
-        change: event => loadReuse(Number(event.target.value))},
-      numberField('supporting_count', '新增配角数', 6, 0, 12), noteField], extra: reuse,
+        change: event => loadReuse(Number(event.target.value))}, noteField], extra: reuse,
     useModel: true,
     taskPath: `/writing/outlines/${outlineId}/characters/supporting/tasks`,
     payload: (data, form) => {
       if (!selectionReady) throw new Error('请等待前卷配角读取完成。');
       const reuseIds = form.getAll('reuse_character_ids').map(Number);
-      if (!data.supporting_count && !reuseIds.length) throw new Error('请新增至少一位配角或勾选要复用的配角。');
       return {...data, volume_id: Number(data.volume_id), reuse_character_ids: reuseIds};
     }};
   async function loadReuse(volumeId) {
@@ -3101,7 +3099,7 @@ async function ensureChapterCharacters(chapter) {
 
 async function draftDialog(chapter, mode = 'draft') {
   if (!await ensureChapterCharacters(chapter)) return;
-  const picker = await techniquePicker(['prose']);
+  const picker = mode === 'draft' ? null : await techniquePicker(['prose']);
   if (mode === 'rewrite') {
     openAction({title: '重写正文', description: `基于第 ${chapter.chapter_number} 章原文、角色和剧情资料重写。成功后替换当前正文并设为草稿，原审读建议清除；失败或期间章节被修改时保留原文。`,
       submit: '重写并替换正文', fields: [numberField('target_characters', '目标篇幅（字符）',
@@ -3124,11 +3122,10 @@ async function draftDialog(chapter, mode = 'draft') {
       taskPath: `/writing/chapters/${chapter.id}/polish/tasks`});
     return;
   }
-  openAction({title: '生成正文', description: `角色信息已就绪，为第 ${chapter.chapter_number} 章生成初稿。正文保存后，可单独分析本章人物进展。`,
+  openAction({title: '生成正文', description: `角色信息已就绪，为第 ${chapter.chapter_number} 章生成初稿。AI 会根据章节规划自动选择本章参考技法；正文保存后，可单独分析本章人物进展。`,
     submit: '写作并保存', fields: [numberField('target_characters', '目标篇幅（字符）', 2000, 300, 6000), noteField],
     useModel: true,
-    extra: picker.extra,
-    payload: data => ({...data, technique_ids: picker.ids()}),
+    extra: element('p', {class: 'notice'}, '参考技法由 AI 根据本章大纲、剧情节点和人物场景自动选择，不需要手动勾选。'),
     taskPath: `/writing/chapters/${chapter.id}/draft/tasks`,
   });
 }
@@ -3192,18 +3189,17 @@ async function batchDraftDialog() {
         }}),
       element('span', {}, element('strong', {}, `第 ${row.chapter_number} 章 · ${row.title || '未命名'}`),
         muted(row.summary || '暂无章节摘要')))));
-  const picker = await techniquePicker(['prose']);
   openAction({title: '批量生成正文',
-    description: `从已有章节规划中选择多章，系统会先按章号生成并保存全部正文，再统一分析和更新各章人物进展。`,
+    description: `从已有章节规划中选择多章，系统会先按章号生成并保存全部正文，再统一分析和更新各章人物进展。AI 会为每章分别选择参考技法。`,
     submit: '后台开始批量写作', fields: [numberField('target_characters', '每章目标篇幅（字符）', 2000, 300, 6000), noteField],
-    extra: element('div', {}, choices, picker.extra),
+    extra: element('div', {}, choices, element('p', {class: 'notice'}, '参考技法由 AI 按每章规划自动选择，不需要手动勾选。')),
     useModel: true,
     taskPath: `/writing/projects/${projectId}/chapters/batch-draft/tasks`,
     payload: (data, form) => {
       const ids = form.getAll('chapter_ids').map(Number);
       if (!ids.length) throw new Error('请至少选择一章。');
       if (ids.length > 20) throw new Error('一次最多选择 20 章。');
-      return {...data, chapter_ids: ids, technique_ids: picker.ids()};
+      return {...data, chapter_ids: ids};
     }});
 }
 

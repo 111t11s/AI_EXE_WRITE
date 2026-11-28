@@ -14,7 +14,7 @@ from agents.webnovel_skills import webnovel_skill_prompt
 from api.writing_schemas import (ChapterContentDraft, ChapterPlanDraft, OutlineDraft, ReviewReport,
                                  CharacterDraftList, ConsistencyReport, CharacterProfileList,
                                  CharacterProgressAnalysis, NovelAnalysisReport, SettingExpansionReport, TrendReport, OUTLINE_THEME_LABELS,
-                                 EntityDiscoveryReport)
+                                 TechniqueSelection, EntityDiscoveryReport)
 from agents.novel_analysis_skills import novel_analysis_skill_prompt
 from agents.setting_expansion_skills import setting_expansion_skill_prompt
 from core.config import get_settings
@@ -81,7 +81,8 @@ CORE_CHARACTERS = WritingRole(
 )
 SUPPORTING_CHARACTERS = WritingRole(
     "角色生成智能体·剧情配角",
-    "根据指定版本的大纲、分卷及剧情节点，补充 supporting_count 位其余配角，category 必须为 supporting。"
+    "根据指定版本的大纲、分卷及剧情节点补充剧情配角；如果 request.supporting_count 有值，按该数量生成，"
+    "如果为空，根据本卷剧情实际需要自动决定新增人数，不设固定上限，不按数量凑人。category 必须为 supporting。"
     "优先展开大纲中尚未建档的人物；每位人物须服务具体剧情，role 写剧情职能，"
     "summary 说明在哪一卷/节点出场、承担的冲突或推动作用以及与已有角色的关系。"
     "为每位新配角填写 faction_name，使用 context.faction 中的势力；没有合适势力时在 new_factions 中创建并引用准确名称。"
@@ -134,13 +135,24 @@ PLAN = WritingRole(
     "必须根据 volume.min_foreshadows 和 volume.foreshadows 安排伏笔：每章用 foreshadow_ids 引用本卷已落表伏笔，"
     "章节合计至少安排 volume.min_foreshadows 条；可以自由新增 new_foreshadows，但必须填写 title、category、summary、details，"
     "并分配到具体章节，不能只写在章末说明。"
+    "每章用 character_ids 从 volume_characters 中分配实际出场的角色，这是大纲配角生成后的二次分配；"
+    "只选择本章真正参与行动、对话或关系变化的角色，引用已有 character_id，不编造 ID。"
     "按 volume.target_word_min/target_word_max、plot_progression 和剧情节点分配章节篇幅与进展。",
     ChapterPlanDraft, CHAPTER_TOOLS,
+)
+TECHNIQUE_SELECTOR = WritingRole(
+    "正文技法选配师",
+    "根据本次章节规划、分卷剧情节点和人物场景，从 available_techniques 中选择最适合本章的 0—5 条参考技法。"
+    "只选择能直接帮助本章场景、对话、心理、节奏或信息释放的写法，不按热度或数量凑满；"
+    "技术编号必须来自 available_techniques，不能编造；没有明显适用项时返回空数组。"
+    "输出 TechniqueSelection JSON。",
+    TechniqueSelection, (),
 )
 DRAFT = WritingRole(
     "小说正文作者",
     "按已保存的章节标题和摘要写一章中文正文，贴近指定篇幅。保持视角一致，用场景和对话推进故事；"
-    "结合 volume_characters 中角色在本卷的戏份安排，按 character_id 对照人物档案并遵守既有人物设定。"
+    "chapter_characters 是章节规划二次分配的本章实际出场角色，优先围绕这些角色写行动与对话；"
+    "volume_characters 中角色在本卷的戏份安排用于补充背景，按 character_id 对照人物档案并遵守既有人物设定。"
     "阶段档案中标注的行动和结果是大纲计划，按本章剧情进度逐步实现，不能提前兑现后续结局。"
     "接续前文，不在正文中写创作说明或重复章节标题。只返回正文；人物正文进展由独立分析任务处理，"
     "不要在正文结果中输出 character_updates。",

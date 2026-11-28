@@ -40,7 +40,10 @@ def cast(role, context, profile=None):
         people += [person(f"伙伴{i}", "important") for i in range(request["important_count"])]
     else:
         assert role == agents.SUPPORTING_CHARACTERS
-        people = [person(f"舟客{i}", "supporting") for i in range(request["supporting_count"])]
+        count = request.get("supporting_count")
+        if count is None:
+            count = 3
+        people = [person(f"舟客{i}", "supporting") for i in range(count)]
     if "outline" in context:
         for item in people:
             item["volume_profiles"] = [volume_profile(context)]
@@ -125,6 +128,16 @@ def test_two_stages_read_real_scoped_mcp_context_and_save(novel, monkeypatch):
     assert all(row["personality"] and row["character_arc"] and row["faction_id"] is None for row in saved)
 
 
+def test_supporting_count_is_optional_and_decided_by_model(novel, monkeypatch):
+    monkeypatch.setattr(agents, "generate", cast)
+    client, headers = novel["client"], novel["headers"]["writer"]
+    novel["create"]("characters", project_id=novel["project"], name="男主", role="主角", summary="寻脉者")
+    novel["create"]("characters", project_id=novel["project"], name="女主", role="主角", summary="同行者")
+    response = client.post(novel["supporting"], json={}, headers=headers)
+    assert response.status_code == 201, response.text
+    assert response.json()["counts"] == {"supporting": 3}
+
+
 @pytest.mark.parametrize("endpoint", ["core", "supporting"])
 @pytest.mark.parametrize("suffix", ["", "/tasks"])
 def test_character_generation_is_account_scoped(novel, monkeypatch, endpoint, suffix):
@@ -143,7 +156,7 @@ def test_missing_world_and_outline_and_invalid_count_do_not_generate(novel, monk
     monkeypatch.setattr(agents, "generate", lambda *args: calls.append(args))
     client, headers = novel["client"], novel["headers"]["writer"]
     assert client.post(novel["core"], json={"protagonist_count": 0}, headers=headers).status_code == 422
-    assert client.post(novel["supporting"], json={"supporting_count": 13}, headers=headers).status_code == 422
+    assert client.post(novel["supporting"], json={"supporting_count": -1}, headers=headers).status_code == 422
     assert client.post("/api/v1/writing/outlines/99999/characters/supporting", json={}, headers=headers).status_code == 404
     assert client.patch(f'/api/v1/worlds/{novel["world"]}', json={"is_current": False}, headers=headers).status_code == 200
     assert client.post(novel["core"], json={}, headers=headers).status_code == 409
